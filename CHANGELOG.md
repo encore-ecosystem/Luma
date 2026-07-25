@@ -2,6 +2,10 @@
 
 All notable changes to Luma are documented here.
 
+## 0.1.1 - 2026-07-25
+
+- Corrected the release archive layout for Encore index compatibility.
+
 ## 0.1.0 - 2026-07-25
 
 - Initial public release.

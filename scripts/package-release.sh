@@ -21,8 +21,8 @@ tar \
     --numeric-owner \
     --mtime='UTC 1970-01-01' \
     -czf "$archive" \
-    encore.toml encore.lock README.md CHANGELOG.md LICENSE \
-    build.enq runtime.c src workspace assets tests
+    ./encore.toml ./encore.lock ./README.md ./CHANGELOG.md ./LICENSE \
+    ./build.enq ./runtime.c ./src ./workspace ./assets ./tests
 
 tar -tzf "$archive"
 sha256sum "$archive"
