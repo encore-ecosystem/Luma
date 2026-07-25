@@ -1,0 +1,16 @@
+[project]
+name = "luma"
+version = "0.1.0"
+description = "Cross-platform native UI toolkit"
+readme = "README.md"
+licence = "MIT"
+build = "build.enq"
+dependencies = [
+    "index@color@^0.1.0",
+    "index@geometry@^0.1.0",
+    "workspace@ui_native",
+]
+
+[features]
+default = []
+fonts = []
