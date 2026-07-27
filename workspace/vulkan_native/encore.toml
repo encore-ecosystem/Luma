@@ -1,0 +1,6 @@
+[project]
+name = "vulkan_native"
+version = "0.1.0"
+description = "Private direct Vulkan backend shared by Luma and embedded renderers"
+licence = "MIT"
+dependencies = []

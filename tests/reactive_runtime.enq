@@ -1,0 +1,62 @@
+import luma::{Insets, ReactiveUi, Rect, Style, Widget, layout_widget, vertical}
+
+fn tree(text: str) -> Widget {
+    let mut root = Widget::panel("root").with_direction(vertical())
+    root.push(Widget::label(text).with_id("value"))
+    ret root
+}
+
+fn main() -> u32 {
+    let bounds = Rect::new(0.0_f32, 0.0_f32, 320.0_f32, 180.0_f32)
+    let mut ui = ReactiveUi::new(layout_widget(tree("Count: 0"), bounds))
+    if ui.hit(8.0_f32, 8.0_f32) !=
+        ui.layout().hit(8.0_f32, 8.0_f32) {
+        ret 4_u32
+    }
+
+    if ui.reconcile(tree("Count: 1")) != 1_u32 ||
+        ui.paint_targets().len() != 1_usize ||
+        ui.find_widget("value").unwrap_or(Widget::spacer(0.0_f32)).text() !=
+            "Count: 1" {
+        ret 1_u32
+    }
+    ui.clear_paint()
+
+    let mut geometry = Widget::panel("root").with_direction(vertical())
+        .with_style(Style::default().with_padding(Insets::all(8.0_f32)))
+    geometry.push(Widget::label("Count: 1").with_id("value"))
+    if ui.reconcile(geometry) != 2_u32 || !ui.needs_layout() {
+        ret 2_u32
+    }
+
+    ui = ReactiveUi::new(layout_widget(tree("Count: 1"), bounds))
+    let mut structural = tree("Count: 1")
+    structural.push(Widget::label("extra").with_id("extra"))
+    if ui.reconcile(structural) != 3_u32 || !ui.needs_structure() {
+        ret 3_u32
+    }
+
+    let mut retained_root = Widget::panel("retained-root")
+        .with_direction(vertical())
+    let mut animated_row = Widget::panel("animated-row")
+    animated_row.push(Widget::button("animated-before", "Before"))
+    retained_root.push(animated_row)
+    retained_root.push(Widget::label("Stable").with_id("stable"))
+    ui = ReactiveUi::new(layout_widget(retained_root, bounds))
+    let stable_generation = ui.segment_generation("stable")
+    let animated_generation = ui.segment_generation("animated-row")
+    let mut next_row = Widget::panel("animated-row")
+    next_row.push(Widget::button("animated-after", "After"))
+    if !ui.replace_subtree("animated-row", next_row) ||
+    ui.find_widget("animated-after").unwrap_or(
+        Widget::spacer(0.0_f32),).text() != "After" ||
+    ui.find_widget("animated-before").is_some() ||
+    ui.find_widget("stable").unwrap_or(
+        Widget::spacer(0.0_f32),).text() != "Stable" ||
+    ui.segment_generation("stable") != stable_generation ||
+    ui.segment_generation("animated-row") <= animated_generation ||
+    ui.paint_targets().len() != 1_usize {
+        ret 5_u32
+    }
+    ret 0_u32
+}

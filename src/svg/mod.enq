@@ -1,3 +1,6 @@
+//! SVG document and path parsing into renderer-ready line geometry.
+
+import core::option::Option
 import core::vec::Vec
 
 pub struct SvgPoint {
@@ -37,6 +40,8 @@ impl for SvgLine {
 }
 
 pub struct SvgDocument {
+    min_x: f32
+    min_y: f32
     width: f32
     height: f32
     lines: Vec[SvgLine]
@@ -46,7 +51,7 @@ pub struct SvgDocument {
 impl for SvgDocument {
     pub fn empty() -> SvgDocument {
         ret SvgDocument {
-            24.0_f32, 24.0_f32, Vec[SvgLine]::new(), false
+            0.0_f32, 0.0_f32, 24.0_f32, 24.0_f32, Vec[SvgLine]::new(), false
         }
     }
     pub fn parse(source: str) -> SvgDocument {
@@ -54,6 +59,12 @@ impl for SvgDocument {
     }
     pub fn width(self: Self) -> f32 {
         ret self.width
+    }
+    pub fn min_x(self: Self) -> f32 {
+        ret self.min_x
+    }
+    pub fn min_y(self: Self) -> f32 {
+        ret self.min_y
     }
     pub fn height(self: Self) -> f32 {
         ret self.height
@@ -63,6 +74,43 @@ impl for SvgDocument {
     }
     pub fn valid(self: Self) -> bool {
         ret self.valid
+    }
+    /// Structural equality used by retained reconciliation. SVG documents are
+    /// parsed once, so comparing their compact line geometry avoids stale
+    /// icons without reparsing source markup during a frame.
+    pub fn equivalent(self: Self, other: SvgDocument) -> bool {
+        if self.valid != other.valid || self.min_x != other.min_x || self.min_y != other.min_y ||
+        self.width != other.width ||
+        self.height != other.height || self.lines.len() != other.lines.len() {
+            ret false
+        }
+        let mut index = 0_usize
+        while index < self.lines.len() {
+            let left = self.lines.get(index)
+            let right = other.lines.get(index)
+            match left {
+                Option[SvgLine]::Some(a) => {
+                    match right {
+                        Option[SvgLine]::Some(b) => {
+                            if a.start().x() != b.start().x() ||
+                            a.start().y() != b.start().y() ||
+                            a.finish().x() != b.finish().x() ||
+                            a.finish().y() != b.finish().y() {
+                                ret false
+                            }
+                        }
+                        Option[SvgLine]::None => {
+                            ret false
+                        }
+                    }
+                }
+                Option[SvgLine]::None => {
+                    ret false
+                }
+            }
+            index += 1_usize
+        }
+        ret true
     }
 }
 
@@ -86,6 +134,16 @@ fn parse_svg(source: str) -> SvgDocument {
     }
     let view_box = attribute(root, "viewBox")
     let dimensions = numbers(view_box)
+    let min_x = if dimensions.len() >= 4_usize {
+        number_at(dimensions, 0_usize, 0.0_f32)
+    } else {
+        0.0_f32
+    }
+    let min_y = if dimensions.len() >= 4_usize {
+        number_at(dimensions, 1_usize, 0.0_f32)
+    } else {
+        0.0_f32
+    }
     let width = if dimensions.len() >= 4_usize {
         number_at(dimensions, 2_usize, 24.0_f32)
     } else {
@@ -128,7 +186,7 @@ fn parse_svg(source: str) -> SvgDocument {
         cursor = closing + 1_usize
     }
     ret SvgDocument {
-        if width > 0.0_f32 {
+        min_x, min_y, if width > 0.0_f32 {
             width
         } else {
             24.0_f32

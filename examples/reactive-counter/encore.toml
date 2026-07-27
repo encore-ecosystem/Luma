@@ -1,0 +1,7 @@
+[project]
+name = "luma_reactive_counter"
+version = "0.1.0"
+description = "Minimal reactive Luma application"
+dependencies = [
+    "path@../..[fonts]",
+]

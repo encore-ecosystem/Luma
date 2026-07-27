@@ -1,0 +1,396 @@
+//! Backend-independent display commands and damage regions.
+
+import color::Color
+import core::vec::Vec
+import geometry::Rect
+
+pub struct FillRectCommand {
+    bounds: Rect color: Color
+}
+pub struct StrokeRectCommand {
+    bounds: Rect color: Color
+}
+pub struct RoundRectCommand {
+    bounds: Rect radius: f32 color: Color filled: bool
+}
+pub struct LineCommand {
+    x0: f32 y0: f32 x1: f32 y1: f32 width: f32 color: Color
+}
+pub struct TextCommand {
+    x: f32 y: f32 value: str color: Color
+}
+pub struct ClipCommand {
+    bounds: Rect enabled: bool
+}
+
+pub enum DisplayCommand {
+    FillRect(FillRectCommand)
+    StrokeRect(StrokeRectCommand)
+    RoundRect(RoundRectCommand)
+    Line(LineCommand)
+    Text(TextCommand)
+    Clip(ClipCommand)
+}
+
+/// A renderer-neutral frame description. Commands preserve paint order while
+/// damage regions let retained backends constrain replay to changed pixels.
+pub struct DisplayList {
+    commands: Vec[DisplayCommand]
+    damage: Vec[Rect]
+}
+
+/// One independently replaceable retained paint region. `key` is stable
+/// across reactive renders, while `generation` changes only when that region
+/// is replaced. Backends may compile a segment into their preferred resource
+/// without owning Luma's invalidation policy.
+pub struct DisplaySegment {
+    key: str
+    bounds: Rect
+    commands: Vec[DisplayCommand]
+    generation: usize
+    overlay: bool
+}
+
+/// Backend-neutral retained scene. Updates preserve segment ordering, collect
+/// old and new bounds as damage, and leave unrelated segment generations
+/// untouched.
+pub struct RetainedDisplayList {
+    segments: Vec[DisplaySegment]
+    damage: Vec[Rect]
+    generation: usize
+}
+
+impl for FillRectCommand {
+    pub fn new(bounds: Rect, color: Color) -> Self {
+        ret Self {
+            bounds, color
+        }
+    }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+}
+impl for StrokeRectCommand {
+    pub fn new(bounds: Rect, color: Color) -> Self {
+        ret Self {
+            bounds, color
+        }
+    }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+}
+impl for RoundRectCommand {
+    pub fn new(bounds: Rect, radius: f32, color: Color, filled: bool) -> Self {
+        ret Self {
+            bounds, radius, color, filled
+        }
+    }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+    pub fn radius(self: Self) -> f32 {
+        ret self.radius
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+    pub fn filled(self: Self) -> bool {
+        ret self.filled
+    }
+}
+impl for LineCommand {
+    pub fn new(x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color) -> Self {
+        ret Self {
+            x0, y0, x1, y1, width, color
+        }
+    }
+    pub fn x0(self: Self) -> f32 {
+        ret self.x0
+    }
+    pub fn y0(self: Self) -> f32 {
+        ret self.y0
+    }
+    pub fn x1(self: Self) -> f32 {
+        ret self.x1
+    }
+    pub fn y1(self: Self) -> f32 {
+        ret self.y1
+    }
+    pub fn width(self: Self) -> f32 {
+        ret self.width
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+}
+impl for TextCommand {
+    pub fn new(x: f32, y: f32, value: str, color: Color) -> Self {
+        ret Self {
+            x, y, value, color
+        }
+    }
+    pub fn x(self: Self) -> f32 {
+        ret self.x
+    }
+    pub fn y(self: Self) -> f32 {
+        ret self.y
+    }
+    pub fn value(self: Self) -> str {
+        ret self.value
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+}
+impl for ClipCommand {
+    pub fn new(bounds: Rect, enabled: bool) -> Self {
+        ret Self {
+            bounds, enabled
+        }
+    }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+    pub fn enabled(self: Self) -> bool {
+        ret self.enabled
+    }
+}
+
+impl for DisplayList {
+    pub fn new() -> Self {
+        ret Self {
+            Vec[DisplayCommand]::new(), Vec[Rect]::new()
+        }
+    }
+    pub fn commands(self: Self) -> Vec[DisplayCommand] {
+        ret self.commands
+    }
+    pub fn damage(self: Self) -> Vec[Rect] {
+        ret self.damage
+    }
+    pub fn len(self: Self) -> usize {
+        ret self.commands.len()
+    }
+    pub fn is_empty(self: Self) -> bool {
+        ret self.commands.len() == 0_usize
+    }
+    pub fn push(self: mut Self, command: DisplayCommand) ->() {
+        self.commands.push(command)
+        ret()
+    }
+    pub fn damage_rect(self: mut Self, bounds: Rect) ->() {
+        if bounds.width() > 0.0_f32 && bounds.height() > 0.0_f32 {
+            self.damage.push(bounds)
+        }
+        ret()
+    }
+    pub fn fill_rect(self: mut Self, bounds: Rect, color: Color) ->() {
+        self.push(DisplayCommand::FillRect(FillRectCommand::new(bounds, color)))
+        ret()
+    }
+    pub fn stroke_rect(self: mut Self, bounds: Rect, color: Color) ->() {
+        self.push(DisplayCommand::StrokeRect(StrokeRectCommand::new(bounds, color)))
+        ret()
+    }
+    pub fn round_rect(self: mut Self, bounds: Rect, radius: f32, color: Color, filled: bool) ->() {
+        self.push(DisplayCommand::RoundRect(RoundRectCommand::new(bounds, radius, color, filled)))
+        ret()
+    }
+    pub fn line(self: mut Self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color) ->() {
+        self.push(DisplayCommand::Line(LineCommand::new(x0, y0, x1, y1, width, color)))
+        ret()
+    }
+    pub fn text(self: mut Self, x: f32, y: f32, value: str, color: Color) ->() {
+        self.push(DisplayCommand::Text(TextCommand::new(x, y, value, color)))
+        ret()
+    }
+    pub fn clip(self: mut Self, bounds: Rect) ->() {
+        self.push(DisplayCommand::Clip(ClipCommand::new(bounds, true)))
+        ret()
+    }
+    pub fn clear_clip(self: mut Self) ->() {
+        self.push(DisplayCommand::Clip(ClipCommand::new(
+                    Rect::new(0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32), false,)))
+        ret()
+    }
+}
+
+impl for DisplaySegment {
+    pub fn new(key: str, bounds: Rect, commands: Vec[DisplayCommand],
+        generation: usize, overlay: bool,) -> Self {
+        ret Self {
+            key, bounds, commands, generation, overlay
+        }
+    }
+    pub fn key(self: Self) -> str {
+        ret self.key
+    }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+    pub fn commands(self: Self) -> Vec[DisplayCommand] {
+        ret self.commands
+    }
+    pub fn generation(self: Self) -> usize {
+        ret self.generation
+    }
+    pub fn overlay(self: Self) -> bool {
+        ret self.overlay
+    }
+    pub fn intersects(self: Self, bounds: Rect) -> bool {
+        ret display_rectangles_intersect(self.bounds, bounds)
+    }
+}
+
+impl for RetainedDisplayList {
+    pub fn new() -> Self {
+        ret Self {
+            Vec[DisplaySegment]::new(), Vec[Rect]::new(), 0_usize
+        }
+    }
+    pub fn len(self: Self) -> usize {
+        ret self.segments.len()
+    }
+    pub fn is_empty(self: Self) -> bool {
+        ret self.segments.len() == 0_usize
+    }
+    pub fn generation(self: Self) -> usize {
+        ret self.generation
+    }
+    pub fn segments(self: Self) -> Vec[DisplaySegment] {
+        ret self.segments
+    }
+    pub fn damage(self: Self) -> Vec[Rect] {
+        ret self.damage
+    }
+    pub fn clear_damage(self: mut Self) ->() {
+        self.damage = Vec[Rect]::new()
+        ret()
+    }
+    fn damage_push(self: mut Self, bounds: Rect) ->() {
+        if bounds.width() <= 0.0_f32 || bounds.height() <= 0.0_f32 {
+            ret()
+        }
+        // Damage is normally tiny. Keeping a minimal non-overlapping-enough
+        // list avoids backend work without adding a spatial tree on updates.
+        for current in self.damage {
+            if bounds.x() >= current.x() && bounds.y() >= current.y() &&
+            bounds.right() <= current.right() && bounds.bottom() <= current.bottom() {
+                ret()
+            }
+        }
+        self.damage.push(bounds)
+        ret()
+    }
+    pub fn segment(self: Self, key: str) -> Option[DisplaySegment] {
+        for segment in self.segments {
+            if segment.key() == key {
+                ret Option[DisplaySegment]::Some(segment)
+            }
+        }
+        ret Option[DisplaySegment]::None
+    }
+    /// Inserts or atomically replaces a segment without disturbing its paint
+    /// order. Both former and new bounds are invalidated because either can
+    /// contain pixels no longer covered by the replacement.
+    pub fn upsert(self: mut Self, key: str, bounds: Rect,
+        commands: Vec[DisplayCommand], overlay: bool,) ->() {
+        self.generation = self.generation + 1_usize
+        let next_generation = self.generation
+        let mut index = 0_usize
+        while index < self.segments.len() {
+            match self.segments.get(index) {
+                Option::Some(segment) => {
+                    if segment.key() == key {
+                        self.damage_push(segment.bounds())
+                        self.segments.set(index, DisplaySegment::new(
+                                key, bounds, commands, next_generation,
+                                overlay,))
+                        self.damage_push(bounds)
+                        ret()
+                    }
+                }
+                Option::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        self.segments.push(DisplaySegment::new(
+                key, bounds, commands, next_generation, overlay,))
+        self.damage_push(bounds)
+        ret()
+    }
+    pub fn remove(self: mut Self, key: str) -> bool {
+        let mut next = Vec[DisplaySegment]::new()
+        let mut removed = false
+        for segment in self.segments {
+            if segment.key() == key {
+                self.damage_push(segment.bounds())
+                removed = true
+            } else {
+                next.push(segment)
+            }
+        }
+        if removed {
+            self.generation = self.generation + 1_usize
+            self.segments = next
+        }
+        ret removed
+    }
+    /// Materializes paint order only at a backend boundary. Stable retained
+    /// updates do not rebuild this flattened list.
+    pub fn frame(self: Self, include_overlays: bool) -> DisplayList {
+        let mut result = DisplayList::new()
+        for segment in self.segments {
+            if include_overlays || !segment.overlay() {
+                for command in segment.commands() {
+                    result.push(command)
+                }
+            }
+        }
+        for bounds in self.damage {
+            result.damage_rect(bounds)
+        }
+        ret result
+    }
+    pub fn overlay_frame(self: Self) -> DisplayList {
+        let mut result = DisplayList::new()
+        for segment in self.segments {
+            if segment.overlay() {
+                for command in segment.commands() {
+                    result.push(command)
+                }
+            }
+        }
+        ret result
+    }
+    /// Builds the minimal ordered replay for one damaged rectangle. Segment
+    /// bounds are conservative paint bounds, so skipping a non-intersecting
+    /// segment cannot remove pixels from the patch.
+    pub fn frame_for_damage(self: Self, bounds: Rect,
+        include_overlays: bool,) -> DisplayList {
+        let mut result = DisplayList::new()
+        for segment in self.segments {
+            if (include_overlays || !segment.overlay()) &&
+            display_rectangles_intersect(segment.bounds(), bounds) {
+                for command in segment.commands() {
+                    result.push(command)
+                }
+            }
+        }
+        result.damage_rect(bounds)
+        ret result
+    }
+}
+
+fn display_rectangles_intersect(left: Rect, right: Rect) -> bool {
+    ret left.x() < right.right() && left.right() > right.x() &&
+    left.y() < right.bottom() && left.bottom() > right.y()
+}

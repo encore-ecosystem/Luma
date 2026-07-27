@@ -1,27 +1,30 @@
+//! Interactive catalog demonstrating Luma's retained, reactive, and immediate APIs.
+
 import core::io::println
 import core::option::Option
+import core::os::env
 import core::time:: {
-    perf_counter_ms, sleep_ms
+    perf_counter_ms
 }
 import core::vec::Vec
 import luma:: {
-    ButtonAnimation, Color, FontFace, FontManager, IconManager, Insets, InteractionState, Rect, Style,
-    StyleSheet, Theme, Widget, WidgetLayout, Window,
+    ButtonAnimation, Color, FontFace, FontManager, IconManager, Insets, InteractionState, ReactiveUi,
+    Rect, RendererKind, Style, StyleSheet, Theme, Widget, WidgetLayout, Window,
     backend_error, event_close, event_key_down, event_pointer_down,
     easing_in, easing_in_out, easing_linear, easing_out, event_pointer_move, event_pointer_up, event_resize,
     event_text_input, horizontal, key_enter, key_tab, vertical
 }
-import encore_ui_demo::animations
-import encore_ui_demo::canvas
-import encore_ui_demo::counter
-import encore_ui_demo::elements
-import encore_ui_demo::elements::ElementsState
-import encore_ui_demo::fonts
-import encore_ui_demo::gallery
-import encore_ui_demo::icons
-import encore_ui_demo::icons::DemoIcons
-import encore_ui_demo::playground
-import encore_ui_demo::playground::PlaygroundState
+import luma_demo::animations
+import luma_demo::canvas
+import luma_demo::counter
+import luma_demo::elements
+import luma_demo::elements::ElementsState
+import luma_demo::fonts
+import luma_demo::gallery
+import luma_demo::icons
+import luma_demo::icons::DemoIcons
+import luma_demo::playground
+import luma_demo::playground::PlaygroundState
 
 fn mode_gallery() -> usize {
     ret 0_usize
@@ -48,6 +51,35 @@ fn mode_icons() -> usize {
     ret 7_usize
 }
 
+fn initial_mode() -> usize {
+    match env("LUMA_DEMO_PAGE") {
+        Option::Some(value) => {
+            if value == "counter" { ret mode_counter() }
+            if value == "canvas" { ret mode_canvas() }
+            if value == "fonts" { ret mode_fonts() }
+            if value == "motion" { ret mode_animations() }
+            if value == "elements" { ret mode_elements() }
+            if value == "css" { ret mode_playground() }
+            if value == "icons" { ret mode_icons() }
+        }
+        Option::None => {}
+    }
+    ret mode_gallery()
+}
+
+fn initial_icon() -> str {
+    match env("LUMA_DEMO_ICON") {
+        Option::Some(value) => {
+            if value != "" {
+                ret value
+            }
+        }
+        Option::None => {
+        }
+    }
+    ret "activity"
+}
+
 fn tab_style(selected: bool) -> Style {
     ret Theme::light().tab(selected)
 }
@@ -62,41 +94,62 @@ fn toolbar(mode: usize, icons: DemoIcons) -> Widget {
         .with_padding(Insets::symmetric(7.0_f32, 10.0_f32))
         .with_gap(8.0_f32)
     )
-    bar.push(Widget::label("ENCORE UI").with_flex(116.0_f32, 0.0_f32).with_style(
+    bar.push(Widget::label("LUMA").with_flex(116.0_f32, 0.0_f32).with_style(
             Style::default().with_foreground(Color::rgb(245_u8, 248_u8, 251_u8)).with_font_weight(700_u32)
         ))
     bar.push(Widget::icon_button("tab-gallery", "Gallery", icons.gallery()).with_flex(104.0_f32, 0.0_f32).with_style(tab_style(mode
-    == mode_gallery())))
+                == mode_gallery())))
     bar.push(Widget::icon_button("tab-counter", "Counter", icons.counter()).with_flex(104.0_f32, 0.0_f32).with_style(tab_style(mode
-    == mode_counter())))
+                == mode_counter())))
     bar.push(Widget::icon_button("tab-canvas", "Canvas", icons.canvas()).with_flex(98.0_f32, 0.0_f32).with_style(tab_style(mode
-    == mode_canvas())))
+                == mode_canvas())))
     bar.push(Widget::icon_button("tab-fonts", "Fonts", icons.fonts()).with_flex(92.0_f32, 0.0_f32).with_style(tab_style(mode
-    == mode_fonts())))
+                == mode_fonts())))
     bar.push(Widget::icon_button("tab-animations", "Motion", icons.animations()).with_flex(100.0_f32,
-    0.0_f32).with_style(tab_style(mode == mode_animations())))
+            0.0_f32,).with_style(tab_style(mode == mode_animations())))
     bar.push(Widget::icon_button("tab-elements", "Elements", icons.elements()).with_flex(112.0_f32, 0.0_f32).with_style(tab_style(mode
-    == mode_elements())))
+                == mode_elements())))
     bar.push(Widget::icon_button("tab-playground", "CSS", icons.css()).with_flex(82.0_f32, 0.0_f32).with_style(tab_style(mode
-    == mode_playground())))
+                == mode_playground())))
     bar.push(Widget::icon_button("tab-icons", "Icons", icons.icons()).with_flex(92.0_f32, 0.0_f32).with_style(tab_style(mode
-    == mode_icons())))
+                == mode_icons())))
     bar.push(Widget::spacer(1.0_f32))
     ret bar
 }
 
 fn retained_screen(mode: usize, content: Widget, hovered: str, active: str, focused: str, icons: DemoIcons)
-    -> Widget {
+-> Widget {
     let mut root = Widget::panel("demo-root").with_direction(vertical()).with_style(
         Style::default().with_background(Color::rgb(232_u8, 237_u8, 242_u8)).with_gap(0.0_f32)
     )
     root.push(toolbar(mode, icons))
     root.push(content.with_flex(0.0_f32, 1.0_f32))
-    let stylesheet = StyleSheet::parse(
-        "button:hover { border-color: #12997e; border-width: 2px; } " +
-        "button:active { background-color: #0d745f; color: #ffffff; } " +
-        "input:focus, textarea:focus { border-color: #12997e; border-width: 2px; }")
-    ret stylesheet.apply(root, hovered, active, focused)
+    ret root
+}
+
+fn patch_interaction_targets(window: Window, reactive: mut ReactiveUi,
+    stylesheet: StyleSheet, previous_hovered: str, previous_active: str,
+    previous_focused: str, hovered: str, active: str, focused: str,) -> ReactiveUi {
+    let _previous_hover = window.patch_interaction_style(reactive, stylesheet,
+        previous_hovered, previous_hovered == hovered,
+        previous_hovered == active, previous_hovered == focused,)
+    let _hover = window.patch_interaction_style(reactive, stylesheet, hovered,
+        hovered != "", hovered == active, hovered == focused,)
+    let _previous_active = window.patch_interaction_style(reactive, stylesheet,
+        previous_active, previous_active == hovered, previous_active == active,
+        previous_active == focused,)
+    let _active = window.patch_interaction_style(reactive, stylesheet, active,
+        active == hovered, active != "", active == focused,)
+    let _previous_focus = window.patch_interaction_style(reactive, stylesheet,
+        previous_focused, previous_focused == hovered,
+        previous_focused == active, previous_focused == focused,)
+    let _focus = window.patch_interaction_style(reactive, stylesheet, focused,
+        focused == hovered, focused == active, focused != "",)
+    ret if reactive.is_dirty() {
+        window.draw_reactive(reactive)
+    } else {
+        reactive
+    }
 }
 
 fn draw_immediate_toolbar(window: Window, mode: usize, icons: DemoIcons) ->() {
@@ -105,56 +158,64 @@ fn draw_immediate_toolbar(window: Window, mode: usize, icons: DemoIcons) ->() {
     let active = Color::rgb(18_u8, 153_u8, 126_u8)
     let text = Color::rgb(245_u8, 248_u8, 251_u8)
     window.fill_rect(Rect::new(0.0_f32, 0.0_f32, window.width() as f32, 52.0_f32), dark)
-    window.text(12.0_f32, 20.0_f32, "ENCORE UI", text)
+    window.text(12.0_f32, 20.0_f32, "LUMA", text)
     window.fill_rect(Rect::new(134.0_f32, 7.0_f32, 104.0_f32, 38.0_f32), if mode == mode_gallery() {
             active
         } else {
             idle
         }
+        ,
     )
     window.fill_rect(Rect::new(246.0_f32, 7.0_f32, 104.0_f32, 38.0_f32), if mode == mode_counter() {
             active
         } else {
             idle
         }
+        ,
     )
     window.fill_rect(Rect::new(358.0_f32, 7.0_f32, 98.0_f32, 38.0_f32), if mode == mode_canvas() {
             active
         } else {
             idle
         }
+        ,
     )
     window.fill_rect(Rect::new(464.0_f32, 7.0_f32, 92.0_f32, 38.0_f32), if mode == mode_fonts() {
             active
         } else {
             idle
         }
+        ,
     )
     window.fill_rect(Rect::new(564.0_f32, 7.0_f32, 100.0_f32, 38.0_f32), if mode == mode_animations()
-    {
+        {
             active
         } else {
             idle
         }
+        ,
     )
     window.fill_rect(Rect::new(672.0_f32, 7.0_f32, 112.0_f32, 38.0_f32), if mode == mode_elements() {
             active
         } else {
             idle
         }
+        ,
     )
     window.fill_rect(Rect::new(792.0_f32, 7.0_f32, 82.0_f32, 38.0_f32), if mode == mode_playground()
-    {
+        {
             active
         } else {
             idle
         }
+        ,
     )
     window.fill_rect(Rect::new(882.0_f32, 7.0_f32, 92.0_f32, 38.0_f32), if mode == mode_icons() {
             active
         } else {
             idle
         }
+        ,
     )
     window.text(166.0_f32, 20.0_f32, "Gallery", text)
     window.text(278.0_f32, 20.0_f32, "Counter", text)
@@ -286,6 +347,14 @@ fn animation_setting(target: str) -> bool {
     || target == "setting-font" || target == "setting-opacity" || target == "setting-duration"
 }
 
+fn motion_paint_target(target: str) -> str {
+    ret if animation_target(target) {
+        target + "-row"
+    } else {
+        target
+    }
+}
+
 fn slider_position(layout: WidgetLayout, id: str, x: f32) -> f32 {
     match layout.find_bounds(id) {
         Option[Rect]::Some(bounds) => {
@@ -322,26 +391,69 @@ fn input_click_width(window: Window, bounds: Rect, value: str, cursor: usize, x:
 }
 
 fn main() -> u32 {
-    let window = Window::create("Encore UI Showcase", 1180_u32, 760_u32)
+    let startup_started = perf_counter_ms()
+    let profile_startup = match env("LUMA_PROFILE") {
+        Option::Some(_) => { true }
+        Option::None => { false }
+    }
+    let renderer = match env("LUMA_RENDERER") {
+            Option::Some(value) => {
+                if value == "software" {
+                    RendererKind::Software
+                } elif value == "direct-vulkan" || value == "direct" {
+                    RendererKind::DirectVulkan
+                } else {
+                if value == "vulkan" {
+                    RendererKind::Vulkan
+                } else {
+                    RendererKind::Auto
+                }
+            }
+        }
+        Option::None => {
+            RendererKind::Auto
+        }
+    }
+    let window = Window::create_with_renderer("Luma Showcase", 1180_u32, 760_u32, renderer)
     if !window.available() {
-        println("Unable to start Encore UI: " + backend_error())
+        println("Unable to start Luma: " + backend_error())
         ret 1_u32
+    }
+    if profile_startup {
+        println("Luma startup window: " +
+            Debug::fmt(perf_counter_ms() - startup_started) + " ms")
     }
     let mut font_manager = FontManager::with_bundled("../assets/fonts")
     font_manager.load_directory("fonts")
     font_manager.register_all(window)
     font_manager = font_manager.activate_default(window, 22.0_f32, 400_u32)
-    let icon_manager = IconManager::with_bundled("../assets/icons")
+    if profile_startup {
+        println("Luma startup fonts: " +
+            Debug::fmt(perf_counter_ms() - startup_started) + " ms")
+    }
+    let mut mode = initial_mode()
+    let mut icon_manager = IconManager::with_lazy_bundled("../assets/icons")
+    if mode == mode_icons() {
+        icon_manager.load_directory("../assets/icons", true)
+    }
     let demo_icons = DemoIcons::load(icon_manager)
+    if profile_startup {
+        println("Luma startup icons: " +
+            Debug::fmt(perf_counter_ms() - startup_started) + " ms")
+    }
+    let renderer_name = window.renderer_name()
+    let renderer_info = window.renderer_info()
+    println("Luma renderer: " + renderer_name + " (" +
+        renderer_info.device() + ")")
     let mut font_menu_open = false
     let mut preview_text = ""
-    let mut mode = mode_gallery()
     let mut status = "Choose a button variant"
     let mut count = 0_u32
     let mut cursor_x = 460.0_f32
     let mut cursor_y = 340.0_f32
-    let mut button_animation = ButtonAnimation::new(140_u64)
-    let mut counter_animation = ButtonAnimation::new(120_u64)
+    let mut button_animation = ButtonAnimation::new(80_u64)
+    let mut animation_hover_target = ""
+    let mut counter_animation = ButtonAnimation::new(70_u64)
     let mut counter_animation_target = ""
     let mut animation_accent = "#12997e"
     let mut color_picker_open = false
@@ -350,24 +462,67 @@ fn main() -> u32 {
     let mut animation_padding = 12.0_f32
     let mut animation_font_size = 16.0_f32
     let mut animation_opacity = 1.0_f32
-    let mut animation_duration = 140_u64
+    let mut animation_duration = 80_u64
     let mut animation_setting_drag = ""
     let mut elements_state = ElementsState::new()
     let mut playground_state = PlaygroundState::new()
     let mut icon_page = 0_usize
-    let mut selected_icon = "activity"
+    let mut selected_icon = initial_icon()
     let mut interaction = InteractionState::new()
+    let interaction_stylesheet = StyleSheet::parse(
+        "button:hover { border-color: #12997e; border-width: 2px; } " +
+        "button:active { background-color: #0d745f; color: #ffffff; } " +
+        "input:focus, textarea:focus { border-color: #12997e; border-width: 2px; }")
     let mut slider_dragging = false
+    let mut text_selection_target = ""
     let mut last_frame_ms = perf_counter_ms()
-    let mut retained_layout = window.layout(retained_screen(mode, gallery::view(status), "", "", "",
-    demo_icons))
-    let mut dirty = true
+    let startup_screen = retained_screen(mode, gallery::view(status, renderer_name),
+        "", "", "", demo_icons,)
+    if profile_startup {
+        println("Luma startup view: " +
+            Debug::fmt(perf_counter_ms() - startup_started) + " ms")
+    }
+    let startup_layout = window.layout(startup_screen)
+    if profile_startup {
+        println("Luma startup layout: " +
+            Debug::fmt(perf_counter_ms() - startup_started) + " ms")
+    }
+    let cached_startup = window.cache_layout(startup_layout)
+    if profile_startup {
+        println("Luma startup cache: " +
+            Debug::fmt(perf_counter_ms() - startup_started) + " ms")
+    }
+    let _startup_presented = if cached_startup {
+        window.draw_cached_layout()
+    } else {
+        window.draw_layout(startup_layout)
+    }
+    let mut reactive = ReactiveUi::new(startup_layout)
+    if profile_startup {
+        println("Luma first complete frame: " +
+            Debug::fmt(perf_counter_ms() - startup_started) + " ms")
+    }
+    let mut dirty = false
 
     while window.is_open() {
+        let mode_at_frame_start = mode
+        let hovered_at_frame_start = interaction.hovered()
+        let active_at_frame_start = interaction.active()
+        let focused_at_frame_start = interaction.focused()
+        let animation_target_at_frame_start = animation_hover_target
+        let counter_target_at_frame_start = counter_animation_target
+        let mut motion_structure_dirty = false
+        let animation_active =(mode == mode_animations() && button_animation.animating()) ||
+        (mode == mode_counter() && counter_animation.animating())
+        let event = window.wait(if animation_active {
+                8_u32
+            } else {
+                1000_u32
+            }
+        )
         let now_ms = perf_counter_ms()
         let elapsed_ms = now_ms - last_frame_ms
         last_frame_ms = now_ms
-        let event = window.poll()
         if event.kind() == event_close() {
             break
         }
@@ -383,7 +538,7 @@ fn main() -> u32 {
             mode = if mode == mode_canvas() || mode == mode_fonts() {
                 toolbar_mode(event.x(), event.y(), mode)
             } else {
-                target_mode(retained_layout.hit(event.x(), event.y()), mode)
+                target_mode(reactive.layout().hit(event.x(), event.y()), mode)
             }
             if mode != previous_mode {
                 dirty = true
@@ -398,27 +553,27 @@ fn main() -> u32 {
             if mode == mode_canvas() {
                 dirty = true
             } elif mode != mode_fonts() {
-                let target = retained_layout.hit(event.x(), event.y())
+                let target = reactive.layout().hit(event.x(), event.y())
                 if target != interaction.hovered() {
-                    interaction = interaction.pointer_move(retained_layout, event.x(), event.y()) dirty
+                    interaction = interaction.pointer_move(reactive.layout(), event.x(), event.y()) dirty
                     = true
                 }
             }
         }
         if event.kind() == event_pointer_down() && mode != mode_canvas() && mode != mode_fonts() {
-            interaction = interaction.pointer_down(retained_layout, event.x(), event.y())
+            interaction = interaction.pointer_down(reactive.layout(), event.x(), event.y())
             dirty = true
         }
         if event.kind() == event_pointer_up() && interaction.active() != "" {
-            interaction = interaction.pointer_up(retained_layout, event.x(), event.y())
+            interaction = interaction.pointer_up(reactive.layout(), event.x(), event.y())
             dirty = true
         }
         if event.kind() == event_key_down() && event.key() == key_tab() && mode != mode_canvas() && mode
         != mode_fonts() {
             interaction = if event.shift() {
-                interaction.focus_previous(retained_layout.widget())
+                interaction.focus_previous(reactive.layout().widget())
             } else {
-                interaction.focus_next(retained_layout.widget())
+                interaction.focus_next(reactive.layout().widget())
             }
             if mode == mode_elements() {
                 elements_state = elements_state.with_focus(interaction.focused())
@@ -426,9 +581,9 @@ fn main() -> u32 {
             dirty = true
         }
         let keyboard_target = if event.kind() == event_key_down() &&(event.key() == key_enter() || event.key()
-        == 32_u32) &&
+            == 32_u32) &&
         mode != mode_canvas() && mode != mode_fonts() {
-            interaction.focused_action(retained_layout.widget())
+            interaction.focused_action(reactive.layout().widget())
         } else {
             ""
         }
@@ -439,13 +594,31 @@ fn main() -> u32 {
                 dirty = true
             }
         }
+        let interaction_changed = hovered_at_frame_start != interaction.hovered() ||
+        active_at_frame_start != interaction.active() ||
+        focused_at_frame_start != interaction.focused()
+        if interaction_changed {
+            reactive = patch_interaction_targets(window, reactive,
+                interaction_stylesheet, hovered_at_frame_start,
+                active_at_frame_start, focused_at_frame_start,
+                interaction.hovered(), interaction.active(),
+                interaction.focused(),)
+            if event.kind() == event_pointer_move() &&
+            mode != mode_counter() && mode != mode_animations() {
+                dirty = false
+            }
+        }
+        if mode == mode_icons() && icon_manager.len() == 0_usize {
+            icon_manager.load_directory("../assets/icons", true)
+            dirty = true
+        }
 
         if mode == mode_gallery() {
             if event.kind() == event_pointer_down() || keyboard_target != "" {
                 let target = if keyboard_target != "" {
                     keyboard_target
                 } else {
-                    retained_layout.hit(event.x(), event.y())
+                    reactive.layout().hit(event.x(), event.y())
                 }
                 let previous_mode = mode
                 let previous_status = status
@@ -456,14 +629,21 @@ fn main() -> u32 {
                 }
             }
             if dirty {
-                retained_layout = window.layout(retained_screen(mode, gallery::view(status), interaction.hovered(),
-                interaction.active(), interaction.focused(), demo_icons))
-                window.draw_layout(retained_layout)
+                let screen = retained_screen(mode, gallery::view(status, renderer_name), interaction.hovered(),
+                    interaction.active(), interaction.focused(), demo_icons,)
+                if mode_at_frame_start == mode && event.kind() == event_pointer_move() {
+                    let mut targets = Vec[str]::new()
+                    targets.push(hovered_at_frame_start)
+                    targets.push(interaction.hovered())
+                    reactive = window.restyle_reactive(reactive, screen, targets)
+                } else {
+                    reactive = window.rebuild_reactive(reactive, screen)
+                }
                 dirty = false
             }
         } elif mode == mode_counter() {
             if event.kind() == event_pointer_move() {
-                let target = retained_layout.hit(event.x(), event.y())
+                let target = reactive.layout().hit(event.x(), event.y())
                 let animated = target == "increment" || target == "reset"
                 let next_target = if animated {
                     target
@@ -479,7 +659,7 @@ fn main() -> u32 {
                 let target = if keyboard_target != "" {
                     keyboard_target
                 } else {
-                    retained_layout.hit(event.x(), event.y())
+                    reactive.layout().hit(event.x(), event.y())
                 }
                 let previous_mode = mode
                 mode = target_mode(target, mode)
@@ -504,22 +684,44 @@ fn main() -> u32 {
                 counter_animation = counter_animation.advance(elapsed_ms) dirty = true
             }
             if dirty {
-                retained_layout = window.layout(retained_screen(mode, counter::view(count, counter_animation,
-                counter_animation_target), interaction.hovered(), interaction.active(), interaction.focused(),
-                demo_icons))
-                window.draw_layout(retained_layout)
+                let screen = retained_screen(mode, counter::view(count, counter_animation,
+                        counter_animation_target,), interaction.hovered(), interaction.active(),
+                    interaction.focused(), demo_icons,)
+                if mode_at_frame_start == mode && event.kind() != event_resize() &&
+                (event.kind() == event_pointer_move() || event.kind() == event_pointer_up() ||
+                    event.kind() == 0_u32) {
+                    let mut targets = Vec[str]::new()
+                    targets.push(hovered_at_frame_start)
+                    targets.push(interaction.hovered())
+                    targets.push(active_at_frame_start)
+                    targets.push(interaction.active())
+                    targets.push(counter_target_at_frame_start)
+                    targets.push(counter_animation_target)
+                    reactive = window.restyle_reactive(reactive, screen, targets)
+                } else {
+                    reactive = window.rebuild_reactive(reactive, screen)
+                }
                 dirty = false
             }
         } elif mode == mode_animations() {
             if event.kind() == event_pointer_move() {
-                let target = retained_layout.hit(event.x(), event.y())
-                button_animation = button_animation.with_hovered(animation_target(target))
+                let target = reactive.layout().hit(event.x(), event.y())
+                let next_target = if animation_target(target) {
+                    target
+                } else {
+                    ""
+                }
+                if next_target != animation_hover_target {
+                    animation_hover_target = next_target
+                    dirty = true
+                }
+                button_animation = button_animation.with_hovered(animation_hover_target != "")
             }
             if event.kind() == event_pointer_down() || keyboard_target != "" {
                 let target = if keyboard_target != "" {
                     keyboard_target
                 } else {
-                    retained_layout.hit(event.x(), event.y())
+                    reactive.layout().hit(event.x(), event.y())
                 }
                 if event.kind() == event_pointer_down() {
                     animation_setting_drag = if animation_setting(target) {
@@ -529,20 +731,25 @@ fn main() -> u32 {
                     }
                 }
                 if target == "animation-color-picker" {
-                    color_picker_open = !color_picker_open dirty = true
+                    color_picker_open = !color_picker_open dirty = true motion_structure_dirty = true
                 }
                 let selected = palette_color(target, animation_accent)
                 if selected != animation_accent {
-                    animation_accent = selected color_picker_open = false dirty = true
+                    animation_accent = selected color_picker_open = false dirty = true motion_structure_dirty
+                    = true
                 }
                 if target == "easing-linear" {
-                    button_animation = button_animation.with_easing(easing_linear()) dirty = true
+                    button_animation = button_animation.with_easing(easing_linear()) dirty = true motion_structure_dirty
+                    = true
                 } elif target == "easing-in" {
-                    button_animation = button_animation.with_easing(easing_in()) dirty = true
+                    button_animation = button_animation.with_easing(easing_in()) dirty = true motion_structure_dirty
+                    = true
                 } elif target == "easing-out" {
-                    button_animation = button_animation.with_easing(easing_out()) dirty = true
+                    button_animation = button_animation.with_easing(easing_out()) dirty = true motion_structure_dirty
+                    = true
                 } elif target == "easing-in-out" {
-                    button_animation = button_animation.with_easing(easing_in_out()) dirty = true
+                    button_animation = button_animation.with_easing(easing_in_out()) dirty = true motion_structure_dirty
+                    = true
                 }
                 if event.kind() == event_pointer_down() {
                     button_animation = button_animation.with_pressed(animation_target(target))
@@ -550,7 +757,7 @@ fn main() -> u32 {
             }
             if (event.kind() == event_pointer_down() || event.kind() == event_pointer_move()) && animation_setting_drag
             != "" {
-                let position = slider_position(retained_layout, animation_setting_drag, event.x())
+                let position = slider_position(reactive.layout(), animation_setting_drag, event.x())
                 if animation_setting_drag == "setting-radius" {
                     animation_radius = position * 24.0_f32
                 } elif animation_setting_drag == "setting-border" {
@@ -562,7 +769,7 @@ fn main() -> u32 {
                 } elif animation_setting_drag == "setting-opacity" {
                     animation_opacity = position
                 } elif animation_setting_drag == "setting-duration" {
-                    animation_duration =(60.0_f32 + position * 540.0_f32) as u64
+                    animation_duration =(40.0_f32 + position * 260.0_f32) as u64
                     button_animation = button_animation.with_duration(animation_duration)
                 }
                 dirty = true
@@ -576,22 +783,40 @@ fn main() -> u32 {
                 dirty = true
             }
             if dirty {
-                retained_layout = window.layout(retained_screen(mode, animations::view(button_animation,
-                            animation_accent, color_picker_open, animation_radius, animation_border,
-                            animation_padding, animation_font_size, animation_opacity, animation_duration,),
-                        interaction.hovered(), interaction.active(), interaction.focused(), demo_icons,))
-                window.draw_layout(retained_layout)
+                let screen = retained_screen(mode, animations::view(button_animation,
+                        animation_hover_target, animation_accent, color_picker_open, animation_radius,
+                        animation_border, animation_padding, animation_font_size, animation_opacity,
+                        animation_duration,), interaction.hovered(), interaction.active(), interaction.focused(),
+                    demo_icons,)
+                if mode_at_frame_start != mode || event.kind() == event_resize() || motion_structure_dirty
+                {
+                    reactive = window.rebuild_reactive(reactive, screen)
+                } else {
+                    let mut targets = Vec[str]::new()
+                    targets.push(motion_paint_target(hovered_at_frame_start))
+                    targets.push(motion_paint_target(interaction.hovered()))
+                    targets.push(motion_paint_target(active_at_frame_start))
+                    targets.push(motion_paint_target(interaction.active()))
+                    targets.push(motion_paint_target(animation_target_at_frame_start))
+                    targets.push(motion_paint_target(animation_hover_target))
+                    reactive = window.restyle_reactive(reactive, screen, targets)
+                }
                 dirty = false
             }
         } elif mode == mode_elements() {
             if event.kind() == event_pointer_down() {
-                let target = retained_layout.hit(event.x(), event.y())
+                let target = reactive.layout().hit(event.x(), event.y())
+                text_selection_target = if target == "name" || target == "notes" {
+                    target
+                } else {
+                    ""
+                }
                 if target == "volume" {
                     slider_dragging = true
                 }
                 elements_state = elements_state.click(target)
                 if target == "name" {
-                    match retained_layout.find_bounds("name") {
+                    match reactive.layout().find_bounds("name") {
                         Option[Rect]::Some(bounds) => {
                             let width = input_click_width(window, bounds, elements_state.text("name"),
                                 elements_state.cursor("name"), event.x(),)
@@ -603,7 +828,7 @@ fn main() -> u32 {
                     }
                 }
                 if target == "notes" {
-                    match retained_layout.find_bounds("notes") {
+                    match reactive.layout().find_bounds("notes") {
                         Option[Rect]::Some(bounds) => {
                             elements_state = elements_state.place_cursor("notes", window.wrapped_text_index(
                                     elements_state.text("notes"), bounds.width() - 20.0_f32,
@@ -614,10 +839,10 @@ fn main() -> u32 {
                     }
                 }
                 if target == "volume" {
-                    match retained_layout.find_bounds("volume") {
+                    match reactive.layout().find_bounds("volume") {
                         Option[Rect]::Some(bounds) => {
                             elements_state = elements_state.with_slider((event.x() - bounds.x() - 6.0_f32)
-                            /(bounds.width() - 12.0_f32))
+                                /(bounds.width() - 12.0_f32))
                         }
                         Option[Rect]::None => {
                         }
@@ -629,19 +854,45 @@ fn main() -> u32 {
                 elements_state = elements_state.click(keyboard_target)
                 dirty = true
             }
-            if event.kind() == event_pointer_move() && slider_dragging {
-                match retained_layout.find_bounds("volume") {
-                    Option[Rect]::Some(bounds) => {
-                        elements_state = elements_state.with_slider((event.x() - bounds.x() - 6.0_f32)
-                        /(bounds.width() - 12.0_f32))
-                        dirty = true
+            if event.kind() == event_pointer_move() {
+                if slider_dragging {
+                    match reactive.layout().find_bounds("volume") {
+                        Option[Rect]::Some(bounds) => {
+                            elements_state = elements_state.with_slider((event.x() - bounds.x() - 6.0_f32)
+                                /(bounds.width() - 12.0_f32))
+                            dirty = true
+                        }
+                        Option[Rect]::None => {
+                        }
                     }
-                    Option[Rect]::None => {
+                } elif text_selection_target == "name" {
+                    match reactive.layout().find_bounds("name") {
+                        Option[Rect]::Some(bounds) => {
+                            let width = input_click_width(window, bounds, elements_state.text("name"),
+                                elements_state.cursor("name"), event.x(),)
+                            elements_state = elements_state.extend_selection("name",
+                                window.text_index(elements_state.text("name"), width),)
+                            dirty = true
+                        }
+                        Option[Rect]::None => {
+                        }
+                    }
+                } elif text_selection_target == "notes" {
+                    match reactive.layout().find_bounds("notes") {
+                        Option[Rect]::Some(bounds) => {
+                            elements_state = elements_state.extend_selection("notes", window.wrapped_text_index(
+                                    elements_state.text("notes"), bounds.width() - 20.0_f32,
+                                    event.x() - bounds.x() - 10.0_f32, event.y() - bounds.y() - 10.0_f32,))
+                            dirty = true
+                        }
+                        Option[Rect]::None => {
+                        }
                     }
                 }
             }
             if event.kind() == event_pointer_up() {
                 slider_dragging = false
+                text_selection_target = ""
             }
             if event.kind() == event_text_input() && event.text() != "" {
                 elements_state = elements_state.input(event.text())
@@ -668,17 +919,25 @@ fn main() -> u32 {
                 dirty = true
             }
             if dirty {
-                retained_layout = window.layout(retained_screen(mode, elements::view(elements_state),
-                        interaction.hovered(), interaction.active(), interaction.focused(), demo_icons,))
-                window.draw_layout(retained_layout)
+                let screen = retained_screen(mode, elements::view(elements_state), interaction.hovered(),
+                    interaction.active(), interaction.focused(), demo_icons,)
+                if mode_at_frame_start == mode && event.kind() == event_pointer_move() &&
+                !slider_dragging && text_selection_target == "" {
+                    let mut targets = Vec[str]::new()
+                    targets.push(hovered_at_frame_start)
+                    targets.push(interaction.hovered())
+                    reactive = window.restyle_reactive(reactive, screen, targets)
+                } else {
+                    reactive = window.rebuild_reactive(reactive, screen)
+                }
                 dirty = false
             }
         } elif mode == mode_playground() {
             if event.kind() == event_pointer_down() {
-                let target = retained_layout.hit(event.x(), event.y())
+                let target = reactive.layout().hit(event.x(), event.y())
                 playground_state = playground_state.click(target).begin_drag(target)
                 if target == "css-editor" {
-                    match retained_layout.find_bounds("css-editor") {
+                    match reactive.layout().find_bounds("css-editor") {
                         Option[Rect]::Some(bounds) => {
                             playground_state = playground_state.place_cursor(window.wrapped_text_index(
                                     playground_state.css(), bounds.width() - 24.0_f32,
@@ -690,7 +949,7 @@ fn main() -> u32 {
                 }
                 if playground_state.drag() != "" {
                     playground_state = playground_state.with_channel(playground_state.drag(),
-                        slider_position(retained_layout, playground_state.drag(), event.x()),)
+                        slider_position(reactive.layout(), playground_state.drag(), event.x()),)
                 }
                 dirty = true
             }
@@ -699,8 +958,20 @@ fn main() -> u32 {
                 dirty = true
             }
             if event.kind() == event_pointer_move() && playground_state.drag() != "" {
-                playground_state = playground_state.with_channel(playground_state.drag(),
-                    slider_position(retained_layout, playground_state.drag(), event.x()),)
+                if playground_state.drag() == "css-editor" {
+                    match reactive.layout().find_bounds("css-editor") {
+                        Option[Rect]::Some(bounds) => {
+                            playground_state = playground_state.extend_selection(window.wrapped_text_index(
+                                    playground_state.css(), bounds.width() - 24.0_f32,
+                                    event.x() - bounds.x() - 12.0_f32, event.y() - bounds.y() - 12.0_f32,))
+                        }
+                        Option[Rect]::None => {
+                        }
+                    }
+                } else {
+                    playground_state = playground_state.with_channel(playground_state.drag(),
+                        slider_position(reactive.layout(), playground_state.drag(), event.x()),)
+                }
                 dirty = true
             }
             if event.kind() == event_pointer_up() {
@@ -722,9 +993,17 @@ fn main() -> u32 {
                 dirty = true
             }
             if dirty {
-                retained_layout = window.layout(retained_screen(mode, playground::view(playground_state),
-                        interaction.hovered(), interaction.active(), interaction.focused(), demo_icons,))
-                window.draw_layout(retained_layout)
+                let screen = retained_screen(mode, playground::view(playground_state), interaction.hovered(),
+                    interaction.active(), interaction.focused(), demo_icons,)
+                if mode_at_frame_start == mode && event.kind() == event_pointer_move() &&
+                playground_state.drag() == "" {
+                    let mut targets = Vec[str]::new()
+                    targets.push(hovered_at_frame_start)
+                    targets.push(interaction.hovered())
+                    reactive = window.restyle_reactive(reactive, screen, targets)
+                } else {
+                    reactive = window.rebuild_reactive(reactive, screen)
+                }
                 dirty = false
             }
         } elif mode == mode_icons() {
@@ -732,7 +1011,7 @@ fn main() -> u32 {
                 let target = if keyboard_target != "" {
                     keyboard_target
                 } else {
-                    retained_layout.hit(event.x(), event.y())
+                    reactive.layout().hit(event.x(), event.y())
                 }
                 if target == "icons-previous" && icon_page > 0_usize {
                     icon_page = icon_page - 1_usize dirty = true
@@ -746,10 +1025,16 @@ fn main() -> u32 {
                 }
             }
             if dirty {
-                retained_layout = window.layout(retained_screen(mode, icons::view(icon_manager, icon_page,
-                selected_icon),
-                        interaction.hovered(), interaction.active(), interaction.focused(), demo_icons,))
-                window.draw_layout(retained_layout)
+                let screen = retained_screen(mode, icons::view(icon_manager, icon_page, selected_icon),
+                    interaction.hovered(), interaction.active(), interaction.focused(), demo_icons,)
+                if mode_at_frame_start == mode && event.kind() == event_pointer_move() {
+                    let mut targets = Vec[str]::new()
+                    targets.push(hovered_at_frame_start)
+                    targets.push(interaction.hovered())
+                    reactive = window.restyle_reactive(reactive, screen, targets)
+                } else {
+                    reactive = window.rebuild_reactive(reactive, screen)
+                }
                 dirty = false
             }
         } elif mode == mode_canvas() {
@@ -795,7 +1080,7 @@ fn main() -> u32 {
                     }
                     if size != font_manager.active_size() {
                         font_manager = font_manager.activate(window, font_manager.active_family(), size,
-                        font_manager.active_weight())
+                            font_manager.active_weight(),)
                         dirty = true
                     }
                 } elif event.y() >= 438.0_f32 && event.y() < 470.0_f32 {
@@ -807,7 +1092,7 @@ fn main() -> u32 {
                     }
                     if weight != font_manager.active_weight() {
                         font_manager = font_manager.activate(window, font_manager.active_family(), font_manager.active_size(),
-                        weight)
+                            weight,)
                         dirty = true
                     }
                 }
@@ -821,7 +1106,6 @@ fn main() -> u32 {
                 dirty = false
             }
         }
-        sleep_ms(16_u64)
     }
     window.destroy()
     ret 0_u32

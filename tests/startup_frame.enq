@@ -1,0 +1,20 @@
+import luma:: {
+    RendererKind, Widget, Window
+}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma atomic startup test", 96_u32, 64_u32, RendererKind::Software,)
+    if !window.available() {
+        ret 1_u32
+    }
+    let _ui = window.reactive(Widget::label("Complete first frame"))
+    if window.presented_frames() != 1_u64 {
+        window.destroy()
+        ret 2_u32
+    }
+    if !window.destroy() {
+        ret 3_u32
+    }
+    ret 0_u32
+}

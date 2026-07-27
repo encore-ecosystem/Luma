@@ -1,5 +1,7 @@
+//! Standard controls, form state, and text interaction showcase.
+
 import luma:: {
-    Color, Insets, Style, TextEditor, Theme, Widget, css_style, key_delete,
+    Insets, Style, TextEditor, Theme, Widget, css_style, key_delete,
     horizontal, key_down, key_end, key_home, key_left, key_right, key_up, vertical
 }
 
@@ -20,7 +22,7 @@ pub struct ElementsState {
 impl for ElementsState {
     pub fn new() -> ElementsState {
         ret ElementsState {
-            TextEditor::new(""), TextEditor::new(""), "", true, 0_usize, true, "Encore UI", false,
+            TextEditor::new(""), TextEditor::new(""), "", true, 0_usize, true, "Luma", false,
             0.68_f32, 0.74_f32, "Ready"
         }
     }
@@ -50,7 +52,7 @@ impl for ElementsState {
                 self.notifications, self.selection, !self.select_open, self.slider, self.progress, self.status,)
         }
         if target == "option-encore" {
-            ret self.select("Encore UI")
+            ret self.select("Luma")
         }
         if target == "option-native" {
             ret self.select("Native")
@@ -80,22 +82,22 @@ impl for ElementsState {
     pub fn input(self: Self, value: str) -> ElementsState {
         if self.focus == "name" {
             ret state(self, self.name.insert(value), self.notes, self.focus, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         if self.focus == "notes" {
             ret state(self, self.name, self.notes.insert(value), self.focus, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         ret self
     }
     pub fn backspace(self: Self) -> ElementsState {
         if self.focus == "name" {
             ret state(self, self.name.backspace(), self.notes, self.focus, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         if self.focus == "notes" {
             ret state(self, self.name, self.notes.backspace(), self.focus, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         ret self
     }
@@ -103,63 +105,75 @@ impl for ElementsState {
         if self.focus == "name" {
             if control && key == 97_u32 {
                 ret state(self, self.name.select_all(), self.notes, self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_delete() {
                 ret state(self, self.name.delete(), self.notes, self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_left() {
                 ret state(self, self.name.move_left(shift), self.notes, self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_right() {
                 ret state(self, self.name.move_right(shift), self.notes, self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_home() {
                 ret state(self, self.name.move_home(shift), self.notes, self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_end() {
                 ret state(self, self.name.move_end(shift), self.notes, self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
         }
         if self.focus == "notes" {
             if control && key == 97_u32 {
                 ret state(self, self.name, self.notes.select_all(), self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_delete() {
                 ret state(self, self.name, self.notes.delete(), self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_left() {
                 ret state(self, self.name, self.notes.move_left(shift), self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_right() {
                 ret state(self, self.name, self.notes.move_right(shift), self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_home() {
                 ret state(self, self.name, self.notes.move_line_home(shift), self.focus, self.checked,
-                self.radio, self.notifications, self.selection, self.select_open, self.slider, self.progress,
-                self.status)
+                    self.radio, self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_end() {
                 ret state(self, self.name, self.notes.move_line_end(shift), self.focus, self.checked,
-                self.radio, self.notifications, self.selection, self.select_open, self.slider, self.progress,
-                self.status)
+                    self.radio, self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_up() {
                 ret state(self, self.name, self.notes.move_up(shift), self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
             if key == key_down() {
                 ret state(self, self.name, self.notes.move_down(shift), self.focus, self.checked, self.radio,
-                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                    self.notifications, self.selection, self.select_open, self.slider, self.progress,
+                    self.status,)
             }
         }
         ret self
@@ -194,33 +208,48 @@ impl for ElementsState {
     pub fn place_cursor(self: Self, target: str, cursor: usize) -> ElementsState {
         if target == "name" {
             ret state(self, self.name.with_cursor(cursor), self.notes, target, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         if target == "notes" {
             ret state(self, self.name, self.notes.with_cursor(cursor), target, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
+        }
+        ret self
+    }
+    pub fn extend_selection(self: Self, target: str, cursor: usize) -> ElementsState {
+        if target == "name" {
+            ret state(self, self.name.with_selection(self.name.selection_anchor(), cursor), self.notes,
+                target,
+                self.checked, self.radio, self.notifications, self.selection, self.select_open, self.slider,
+                self.progress, self.status,)
+        }
+        if target == "notes" {
+            ret state(self, self.name, self.notes.with_selection(self.notes.selection_anchor(), cursor),
+                target,
+                self.checked, self.radio, self.notifications, self.selection, self.select_open, self.slider,
+                self.progress, self.status,)
         }
         ret self
     }
     pub fn cut(self: Self) -> ElementsState {
         if self.focus == "name" {
             ret state(self, self.name.cut(), self.notes, self.focus, self.checked, self.radio, self.notifications,
-            self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         if self.focus == "notes" {
             ret state(self, self.name, self.notes.cut(), self.focus, self.checked, self.radio, self.notifications,
-            self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         ret self
     }
     pub fn paste(self: Self, value: str) -> ElementsState {
         if self.focus == "name" {
             ret state(self, self.name.paste(value), self.notes, self.focus, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         if self.focus == "notes" {
             ret state(self, self.name, self.notes.paste(value), self.focus, self.checked, self.radio,
-            self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status)
+                self.notifications, self.selection, self.select_open, self.slider, self.progress, self.status,)
         }
         ret self
     }
@@ -286,6 +315,7 @@ fn focus_style(active: bool) -> Style {
         } else {
             theme.line()
         }
+        ,
     )
 }
 
@@ -301,15 +331,16 @@ pub fn view(model: ElementsState) -> Widget {
             } else {
                 model.name.value()
             }
+            ,
         )
         .with_selection(model.name.selection_start(), model.name.selection_end()).with_flex(38.0_f32,
-        0.0_f32)
+            0.0_f32,)
         .with_style(focus_style(model.focus == "name")).with_focus(model.focus == "name"))
     fields.push(Widget::select("framework", model.selection).with_flex(38.0_f32, 0.0_f32))
     if model.select_open {
         let mut menu = Widget::panel("framework-menu").with_direction(vertical()).with_style(
             css_style("position: absolute; z-index: 100; top: 70px; left: 0px; right: 0px; height: 108px; background-color: #ffffff; border-color: #a6b1bd; border-width: 1px; border-radius: 4px; box-shadow: 0px 8px 18px 0px rgb(31 36 43 / 22%); padding: 4px; gap: 2px;"))
-        menu.push(Widget::button("option-encore", "Encore UI").with_flex(32.0_f32, 0.0_f32).with_style(theme.ghost_button()))
+        menu.push(Widget::button("option-encore", "Luma").with_flex(32.0_f32, 0.0_f32).with_style(theme.ghost_button()))
         menu.push(Widget::button("option-native", "Native").with_flex(32.0_f32, 0.0_f32).with_style(theme.ghost_button()))
         menu.push(Widget::button("option-custom", "Custom renderer").with_flex(32.0_f32, 0.0_f32).with_style(theme.ghost_button()))
         fields.push(menu)
@@ -319,9 +350,10 @@ pub fn view(model: ElementsState) -> Widget {
             } else {
                 model.notes.value()
             }
+            ,
         )
         .with_selection(model.notes.selection_start(), model.notes.selection_end()).with_flex(72.0_f32,
-        0.0_f32)
+            0.0_f32,)
         .with_style(focus_style(model.focus == "notes")).with_focus(model.focus == "notes"))
     top.push(fields)
     let mut choices = section("choices", "CHOICES")

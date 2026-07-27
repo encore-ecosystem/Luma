@@ -1,0 +1,42 @@
+import luma:: {
+    Color, DisplayList, Rect, RendererKind, RetainedDisplayList, Window
+}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma retained renderer test", 96_u32, 64_u32, RendererKind::Software,)
+    if !window.available() {
+        ret 1_u32
+    }
+    let left_bounds = Rect::new(0.0_f32, 0.0_f32, 48.0_f32, 64.0_f32)
+    let right_bounds = Rect::new(48.0_f32, 0.0_f32, 48.0_f32, 64.0_f32)
+    let mut left = DisplayList::new()
+    left.fill_rect(left_bounds, Color::rgb(20_u8, 40_u8, 60_u8))
+    let mut right = DisplayList::new()
+    right.fill_rect(right_bounds, Color::rgb(80_u8, 100_u8, 120_u8))
+    let mut overlay = DisplayList::new()
+    overlay.text(4.0_f32, 4.0_f32, "overlay", Color::rgb(255_u8, 255_u8, 255_u8))
+    let mut retained = RetainedDisplayList::new()
+    retained.upsert("left", left_bounds, left.commands(), false)
+    retained.upsert("right", right_bounds, right.commands(), false)
+    retained.upsert("overlay", Rect::new(0.0_f32, 0.0_f32, 40.0_f32, 16.0_f32),
+        overlay.commands(), true,)
+    if !window.cache_retained_display_list(retained) {
+        window.destroy()
+        ret 2_u32
+    }
+    retained.clear_damage()
+    let mut updated = DisplayList::new()
+    updated.fill_rect(left_bounds, Color::rgb(30_u8, 50_u8, 70_u8))
+    retained.upsert("left", left_bounds, updated.commands(), false)
+    if !window.commit_retained_display_list(retained) ||
+    !window.present_retained_display_list(retained) ||
+    window.presented_frames() != 1_u64 {
+        window.destroy()
+        ret 3_u32
+    }
+    if !window.destroy() {
+        ret 4_u32
+    }
+    ret 0_u32
+}

@@ -1,0 +1,256 @@
+//! Default event-driven application runtime.
+
+import core::option::Option
+import core::time::perf_counter_ms
+
+import refrain::application:: {
+    Window, event_close, event_key_down, event_pointer_down, event_pointer_move,
+    event_pointer_up, event_resize, key_enter, key_tab
+}
+import refrain::font::FontManager
+import refrain::interaction::InteractionState
+import refrain::widget:: {
+    ReactiveUi, Widget, widget_button, widget_checkbox, widget_icon_button,
+    widget_icon_card, widget_link, widget_radio, widget_select, widget_slider,
+    widget_switch
+}
+
+/// Defines an application model rendered by Luma's managed runtime.
+///
+/// `view` is pure from Luma's perspective. `update` returns the next model
+/// after an actionable widget is activated.
+pub trait Application {
+    fn view(self: Self) -> Widget
+    fn update(self: Self, event: AppEvent) -> Self
+}
+
+/// High-level event delivered to managed application state. A value object is
+/// used instead of a closed enum so future runtime events remain source
+/// compatible for applications.
+pub struct AppEvent {
+    kind: u32
+    action: str
+    elapsed_ms: u64
+}
+
+impl for AppEvent {
+    fn action_event(action: str) -> Self {
+        ret Self {
+            1_u32, action, 0_u64
+        }
+    }
+    fn tick_event(elapsed_ms: u64) -> Self {
+        ret Self {
+            2_u32, "", elapsed_ms
+        }
+    }
+    pub fn is_action(self: Self) -> bool {
+        ret self.kind == 1_u32
+    }
+    pub fn is_tick(self: Self) -> bool {
+        ret self.kind == 2_u32
+    }
+    pub fn action(self: Self) -> str {
+        ret self.action
+    }
+    pub fn elapsed_ms(self: Self) -> u64 {
+        ret self.elapsed_ms
+    }
+}
+
+/// Scheduler policy for managed applications.
+pub struct ApplicationOptions {
+    frame_interval_ms: u32
+}
+
+impl for ApplicationOptions {
+    /// Event-driven UI without periodic frames.
+    pub fn event_driven() -> Self {
+        ret Self {
+            0_u32
+        }
+    }
+    /// Requests animation ticks at up to `frames_per_second`.
+    pub fn animated(frames_per_second: u32) -> Self {
+        let fps = if frames_per_second == 0_u32 {
+            60_u32
+        } else {
+            frames_per_second
+        }
+        ret Self {
+            if fps >= 1000_u32 {
+                1_u32
+            } else {
+                1000_u32 / fps
+            }
+        }
+    }
+    pub fn frame_interval_ms(self: Self) -> u32 {
+        ret self.frame_interval_ms
+    }
+}
+
+fn runtime_actionable(widget: Widget) -> bool {
+    let kind = widget.kind()
+    ret kind == widget_button() || kind == widget_icon_button() ||
+    kind == widget_icon_card() || kind == widget_checkbox() ||
+    kind == widget_link() || kind == widget_radio() ||
+    kind == widget_select() || kind == widget_slider() ||
+    kind == widget_switch()
+}
+
+fn restore_runtime_widget(ui: mut ReactiveUi, id: str,
+    original: Option[Widget],) -> bool {
+    if id == "" {
+        ret false
+    }
+    match original {
+        Option::Some(widget) => {
+            ret ui.restore_widget(id, widget)
+        }
+        Option::None => {
+        }
+    }
+    ret false
+}
+
+fn apply_runtime_state(ui: mut ReactiveUi, id: str, opacity: f32) ->
+Option[Widget] {
+    if id == "" {
+        ret Option[Widget]::None
+    }
+    match ui.find_widget(id) {
+        Option::Some(widget) => {
+            if widget.disabled() || !runtime_actionable(widget) {
+                ret Option[Widget]::None
+            }
+            let original = widget
+            let _patched = ui.patch_style(id,
+                widget.style().with_opacity(widget.style().opacity() * opacity),)
+            ret Option[Widget]::Some(original)
+        }
+        Option::None => {
+        }
+    }
+    ret Option[Widget]::None
+}
+
+/// Runs an application with retained rendering, automatic input state,
+/// blocking idle waits and redraws only after observable state changes.
+pub fn run_application[A: Application](window: Window, model: A) -> A {
+    ret run_application_with_options(
+        window, model, ApplicationOptions::event_driven(),)
+}
+
+/// Runs with an explicit animation scheduler. No ticks are generated for the
+/// default event-driven policy.
+pub fn run_application_with_options[A: Application](window: Window, model: A,
+    options: ApplicationOptions,) -> A {
+    if !window.available() {
+        ret model
+    }
+    let fonts = FontManager::system_default()
+    let _registered_fonts = fonts.register_all(window)
+    let _active_font = fonts.activate_default(window, 14.0_f32, 400_u32)
+    let mut current = model
+    let mut interaction = InteractionState::new()
+    let mut ui = window.reactive(current.view())
+    let mut hovered = ""
+    let mut hovered_base = Option[Widget]::None
+    let mut active = ""
+    let mut active_base = Option[Widget]::None
+    let started = perf_counter_ms()
+    let mut next_tick = started + options.frame_interval_ms() as u64
+
+    while window.is_open() {
+        let now = perf_counter_ms()
+        let timeout = if options.frame_interval_ms() == 0_u32 {
+            1000_u32
+        } elif now >= next_tick {
+            0_u32
+        } else {
+            (next_tick - now) as u32
+        }
+        let event = window.wait(timeout)
+        let after_wait = perf_counter_ms()
+        if options.frame_interval_ms() > 0_u32 && after_wait >= next_tick {
+            current = current.update(AppEvent::tick_event(after_wait - started))
+            ui = window.update_reactive(ui, current.view())
+            next_tick = after_wait + options.frame_interval_ms() as u64
+        }
+        if event.kind() == event_close() {
+            break
+        }
+        if event.kind() == event_resize() {
+            ui = window.relayout_reactive(ui)
+        } elif event.kind() == event_pointer_move() {
+            let next = ui.hit(event.x(), event.y())
+            if next != hovered {
+                let _restored = restore_runtime_widget(ui, hovered, hovered_base)
+                hovered = next
+                hovered_base = apply_runtime_state(ui, hovered, 0.92_f32)
+                if ui.is_dirty() {
+                    ui = window.draw_reactive(ui)
+                }
+            }
+            interaction = interaction.pointer_move_to(next)
+        } elif event.kind() == event_pointer_down() {
+            let previous_focus = interaction.focused()
+            let target = ui.hit(event.x(), event.y())
+            interaction = interaction.pointer_down_on(target, ui.find_widget(target))
+            if previous_focus != interaction.focused() {
+                if previous_focus != "" {
+                    let _unfocused = ui.patch_focus(previous_focus, false)
+                }
+                if interaction.focused() != "" {
+                    let _focused = ui.patch_focus(interaction.focused(), true)
+                }
+            }
+            active = interaction.active()
+            active_base = apply_runtime_state(ui, active, 0.82_f32)
+            if ui.is_dirty() {
+                ui = window.draw_reactive(ui)
+            }
+        } elif event.kind() == event_pointer_up() {
+            let target = ui.hit(event.x(), event.y())
+            let action = interaction.release_target(target)
+            let _restored = restore_runtime_widget(ui, active, active_base)
+            active = ""
+            active_base = Option[Widget]::None
+            interaction = interaction.pointer_up_on(target)
+            if action != "" {
+                current = current.update(AppEvent::action_event(action))
+                ui = window.update_reactive(ui, current.view())
+                hovered = interaction.hovered()
+                hovered_base = apply_runtime_state(ui, hovered, 0.92_f32)
+            } elif ui.is_dirty() {
+                ui = window.draw_reactive(ui)
+            }
+        } elif event.kind() == event_key_down() && event.key() == key_tab() {
+            let previous_focus = interaction.focused()
+            interaction = if event.shift() {
+                interaction.focus_previous(ui.layout().retained_widget())
+            } else {
+                interaction.focus_next(ui.layout().retained_widget())
+            }
+            if previous_focus != "" {
+                let _unfocused = ui.patch_focus(previous_focus, false)
+            }
+            if interaction.focused() != "" {
+                let _focused = ui.patch_focus(interaction.focused(), true)
+            }
+            if ui.is_dirty() {
+                ui = window.draw_reactive(ui)
+            }
+        } elif event.kind() == event_key_down() &&
+        (event.key() == key_enter() || event.key() == 32_u32) {
+            let action = interaction.focused_action(ui.layout().retained_widget())
+            if action != "" {
+                current = current.update(AppEvent::action_event(action))
+                ui = window.update_reactive(ui, current.view())
+            }
+        }
+    }
+    let _destroyed = window.destroy()
+    ret current
+}

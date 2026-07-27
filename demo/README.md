@@ -1,4 +1,4 @@
-# Encore UI Demo
+# Luma Demo
 
 This single project contains every `luma` demonstration. Run it from this
 directory and switch screens with the toolbar:
@@ -6,6 +6,18 @@ directory and switch screens with the toolbar:
 ```sh
 encore run
 ```
+
+The showcase uses the same renderer policy as normal Luma applications:
+Vulkan first, then the deterministic software backend. A backend can be
+forced while debugging or producing reference images:
+
+```sh
+LUMA_RENDERER=vulkan encore run
+LUMA_RENDERER=software encore run
+```
+
+The selected backend is printed at startup and shown in the Gallery. An
+explicit Vulkan request fails instead of silently selecting software.
 
 Place TTF, OTF, TTC, WOFF, or WOFF2 files in `fonts/`. The Fonts screen lists
 them in its font selector. Available toolbar screens:

@@ -1,0 +1,60 @@
+//! Minimal event-driven Luma application using retained reactive updates.
+
+import core::fmt::Debug
+import core::io::println
+import luma:: {
+    FontManager, Insets, InteractionState, Style, Theme, Widget, Window, event_close, event_pointer_down,
+    event_pointer_up, event_resize, vertical
+}
+
+fn view(count: u32) -> Widget {
+    let theme = Theme::light()
+    let mut root = Widget::panel("root").with_direction(vertical()).with_style(
+        theme.root().with_padding(Insets::all(24.0_f32)).with_gap(12.0_f32)
+    )
+    root.push(Widget::heading("Reactive counter").with_flex(42.0_f32, 0.0_f32))
+    root.push(Widget::label("Count: " + Debug::fmt(count)).with_id("count")
+        .with_flex(36.0_f32, 0.0_f32))
+    root.push(Widget::button("increment", "Increment").with_flex(40.0_f32, 0.0_f32)
+        .with_style(theme.primary_button()))
+    root.push(Widget::spacer(1.0_f32))
+    ret root
+}
+
+fn main() -> u32 {
+    let window = Window::create("Reactive counter", 480_u32, 320_u32)
+    if !window.available() {
+        ret 1_u32
+    }
+    println("Luma renderer: " + window.renderer_name())
+    let mut fonts = FontManager::with_bundled("../../assets/fonts")
+    fonts.register_all(window)
+    fonts = fonts.activate_default(window, 18.0_f32, 400_u32)
+
+    let mut count = 0_u32
+    let mut interaction = InteractionState::new()
+    let mut ui = window.reactive(view(count))
+
+    while window.is_open() {
+        let event = window.wait(1000_u32)
+        if event.kind() == event_close() {
+            break
+        }
+        if event.kind() == event_resize() {
+            ui = window.relayout_reactive(ui)
+        }
+        if event.kind() == event_pointer_down() {
+            interaction = interaction.pointer_down(ui.layout(), event.x(), event.y())
+        }
+        if event.kind() == event_pointer_up() {
+            let target = interaction.pointer_release_target(ui.layout(), event.x(), event.y())
+            interaction = interaction.pointer_up(ui.layout(), event.x(), event.y())
+            if target == "increment" {
+                count = count + 1_u32
+                ui.patch_text("count", "Count: " + Debug::fmt(count))
+                ui = window.draw_reactive(ui)
+            }
+        }
+    }
+    ret 0_u32
+}

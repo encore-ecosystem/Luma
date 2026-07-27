@@ -1,0 +1,41 @@
+//! The smallest stateful Luma application: one button, no manual event loop.
+
+import core::fmt::Debug
+import luma::{AppEvent, Application, Insets, Theme, Widget, Window, align_center,
+    justify_center, run_application, text_center, vertical}
+
+struct Counter {
+    value: u32
+}
+
+impl for Counter {
+    fn new() -> Self { ret Self { 0_u32 } }
+}
+
+impl Application for Counter {
+    fn view(self: Self) -> Widget {
+        let theme = Theme::light()
+        let mut root = Widget::panel("root").with_direction(vertical())
+            .with_style(theme.root().with_padding(Insets::all(0.0_f32))
+                .with_justify(justify_center()).with_align(align_center()))
+        root.push(Widget::button("counter", "Count: " + Debug::fmt(self.value))
+            .with_flex(48.0_f32, 0.0_f32)
+            .with_style(theme.primary_button().with_width(180.0_f32)
+                .with_height(48.0_f32).with_text_align(text_center())))
+        ret root
+    }
+
+    fn update(self: Self, event: AppEvent) -> Self {
+        if event.is_action() && event.action() == "counter" {
+            ret Self { self.value + 1_u32 }
+        }
+        ret self
+    }
+}
+
+fn main() -> u32 {
+    let window = Window::create("Counter", 320_u32, 180_u32)
+    if !window.available() { ret 1_u32 }
+    let _final = run_application(window, Counter::new())
+    ret 0_u32
+}

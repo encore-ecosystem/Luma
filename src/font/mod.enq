@@ -1,3 +1,5 @@
+//! Font discovery, registration, family selection, size, and weight management.
+
 import core::option::Option
 import core::os:: {
     file_exists, read_dir
@@ -61,6 +63,51 @@ impl for FontManager {
         ret manager
     }
 
+    /// Discovers a native UI font without requiring application setup.
+    pub fn system_default() -> FontManager {
+        let mut manager = FontManager::new()
+        if manager.register("Inter", "/usr/share/fonts/TTF/InterVariable.ttf") {
+            manager.default_family = "Inter"
+            ret manager
+        }
+        if manager.register("Noto Sans",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",) {
+            manager.default_family = "Noto Sans"
+            ret manager
+        }
+        if manager.register("Noto Sans",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",) {
+            manager.default_family = "Noto Sans"
+            ret manager
+        }
+        if manager.register("DejaVu Sans", "/usr/share/fonts/TTF/DejaVuSans.ttf") {
+            manager.default_family = "DejaVu Sans"
+            ret manager
+        }
+        if manager.register("DejaVu Sans",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",) {
+            manager.default_family = "DejaVu Sans"
+            ret manager
+        }
+        if manager.register("Liberation Sans",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",) {
+            manager.default_family = "Liberation Sans"
+            ret manager
+        }
+        if manager.register("Segoe UI", "C:/Windows/Fonts/segoeui.ttf") {
+            manager.default_family = "Segoe UI"
+            ret manager
+        }
+        if manager.register("San Francisco", "/System/Library/Fonts/SFNS.ttf") {
+            manager.default_family = "San Francisco"
+            ret manager
+        }
+        if manager.register("Helvetica", "/System/Library/Fonts/Helvetica.ttc") {
+            manager.default_family = "Helvetica"
+        }
+        ret manager
+    }
+
     pub fn register(self: mut Self, family: str, path: str) -> bool {
         if family == "" || path == "" || !file_exists(path) {
             ret false
@@ -98,7 +145,6 @@ impl for FontManager {
         ret loaded
     }
 
-    #cfg(feature = "fonts")
     pub fn register_all(self: Self, window: Window) -> usize {
         let mut registered = 0_usize
         let mut index = 0_usize
@@ -117,7 +163,6 @@ impl for FontManager {
         ret registered
     }
 
-    #cfg(feature = "fonts")
     pub fn activate(self: Self, window: Window, family: str, size: f32, weight: u32) -> FontManager {
         if family == "Built-in bitmap" {
             window.clear_font()
@@ -147,7 +192,6 @@ impl for FontManager {
         }
     }
 
-    #cfg(feature = "fonts")
     pub fn activate_default(self: Self, window: Window, size: f32, weight: u32) -> FontManager {
         ret self.activate(window, self.default_family, size, weight)
     }
@@ -215,73 +259,6 @@ fn normalized_weight(weight: u32) -> u32 {
         ret 800_u32
     }
     ret 900_u32
-}
-
-fn weight_name(weight: u32) -> str {
-    let value = normalized_weight(weight)
-    if value == 100_u32 {
-        ret "Thin"
-    }
-    if value == 200_u32 {
-        ret "ExtraLight"
-    }
-    if value == 300_u32 {
-        ret "Light"
-    }
-    if value == 400_u32 {
-        ret "Regular"
-    }
-    if value == 500_u32 {
-        ret "Medium"
-    }
-    if value == 600_u32 {
-        ret "SemiBold"
-    }
-    if value == 700_u32 {
-        ret "Bold"
-    }
-    if value == 800_u32 {
-        ret "ExtraBold"
-    }
-    ret "Black"
-}
-
-fn face_path_for_weight(face: FontFace, weight: u32) -> str {
-    if !face.is_bundled() {
-        ret face.path()
-    }
-    if face.family() == "Open Sans" {
-        let normalized = normalized_weight(weight)
-        let name = if normalized < 300_u32 {
-            "Light"
-        } elif normalized > 800_u32 {
-            "ExtraBold"
-        } else {
-            weight_name(weight)
-        }
-        ret parent_path(face.path()) + "/static/OpenSans-" + name + ".ttf"
-    }
-    if face.family() == "Inter" {
-        let name = weight_name(weight)
-        ret parent_path(face.path()) + "/static/Inter_18pt-" + name + ".ttf"
-    }
-    if face.family() == "Roboto" {
-        let name = weight_name(weight)
-        ret parent_path(face.path()) + "/static/Roboto-" + name + ".ttf"
-    }
-    ret face.path()
-}
-
-fn parent_path(path: str) -> str {
-    let mut index = path.char_len()
-    while index > 0_usize {
-        index = index - 1_usize
-        let current = path.slice(index, 1_usize)
-        if current == "/" || current == "\\" {
-            ret path.slice(0_usize, index)
-        }
-    }
-    ret "."
 }
 
 fn is_font_file(name: str) -> bool {

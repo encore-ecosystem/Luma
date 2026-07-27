@@ -1,21 +1,14 @@
+//! Theme, button, status, and surface style gallery.
+
 import luma:: {
     Color, Insets, Style, Theme, Widget, horizontal, vertical
 }
 
-fn canvas_color() -> Color {
-    ret Theme::light().canvas()
-}
-fn surface_color() -> Color {
-    ret Theme::light().surface()
-}
 fn ink_color() -> Color {
     ret Theme::light().ink()
 }
 fn muted_color() -> Color {
     ret Theme::light().muted()
-}
-fn line_color() -> Color {
-    ret Theme::light().line()
 }
 fn primary_color() -> Color {
     ret Theme::light().primary()
@@ -90,10 +83,10 @@ fn size_row() -> Widget {
     .with_flex(52.0_f32, 0.0_f32)
     .with_style(Style::default().with_gap(8.0_f32))
     row.push(Widget::button("compact", "Compact").with_flex(92.0_f32, 0.0_f32).with_style(primary_button().with_padding(Insets::symmetric(4.0_f32,
-    8.0_f32))))
+                    8.0_f32,))))
     row.push(Widget::button("regular", "Regular").with_flex(104.0_f32, 0.0_f32).with_style(primary_button()))
     row.push(Widget::button("large", "Large action").with_flex(136.0_f32, 0.0_f32).with_style(primary_button().with_padding(Insets::symmetric(12.0_f32,
-    16.0_f32))))
+                    16.0_f32,))))
     row.push(Widget::spacer(1.0_f32))
     ret row
 }
@@ -137,28 +130,28 @@ fn metrics_row() -> Widget {
     ret row
 }
 
-pub fn view(status: str) -> Widget {
+pub fn view(status: str, renderer: str) -> Widget {
     let mut root = Widget::panel("root").with_direction(vertical()).with_style(root_style())
 
     let mut toolbar = Widget::panel("toolbar").with_direction(horizontal()).with_flex(48.0_f32, 0.0_f32).with_style(toolbar_style())
-    toolbar.push(Widget::label("Encore UI / Style Gallery").with_flex(224.0_f32, 0.0_f32).with_style(
+    toolbar.push(Widget::label("Luma / Style Gallery").with_flex(224.0_f32, 0.0_f32).with_style(
             Style::default().with_foreground(Color::rgb(248_u8, 250_u8, 252_u8))
         ))
     toolbar.push(Widget::spacer(1.0_f32))
-    toolbar.push(Widget::label("SDL3").with_flex(56.0_f32, 0.0_f32).with_style(
+    toolbar.push(Widget::label("SDL3 / " + renderer).with_flex(132.0_f32, 0.0_f32).with_style(
             badge_style(Color::rgb(48_u8, 57_u8, 68_u8), Color::rgb(207_u8, 218_u8, 230_u8))
         ))
     root.push(toolbar)
 
     let mut buttons = Widget::panel("buttons-section").with_direction(vertical()).with_flex(146.0_f32,
-    0.0_f32).with_style(section_style())
+        0.0_f32,).with_style(section_style())
     buttons.push(Widget::label("BUTTON VARIANTS").with_flex(22.0_f32, 0.0_f32).with_style(Style::default().with_foreground(muted_color())))
     buttons.push(button_row())
     buttons.push(size_row())
     root.push(buttons)
 
     let mut elements = Widget::panel("elements-section").with_direction(vertical()).with_flex(170.0_f32,
-    0.0_f32).with_style(section_style())
+        0.0_f32,).with_style(section_style())
     elements.push(Widget::label("INTERFACE ELEMENTS").with_flex(22.0_f32, 0.0_f32).with_style(Style::default().with_foreground(muted_color())))
     elements.push(badges_row())
     elements.push(metrics_row())
@@ -167,9 +160,9 @@ pub fn view(status: str) -> Widget {
     root.push(Widget::spacer(1.0_f32))
 
     let mut status_bar = Widget::panel("status-bar").with_direction(horizontal()).with_flex(38.0_f32,
-    0.0_f32).with_style(
+        0.0_f32,).with_style(
         Style::default().with_background(Color::rgb(225_u8, 231_u8, 237_u8)).with_padding(Insets::symmetric(7.0_f32,
-        10.0_f32)).with_gap(8.0_f32)
+                10.0_f32,)).with_gap(8.0_f32)
     )
     status_bar.push(Widget::label("STATUS").with_flex(64.0_f32, 0.0_f32).with_style(Style::default().with_foreground(muted_color())))
     status_bar.push(Widget::label(status).with_flex(260.0_f32, 0.0_f32).with_style(Style::default().with_foreground(ink_color())))

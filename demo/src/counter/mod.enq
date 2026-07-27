@@ -1,10 +1,12 @@
+//! Reactive counter component showcase.
+
 import core::fmt::Debug
 import luma:: {
     ButtonAnimation, Color, Insets, Style, Theme, Widget, apply_css, horizontal, vertical
 }
 
 fn animated_button(id: str, text: str, base: Style, animation: ButtonAnimation, target: str) -> Widget
-    {
+{
     let hover = apply_css(base, "background-color: #0f806a; border-color: #0f806a; box-shadow: 0px 6px 14px 0px rgb(18 153 126 / 24%);")
     let pressed = apply_css(base, "background-color: #0b6756; border-color: #0b6756; box-shadow: inset 0px 2px 4px 0px rgb(5 45 38 / 35%); padding: 11px 12px 9px 12px;")
     let style = if target == id {
@@ -26,9 +28,9 @@ pub fn view(count: u32, animation: ButtonAnimation, target: str) -> Widget {
             Style::default().with_foreground(Color::rgb(100_u8, 113_u8, 128_u8))))
 
     let mut display = Widget::panel("counter-display").with_direction(vertical()).with_flex(210.0_f32,
-    0.0_f32).with_style(
+        0.0_f32,).with_style(
         Style::default().with_background(Color::rgb(255_u8, 255_u8, 255_u8)).with_border(1.0_f32, Color::rgb(211_u8,
-        219_u8, 227_u8))
+                219_u8, 227_u8,))
         .with_radius(8.0_f32).with_padding(Insets::all(24.0_f32)).with_gap(8.0_f32))
     display.push(Widget::label("CURRENT VALUE").with_flex(20.0_f32, 0.0_f32).with_style(
             Style::default().with_foreground(Color::rgb(100_u8, 113_u8, 128_u8)).with_font_size(12.0_f32).with_font_weight(700_u32)))

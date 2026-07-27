@@ -1,3 +1,5 @@
+//! Pointer, keyboard focus, and editable text interaction state.
+
 import core::option::Option
 import core::vec::Vec
 import refrain::widget:: {
@@ -208,14 +210,18 @@ impl for TextEditor {
             self.anchor
         }
     }
+    pub fn selection_anchor(self: Self) -> usize {
+        ret self.anchor
+    }
     pub fn has_selection(self: Self) -> bool {
         ret self.cursor != self.anchor
     }
 }
 
 fn line_start(value: str, cursor: usize) -> usize {
-    let mut index = if cursor > value.char_len() {
-        value.char_len()
+    let length = value.char_len()
+    let mut index = if cursor > length {
+        length
     } else {
         cursor
     }
@@ -229,12 +235,13 @@ fn line_start(value: str, cursor: usize) -> usize {
 }
 
 fn line_end(value: str, cursor: usize) -> usize {
-    let mut index = if cursor > value.char_len() {
-        value.char_len()
+    let length = value.char_len()
+    let mut index = if cursor > length {
+        length
     } else {
         cursor
     }
-    while index < value.char_len() && value.slice(index, 1_usize) != "\n" {
+    while index < length && value.slice(index, 1_usize) != "\n" {
         index = index + 1_usize
     }
     ret index
@@ -260,13 +267,20 @@ impl for InteractionState {
         }
     }
     pub fn pointer_move(self: Self, layout: WidgetLayout, x: f32, y: f32) -> InteractionState {
+        ret self.pointer_move_to(layout.hit(x, y))
+    }
+    pub fn pointer_move_to(self: Self, target: str) -> InteractionState {
         ret InteractionState {
-            layout.hit(x, y), self.active, self.focused
+            target, self.active, self.focused
         }
     }
     pub fn pointer_down(self: Self, layout: WidgetLayout, x: f32, y: f32) -> InteractionState {
         let target = layout.hit(x, y)
-        let focused = match layout.find_widget(target) {
+        ret self.pointer_down_on(target, layout.find_widget(target))
+    }
+    pub fn pointer_down_on(self: Self, target: str,
+        target_widget: Option[Widget],) -> InteractionState {
+        let focused = match target_widget {
             Option[Widget]::Some(widget) => {
                 if focusable(widget) {
                     target
@@ -283,12 +297,17 @@ impl for InteractionState {
         }
     }
     pub fn pointer_up(self: Self, layout: WidgetLayout, x: f32, y: f32) -> InteractionState {
+        ret self.pointer_up_on(layout.hit(x, y))
+    }
+    pub fn pointer_up_on(self: Self, target: str) -> InteractionState {
         ret InteractionState {
-            layout.hit(x, y), "", self.focused
+            target, "", self.focused
         }
     }
     pub fn pointer_release_target(self: Self, layout: WidgetLayout, x: f32, y: f32) -> str {
-        let target = layout.hit(x, y)
+        ret self.release_target(layout.hit(x, y))
+    }
+    pub fn release_target(self: Self, target: str) -> str {
         ret if target != "" && target == self.active {
             target
         } else {

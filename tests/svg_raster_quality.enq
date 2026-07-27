@@ -1,0 +1,64 @@
+import luma:: {
+    Color, Rect, RendererKind, SvgDocument, Window
+}
+
+fn uniform_stroke(window: Window, size: u32, top: u32) -> bool {
+    let center = top + size / 2_u32
+    let mut source_x = 4_u32
+    let mut darkest = 255_u8
+    let mut lightest = 0_u8
+    // Stay inside the stroke body; round-cap coverage has a deliberately
+    // different profile and is validated separately from axial uniformity.
+    while source_x <= 16_u32 {
+        let x = 4_u32 + size * source_x / 24_u32
+        let mut red = 255_u8
+        let mut y = center - 2_u32
+        while y <= center + 2_u32 {
+            let sample = window.read_pixel(x, y).red()
+            if sample < red { red = sample }
+            y += 1_u32
+        }
+        if red < darkest {
+            darkest = red
+        }
+        if red > lightest {
+            lightest = red
+        }
+        source_x = source_x + 4_u32
+    }
+    // A one-device-pixel stroke may cover two rows at roughly 50% when its
+    // center falls on a pixel boundary. Uniformity along the stroke is the
+    // invariant; requiring an opaque sample would make the test alignment-
+    // dependent.
+    ret darkest < 200_u8 && lightest - darkest <= 12_u8
+}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma SVG raster quality", 64_u32, 96_u32, RendererKind::Software,)
+    if !window.available() || !window.begin(Color::rgb(255_u8, 255_u8, 255_u8)) {
+        ret 1_u32
+    }
+    let document = SvgDocument::parse(
+        "<svg viewBox=\"0 0 24 24\"><path d=\"M2 12h20\"/></svg>")
+    window.svg(Rect::new(4.0_f32, 2.0_f32, 12.0_f32, 12.0_f32),
+        document, Color::rgb(0_u8, 0_u8, 0_u8), 2.0_f32,)
+    window.svg(Rect::new(4.0_f32, 18.0_f32, 15.0_f32, 15.0_f32),
+        document, Color::rgb(0_u8, 0_u8, 0_u8), 2.0_f32,)
+    window.svg(Rect::new(4.0_f32, 38.0_f32, 18.0_f32, 18.0_f32),
+        document, Color::rgb(0_u8, 0_u8, 0_u8), 2.0_f32,)
+    window.svg(Rect::new(4.0_f32, 62.0_f32, 24.0_f32, 24.0_f32),
+        document, Color::rgb(0_u8, 0_u8, 0_u8), 2.0_f32,)
+    let valid = uniform_stroke(window, 12_u32, 2_u32) &&
+    uniform_stroke(window, 15_u32, 18_u32) &&
+    uniform_stroke(window, 18_u32, 38_u32) &&
+    uniform_stroke(window, 24_u32, 62_u32) &&
+    window.read_pixel(40_u32, 40_u32).red() > 240_u8
+    let presented = window.present()
+    let destroyed = window.destroy()
+    ret if valid && presented && destroyed {
+        0_u32
+    } else {
+        2_u32
+    }
+}

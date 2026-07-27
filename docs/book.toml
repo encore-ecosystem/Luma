@@ -1,0 +1,22 @@
+[book]
+title = "Luma UI"
+description = "User guide for the Luma native UI framework for Encore"
+authors = ["Encore Ecosystem"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/encore-ecosystem/luma"
+edit-url-template = "https://github.com/encore-ecosystem/luma/edit/trunk/docs/{path}"
+site-url = "/luma/"
+default-theme = "light"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true

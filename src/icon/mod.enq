@@ -1,3 +1,5 @@
+//! SVG icon assets, directories, and bundled Lucide catalog management.
+
 import core::option::Option
 import core::os:: {
     file_exists, read_dir, read_file
@@ -32,30 +34,37 @@ impl for IconAsset {
         ret self.bundled
     }
     pub fn document(self: Self) -> SvgDocument {
-        if !file_exists(self.path) {
-            ret SvgDocument::empty()
-        }
         ret SvgDocument::parse(read_file(self.path))
     }
 }
 
 pub struct IconManager {
     icons: Vec[IconAsset]
+    buckets: Vec[Vec[usize]]
     root: str
 }
 
 impl for IconManager {
     pub fn new() -> IconManager {
         ret IconManager {
-            Vec[IconAsset]::new(), ""
+            Vec[IconAsset]::new(), icon_buckets(), ""
         }
     }
     pub fn with_bundled(root: str) -> IconManager {
         let mut manager = IconManager {
-            Vec[IconAsset]::new(), root
+            Vec[IconAsset]::new(), icon_buckets(), root
         }
         manager.load_directory(root, true)
         ret manager
+    }
+    /// Creates a named bundled-icon resolver without enumerating the complete
+    /// directory. Applications with a fixed icon set avoid paying catalog
+    /// discovery cost during startup; `with_bundled` remains available to
+    /// browsers that need `icons()` and `len()`.
+    pub fn with_lazy_bundled(root: str) -> IconManager {
+        ret IconManager {
+            Vec[IconAsset]::new(), icon_buckets(), root
+        }
     }
     pub fn register(self: mut Self, name: str, path: str) -> bool {
         if name == "" || !is_svg(path) || !file_exists(path) {
@@ -64,7 +73,7 @@ impl for IconManager {
         if self.contains(name) {
             ret false
         }
-        self.icons.push(IconAsset::new(name, path))
+        self.append(IconAsset::new(name, path))
         ret true
     }
     pub fn register_bundled(self: mut Self, name: str, path: str) -> bool {
@@ -74,7 +83,7 @@ impl for IconManager {
         if self.contains(name) {
             ret false
         }
-        self.icons.push(IconAsset::bundled(name, path))
+        self.append(IconAsset::bundled(name, path))
         ret true
     }
     pub fn load_directory(self: mut Self, path: str, bundled: bool) -> usize {
@@ -86,10 +95,15 @@ impl for IconManager {
                 Option[str]::Some(filename) => {
                     if is_svg(filename) {
                         let name = icon_name(filename)
-                        let accepted = if bundled {
-                            self.register_bundled(name, path + "/" + filename)
-                        } else {
-                            self.register(name, path + "/" + filename)
+                        let mut accepted = false
+                        if name != "" && !self.contains(name) {
+                            self.append(if bundled {
+                                    IconAsset::bundled(name, path + "/" + filename)
+                                } else {
+                                    IconAsset::new(name, path + "/" + filename)
+                                }
+                            )
+                            accepted = true
                         }
                         if accepted {
                             loaded = loaded + 1_usize
@@ -104,20 +118,46 @@ impl for IconManager {
         ret loaded
     }
     pub fn find(self: Self, name: str) -> Option[IconAsset] {
+        match self.find_index(name) {
+            Option[usize]::Some(index) => {
+                ret self.icons.get(index)
+            }
+            Option[usize]::None => {
+                ret Option[IconAsset]::None
+            }
+        }
+    }
+    fn find_index(self: Self, name: str) -> Option[usize] {
+        let indices = self.buckets.get(icon_hash(name)).unwrap_or(Vec[usize]::new())
         let mut index = 0_usize
-        while index < self.icons.len() {
-            match self.icons.get(index) {
-                Option[IconAsset]::Some(icon) => {
-                    if icon.name() == name {
-                        ret Option[IconAsset]::Some(icon)
+        while index < indices.len() {
+            match indices.get(index) {
+                Option[usize]::Some(icon_index) => {
+                    match self.icons.get(icon_index) {
+                        Option[IconAsset]::Some(icon) => {
+                            if icon.name() == name {
+                                ret Option[usize]::Some(icon_index)
+                            }
+                        }
+                        Option[IconAsset]::None => {
+                        }
                     }
                 }
-                Option[IconAsset]::None => {
+                Option[usize]::None => {
                 }
             }
             index = index + 1_usize
         }
-        ret Option[IconAsset]::None
+        ret Option[usize]::None
+    }
+    fn append(self: mut Self, icon: IconAsset) ->() {
+        let index = self.icons.len()
+        let bucket_index = icon_hash(icon.name())
+        self.icons.push(icon)
+        let mut bucket = self.buckets.get(bucket_index).unwrap_or(Vec[usize]::new())
+        bucket.push(index)
+        self.buckets.set(bucket_index, bucket)
+        ret()
     }
     pub fn document(self: Self, name: str) -> SvgDocument {
         match self.find(name) {
@@ -125,6 +165,9 @@ impl for IconManager {
                 ret icon.document()
             }
             Option[IconAsset]::None => {
+                if self.root != "" && valid_icon_name(name) {
+                    ret IconAsset::bundled(name, self.root + "/" + name + ".svg").document()
+                }
                 ret SvgDocument::empty()
             }
         }
@@ -148,6 +191,56 @@ impl for IconManager {
     pub fn root(self: Self) -> str {
         ret self.root
     }
+}
+
+fn icon_buckets() -> Vec[Vec[usize]] {
+    let mut buckets = Vec[Vec[usize]]::with_capacity(257_usize)
+    let mut index = 0_usize
+    while index < 257_usize {
+        buckets.push(Vec[usize]::new())
+        index = index + 1_usize
+    }
+    ret buckets
+}
+
+fn icon_hash(name: str) -> usize {
+    let mut hash = 0_usize
+    let mut index = 0_usize
+    while index < name.len() {
+        match name.get_byte(index) {
+            Option[u8]::Some(value) => {
+                hash =(hash * 33_usize + value as usize) % 257_usize
+            }
+            Option[u8]::None => {
+                break
+            }
+        }
+        index = index + 1_usize
+    }
+    ret hash
+}
+
+fn valid_icon_name(name: str) -> bool {
+    if name == "" {
+        ret false
+    }
+    let mut index = 0_usize
+    while index < name.len() {
+        match name.get_byte(index) {
+            Option[u8]::Some(value) => {
+                let valid =(value >= 97_u8 && value <= 122_u8) ||
+                (value >= 48_u8 && value <= 57_u8) || value == 45_u8 || value == 95_u8
+                if !valid {
+                    ret false
+                }
+            }
+            Option[u8]::None => {
+                ret false
+            }
+        }
+        index = index + 1_usize
+    }
+    ret true
 }
 
 fn icon_name(filename: str) -> str {

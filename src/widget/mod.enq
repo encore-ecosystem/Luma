@@ -1,3 +1,5 @@
+//! Declarative widgets, retained layout trees, hit testing, and reactive updates.
+
 import color:: {
     Color, black
 }
@@ -11,7 +13,7 @@ import refrain::layout:: {
     horizontal, vertical
 }
 import refrain::style:: {
-    GridPlacement, LayoutStyle, Style, text_center
+    GridPlacement, Style, text_center
 }
 import refrain::svg::SvgDocument
 
@@ -77,6 +79,12 @@ pub fn widget_icon_button() -> usize {
 }
 pub fn widget_icon_card() -> usize {
     ret 20_usize
+}
+/// A layout-owned slot whose pixels are supplied by an external renderer.
+/// The widget is intentionally a lightweight value; renderer resources live
+/// outside the declarative tree and are addressed by this widget's stable ID.
+pub fn widget_render_surface() -> usize {
+    ret 21_usize
 }
 
 pub struct TextSelection {
@@ -257,6 +265,10 @@ impl for Widget {
             Style::panel().with_overflow_hidden(true).with_text_align(text_center()), vertical(), 88.0_f32,
             0.0_f32, false, 0.0_f32,).with_svg(document)
     }
+    pub fn render_surface(id: str) -> Widget {
+        ret widget_value(widget_render_surface(), id, "", Style::default(),
+            horizontal(), 0.0_f32, 1.0_f32, false, 0.0_f32,)
+    }
     pub fn with_style(self: Self, value: Style) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
@@ -338,6 +350,32 @@ impl for Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis,
             self.grow, self.checked, self.focused, value, self.value, self.children, self.svg
+        }
+    }
+    pub fn with_text(self: Self, value: str) -> Widget {
+        let cursor = if self.cursor > value.char_len() {
+            value.char_len()
+        } else {
+            self.cursor
+        }
+        ret Widget {
+            self.kind, self.id, self.classes, self.attributes, value, cursor,
+            TextSelection::caret(cursor), self.style, self.direction, self.basis, self.grow,
+            self.checked, self.focused, self.disabled, self.value, self.children, self.svg
+        }
+    }
+    pub fn with_checked(self: Self, value: bool) -> Widget {
+        ret Widget {
+            self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
+            self.style, self.direction, self.basis, self.grow, value, self.focused, self.disabled,
+            self.value, self.children, self.svg
+        }
+    }
+    pub fn with_value(self: Self, value: f32) -> Widget {
+        ret Widget {
+            self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
+            self.style, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
+            clamp_unit(value), self.children, self.svg
         }
     }
     pub fn with_cursor(self: Self, value: usize) -> Widget {
@@ -438,6 +476,45 @@ impl for Widget {
     pub fn children(self: Self) -> Vec[Widget] {
         ret self.children
     }
+    /// Finds a declarative subtree by stable identity. This is used at the
+    /// reconciliation boundary to extract only explicitly invalidated
+    /// components from a newly rendered view.
+    pub fn find(self: Self, expected: str) -> Option[Widget] {
+        if expected != "" && self.id == expected {
+            ret Option[Widget]::Some(self)
+        }
+        for child in self.children {
+            match child.find(expected) {
+                Option::Some(found) => {
+                    ret Option[Widget]::Some(found)
+                }
+                Option::None => {
+                }
+            }
+        }
+        ret Option[Widget]::None
+    }
+    /// Resolves several stable identities in one declarative-tree traversal.
+    /// Results preserve paint order; duplicate requested IDs are returned once.
+    pub fn find_many(self: Self, expected: Vec[str]) -> Vec[Widget] {
+        let mut unique = Vec[str]::new()
+        for id in expected {
+            if id != "" {
+                let mut duplicate = false
+                for current in unique {
+                    if current == id {
+                        duplicate = true
+                    }
+                }
+                if !duplicate {
+                    unique.push(id)
+                }
+            }
+        }
+        let mut found = Vec[Widget]::new()
+        let _complete = collect_widgets(self, unique, found)
+        ret found
+    }
     pub fn svg(self: Self) -> SvgDocument {
         ret self.svg
     }
@@ -518,16 +595,22 @@ fn intrinsic_widget_size(widget: Widget, maximum: bool) -> Size {
 fn longest_text_word(value: str) -> usize {
     let mut longest = 0_usize
     let mut current = 0_usize
+    let length = value.len()
     let mut index = 0_usize
-    while index < value.char_len() {
-        let character = value.slice(index, 1_usize)
-        if character == " " || character == "\t" || character == "\n" || character == "\r" {
-            if current > longest {
-                longest = current
+    while index < length {
+        match value.get_byte(index) {
+            Option[u8]::Some(byte) => {
+                if byte == 32_u8 || byte == 9_u8 || byte == 10_u8 || byte == 13_u8 {
+                    if current > longest {
+                        longest = current
+                    }
+                    current = 0_usize
+                } elif byte < 128_u8 || byte >= 192_u8 {
+                    current = current + 1_usize
+                }
             }
-            current = 0_usize
-        } else {
-            current = current + 1_usize
+            Option[u8]::None => {
+            }
         }
         index = index + 1_usize
     }
@@ -565,6 +648,386 @@ pub struct WidgetLayout {
     widget: Widget
     bounds: Rect
     children: Vec[WidgetLayout]
+    paint_bounds: Rect
+}
+
+struct WidgetPath {
+    id: str
+    indices: Vec[usize]
+    bounds: Rect
+    clip: Option[Rect]
+    widget: Widget
+    disabled: bool
+    visible: bool
+    pointer_events: bool
+    generation: usize
+}
+
+fn collect_widgets(widget: Widget, expected: Vec[str],
+    found: mut Vec[Widget],) -> bool {
+    if expected.len() == 0_usize || found.len() >= expected.len() {
+        ret true
+    }
+    if widget.id() != "" {
+        let mut requested = false
+        for id in expected {
+            if id == widget.id() {
+                requested = true
+            }
+        }
+        if requested {
+            let mut duplicate = false
+            for current in found {
+                if current.id() == widget.id() {
+                    duplicate = true
+                }
+            }
+            if !duplicate {
+                found.push(widget)
+                if found.len() >= expected.len() {
+                    ret true
+                }
+            }
+        }
+    }
+    for child in widget.children() {
+        if collect_widgets(child, expected, found) {
+            ret true
+        }
+    }
+    ret false
+}
+
+fn collect_widget_paths(layout: WidgetLayout, indices: Vec[usize],
+    inherited_clip: Option[Rect], generation: usize,
+    paths: mut Vec[WidgetPath],) ->() {
+    let bounds = layout.bounds()
+    let clip = if layout.widget().style().layout().overflow_hidden() {
+        intersect_clip(inherited_clip, bounds)
+    } else {
+        inherited_clip
+    }
+    let id = layout.widget().id()
+    if id != "" {
+        let widget = layout.widget()
+        paths.push(WidgetPath {
+                id, indices, bounds, clip, widget, widget.disabled(),
+                widget.style().visible(), widget.style().pointer_events(),
+                generation
+            }
+            ,
+        )
+    }
+    let children = layout.children()
+    let mut index = 0_usize
+    while index < children.len() {
+        match children.get(index) {
+            Option::Some(child) => {
+                let mut child_indices = indices
+                child_indices.push(index)
+                collect_widget_paths(child, child_indices, clip, generation,
+                    paths)
+            }
+            Option::None => {
+            }
+        }
+        index += 1_usize
+    }
+    ret()
+}
+
+fn widget_paths(layout: WidgetLayout, generation: usize) -> Vec[WidgetPath] {
+    let mut paths = Vec[WidgetPath]::new()
+    collect_widget_paths(layout, Vec[usize]::new(), Option[Rect]::None,
+        generation, paths)
+    ret paths
+}
+
+fn path_has_prefix(path: Vec[usize], prefix: Vec[usize]) -> bool {
+    if path.len() < prefix.len() {
+        ret false
+    }
+    let mut index = 0_usize
+    while index < prefix.len() {
+        if path.get(index).unwrap_or(path.len()) !=
+        prefix.get(index).unwrap_or(prefix.len()) {
+            ret false
+        }
+        index = index + 1_usize
+    }
+    ret true
+}
+
+fn inherited_clip_at_path(layout: WidgetLayout, indices: Vec[usize],
+    depth: usize, inherited: Option[Rect],) -> Option[Rect] {
+    if depth >= indices.len() {
+        ret inherited
+    }
+    let bounds = layout.bounds()
+    let clip = if layout.widget().style().layout().overflow_hidden() {
+        intersect_clip(inherited, bounds)
+    } else {
+        inherited
+    }
+    let index = indices.get(depth).unwrap_or(layout.children().len())
+    match layout.children().get(index) {
+        Option::Some(child) => {
+            ret inherited_clip_at_path(child, indices, depth + 1_usize,
+                clip,)
+        }
+        Option::None => {
+        }
+    }
+    ret inherited
+}
+
+fn intersect_clip(inherited: Option[Rect], bounds: Rect) -> Option[Rect] {
+    match inherited {
+        Option::Some(parent) => {
+            let left = if parent.x() > bounds.x() {
+                parent.x()
+            } else {
+                bounds.x()
+            }
+            let top = if parent.y() > bounds.y() {
+                parent.y()
+            } else {
+                bounds.y()
+            }
+            let right = if parent.right() < bounds.right() {
+                parent.right()
+            } else {
+                bounds.right()
+            }
+            let bottom = if parent.bottom() < bounds.bottom() {
+                parent.bottom()
+            } else {
+                bounds.bottom()
+            }
+            ret Option[Rect]::Some(Rect::new(left, top,
+                    if right > left {
+                        right - left
+                    } else {
+                        0.0_f32
+                    }
+                    ,
+                    if bottom > top {
+                        bottom - top
+                    } else {
+                        0.0_f32
+                    }
+                    ,))
+        }
+        Option::None => {
+            ret Option[Rect]::Some(bounds)
+        }
+    }
+    ret Option[Rect]::None
+}
+
+fn point_inside_clip(clip: Option[Rect], x: f32, y: f32) -> bool {
+    match clip {
+        Option::Some(bounds) => {
+            ret x >= bounds.x() && y >= bounds.y() &&
+            x < bounds.right() && y < bounds.bottom()
+        }
+        Option::None => {
+            ret true
+        }
+    }
+    ret true
+}
+
+fn widget_paint_bounds(widget: Widget, bounds: Rect,
+    children: Vec[WidgetLayout],) -> Rect {
+    let outline = widget.style().outline()
+    let outline_extent = outline.width() +
+    if outline.offset() > 0.0_f32 {
+        outline.offset()
+    } else {
+        0.0_f32
+    }
+    let shadow = widget.style().shadow()
+    let shadow_extent = if shadow.inset() {
+        0.0_f32
+    } else {
+        shadow.blur() + if shadow.spread() > 0.0_f32 {
+            shadow.spread()
+        } else {
+            0.0_f32
+        }
+    }
+    let left = outline_extent +
+    if shadow_extent - shadow.x() > 0.0_f32 {
+        shadow_extent - shadow.x()
+    } else {
+        0.0_f32
+    }
+    let right = outline_extent +
+    if shadow_extent + shadow.x() > 0.0_f32 {
+        shadow_extent + shadow.x()
+    } else {
+        0.0_f32
+    }
+    let top = outline_extent +
+    if shadow_extent - shadow.y() > 0.0_f32 {
+        shadow_extent - shadow.y()
+    } else {
+        0.0_f32
+    }
+    let bottom = outline_extent +
+    if shadow_extent + shadow.y() > 0.0_f32 {
+        shadow_extent + shadow.y()
+    } else {
+        0.0_f32
+    }
+    let mut result = Rect::new(bounds.x() - left, bounds.y() - top,
+        bounds.width() + left + right, bounds.height() + top + bottom,)
+    for child in children {
+        let child_bounds = if widget.style().layout().overflow_hidden() {
+            intersect_rect(child.paint_bounds(), bounds)
+        } else {
+            child.paint_bounds()
+        }
+        result = union_rect(result, child_bounds)
+    }
+    ret result
+}
+
+fn intersect_rect(left: Rect, right: Rect) -> Rect {
+    let x = if left.x() > right.x() {
+        left.x()
+    } else {
+        right.x()
+    }
+    let y = if left.y() > right.y() {
+        left.y()
+    } else {
+        right.y()
+    }
+    let edge_x = if left.right() < right.right() {
+        left.right()
+    } else {
+        right.right()
+    }
+    let edge_y = if left.bottom() < right.bottom() {
+        left.bottom()
+    } else {
+        right.bottom()
+    }
+    ret Rect::new(x, y,
+        if edge_x > x {
+            edge_x - x
+        } else {
+            0.0_f32
+        }
+        ,
+        if edge_y > y {
+            edge_y - y
+        } else {
+            0.0_f32
+        }
+        ,)
+}
+
+fn union_rect(left: Rect, right: Rect) -> Rect {
+    if right.width() <= 0.0_f32 || right.height() <= 0.0_f32 {
+        ret left
+    }
+    let x = if left.x() < right.x() {
+        left.x()
+    } else {
+        right.x()
+    }
+    let y = if left.y() < right.y() {
+        left.y()
+    } else {
+        right.y()
+    }
+    let edge_x = if left.right() > right.right() {
+        left.right()
+    } else {
+        right.right()
+    }
+    let edge_y = if left.bottom() > right.bottom() {
+        left.bottom()
+    } else {
+        right.bottom()
+    }
+    ret Rect::new(x, y, edge_x - x, edge_y - y)
+}
+
+fn widget_attributes_equal(lhs: Vec[WidgetAttribute],
+    rhs: Vec[WidgetAttribute],) -> bool {
+    if lhs.len() != rhs.len() {
+        ret false
+    }
+    let mut index = 0_usize
+    while index < lhs.len() {
+        let left = lhs.get(index).unwrap_or(WidgetAttribute::new("", ""))
+        let right = rhs.get(index).unwrap_or(WidgetAttribute::new("", ""))
+        if left.name() != right.name() || left.value() != right.value() {
+            ret false
+        }
+        index += 1_usize
+    }
+    ret true
+}
+
+// 0 = unchanged, 1 = paint, 2 = layout, 3 = structure.
+fn collect_widget_changes(previous: Widget, next: Widget,
+    targets: mut Vec[str],) -> u32 {
+    if previous.kind() != next.kind() || previous.id() != next.id() {
+        ret 3_u32
+    }
+    let previous_children = previous.children()
+    let next_children = next.children()
+    if previous_children.len() != next_children.len() {
+        ret 3_u32
+    }
+    let mut change = 0_u32
+    if previous.direction() != next.direction() ||
+    previous.basis() != next.basis() || previous.grow() != next.grow() ||
+    !previous.style().layout_equivalent(next.style()) {
+        change = 2_u32
+    }
+    let content_changed = previous.text() != next.text() ||
+    previous.cursor() != next.cursor() ||
+    previous.selection().start() != next.selection().start() ||
+    previous.selection().end() != next.selection().end() ||
+    previous.checked() != next.checked() ||
+    previous.focused() != next.focused() ||
+    previous.disabled() != next.disabled() ||
+    previous.value() != next.value() ||
+    !previous.svg().equivalent(next.svg()) ||
+    previous.classes() != next.classes() ||
+    !widget_attributes_equal(previous.attributes, next.attributes) ||
+    !previous.style().equivalent(next.style())
+    if content_changed && change < 1_u32 {
+        if next.id() == "" {
+            change = 2_u32
+        } else {
+            change = 1_u32
+            targets.push(next.id())
+        }
+    }
+    let mut index = 0_usize
+    while index < previous_children.len() {
+        let previous_child = previous_children.get(index).unwrap_or(
+            Widget::spacer(0.0_f32),)
+        let next_child = next_children.get(index).unwrap_or(
+            Widget::spacer(0.0_f32),)
+        let child_change = collect_widget_changes(previous_child, next_child,
+            targets,)
+        if child_change > change {
+            change = child_change
+        }
+        if change == 3_u32 {
+            ret change
+        }
+        index += 1_usize
+    }
+    ret change
 }
 
 impl for WidgetLayout {
@@ -573,6 +1036,9 @@ impl for WidgetLayout {
     }
     pub fn bounds(self: Self) -> Rect {
         ret self.bounds
+    }
+    pub fn paint_bounds(self: Self) -> Rect {
+        ret self.paint_bounds
     }
     pub fn children(self: Self) -> Vec[WidgetLayout] {
         ret self.children
@@ -653,12 +1119,265 @@ impl for WidgetLayout {
         ret Option[Widget]::None
     }
 
+    fn widget_at_path(self: Self, indices: Vec[usize], depth: usize) ->
+    Option[Widget] {
+        if depth >= indices.len() {
+            ret Option[Widget]::Some(self.widget)
+        }
+        let index = indices.get(depth).unwrap_or(self.children.len())
+        match self.children.get(index) {
+            Option::Some(child) => {
+                ret child.widget_at_path(indices, depth + 1_usize)
+            }
+            Option::None => {
+            }
+        }
+        ret Option[Widget]::None
+    }
+
+    fn layout_at_path(self: Self, indices: Vec[usize], depth: usize) ->
+    Option[WidgetLayout] {
+        if depth >= indices.len() {
+            ret Option[WidgetLayout]::Some(self)
+        }
+        let index = indices.get(depth).unwrap_or(self.children.len())
+        match self.children.get(index) {
+            Option::Some(child) => {
+                ret child.layout_at_path(indices, depth + 1_usize)
+            }
+            Option::None => {
+            }
+        }
+        ret Option[WidgetLayout]::None
+    }
+
+    fn patch_widget_at_path(self: mut Self, indices: Vec[usize], depth: usize,
+        replacement: Widget,) -> bool {
+        if depth >= indices.len() {
+            self.widget = replacement.with_children(self.widget.children())
+            self.paint_bounds = widget_paint_bounds(
+                self.widget, self.bounds, self.children,)
+            ret true
+        }
+        let index = indices.get(depth).unwrap_or(self.children.len())
+        match self.children.get(index) {
+            Option::Some(child) => {
+                let mut updated = child
+                if updated.patch_widget_at_path(indices, depth + 1_usize,
+                    replacement,) {
+                    self.children.set(index, updated)
+                    self.paint_bounds = widget_paint_bounds(
+                        self.widget, self.bounds, self.children,)
+                    ret true
+                }
+            }
+            Option::None => {
+            }
+        }
+        ret false
+    }
+
+    fn replace_subtree_at_path(self: mut Self, indices: Vec[usize],
+        depth: usize, replacement: Widget,) -> bool {
+        if depth >= indices.len() {
+            let updated = layout_widget(replacement, self.bounds)
+            self.widget = updated.widget
+            self.children = updated.children
+            self.paint_bounds = updated.paint_bounds
+            ret true
+        }
+        let index = indices.get(depth).unwrap_or(self.children.len())
+        match self.children.get(index) {
+            Option::Some(child) => {
+                let mut updated = child
+                if updated.replace_subtree_at_path(indices, depth + 1_usize,
+                    replacement,) {
+                    self.children.set(index, updated)
+                    self.paint_bounds = widget_paint_bounds(
+                        self.widget, self.bounds, self.children,)
+                    ret true
+                }
+            }
+            Option::None => {
+            }
+        }
+        ret false
+    }
+
+    /// Reconstructs the current retained widget tree from layout nodes. Unlike
+    /// the original root widget, this includes every subtree replacement made
+    /// since the last full layout.
+    pub fn retained_widget(self: Self) -> Widget {
+        let mut retained_children = Vec[Widget]::new()
+        for child in self.children {
+            retained_children.push(child.retained_widget())
+        }
+        ret self.widget.with_children(retained_children)
+    }
+
     // Replaces paint-only widget state while preserving the geometry of the
     // existing tree. This is intended for hover/focus changes whose styles do
     // not alter layout. Absolute overlays are laid out again because their
     // pointer-relative position may have changed.
     pub fn restyle(self: Self, widget: Widget) -> WidgetLayout {
         ret restyle_widget_layout(self, widget)
+    }
+
+    /// Replaces one retained widget without rebuilding or laying out the tree.
+    /// This is the paint-only fast path; callers must use a normal layout pass
+    /// when the replacement changes geometry or child structure.
+    pub fn patch_widget(self: mut Self, id: str, replacement: Widget) -> bool {
+        if self.widget.id() == id {
+            self.widget = replacement.with_children(self.widget.children())
+            self.paint_bounds = widget_paint_bounds(
+                self.widget, self.bounds, self.children,)
+            ret true
+        }
+        let mut index = 0_usize
+        while index < self.children.len() {
+            match self.children.get(index) {
+                Option[WidgetLayout]::Some(child) => {
+                    let mut updated = child
+                    if updated.patch_widget(id, replacement) {
+                        self.children.set(index, updated)
+                        self.paint_bounds = widget_paint_bounds(
+                            self.widget, self.bounds, self.children,)
+                        ret true
+                    }
+                }
+                Option[WidgetLayout]::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        ret false
+    }
+
+    pub fn patch_text(self: mut Self, id: str, value: str) -> bool {
+        match self.find_widget(id) {
+            Option[Widget]::Some(widget) => {
+                ret self.patch_widget(id, widget.with_text(value))
+            }
+            Option[Widget]::None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn patch_style(self: mut Self, id: str, value: Style) -> bool {
+        match self.find_widget(id) {
+            Option[Widget]::Some(widget) => {
+                ret self.patch_widget(id, widget.with_style(value))
+            }
+            Option[Widget]::None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn patch_focus(self: mut Self, id: str, value: bool) -> bool {
+        match self.find_widget(id) {
+            Option[Widget]::Some(widget) => {
+                ret self.patch_widget(id, widget.with_focus(value))
+            }
+            Option[Widget]::None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn patch_disabled(self: mut Self, id: str, value: bool) -> bool {
+        match self.find_widget(id) {
+            Option[Widget]::Some(widget) => {
+                ret self.patch_widget(id, widget.with_disabled(value))
+            }
+            Option[Widget]::None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn patch_checked(self: mut Self, id: str, value: bool) -> bool {
+        match self.find_widget(id) {
+            Option[Widget]::Some(widget) => {
+                ret self.patch_widget(id, widget.with_checked(value))
+            }
+            Option[Widget]::None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn patch_value(self: mut Self, id: str, value: f32) -> bool {
+        match self.find_widget(id) {
+            Option[Widget]::Some(widget) => {
+                ret self.patch_widget(id, widget.with_value(value))
+            }
+            Option[Widget]::None => {
+                ret false
+            }
+        }
+    }
+
+    /// Recomputes only the named subtree inside its existing outer bounds.
+    /// Parent and sibling geometry stays intact.
+    pub fn relayout_subtree(self: mut Self, id: str) -> bool {
+        if self.widget.id() == id {
+            let updated = layout_widget(self.widget, self.bounds)
+            self.widget = updated.widget
+            self.children = updated.children
+            self.paint_bounds = updated.paint_bounds
+            ret true
+        }
+        let mut index = 0_usize
+        while index < self.children.len() {
+            match self.children.get(index) {
+                Option[WidgetLayout]::Some(child) => {
+                    let mut updated = child
+                    if updated.relayout_subtree(id) {
+                        self.children.set(index, updated)
+                        self.paint_bounds = widget_paint_bounds(
+                            self.widget, self.bounds, self.children,)
+                        ret true
+                    }
+                }
+                Option[WidgetLayout]::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        ret false
+    }
+
+    /// Replaces and lays out one structural component inside its current
+    /// bounds. Unrelated ancestors, siblings, and their layout results are
+    /// retained.
+    pub fn replace_subtree(self: mut Self, id: str, replacement: Widget) -> bool {
+        if self.widget.id() == id {
+            let updated = layout_widget(replacement, self.bounds)
+            self.widget = updated.widget
+            self.children = updated.children
+            self.paint_bounds = updated.paint_bounds
+            ret true
+        }
+        let mut index = 0_usize
+        while index < self.children.len() {
+            match self.children.get(index) {
+                Option[WidgetLayout]::Some(child) => {
+                    let mut updated = child
+                    if updated.replace_subtree(id, replacement) {
+                        self.children.set(index, updated)
+                        self.paint_bounds = widget_paint_bounds(
+                            self.widget, self.bounds, self.children,)
+                        ret true
+                    }
+                }
+                Option[WidgetLayout]::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        ret false
     }
 }
 
@@ -723,8 +1442,454 @@ fn restyle_widget_layout(previous: WidgetLayout, widget: Widget) -> WidgetLayout
         }
         index = index + 1_usize
     }
+    let stacked = stacked_layouts(layouts)
     ret WidgetLayout {
-        widget, previous.bounds(), stacked_layouts(layouts)
+        widget, previous.bounds(), stacked,
+        widget_paint_bounds(widget, previous.bounds(), stacked)
+    }
+}
+
+/// Owns a persistent layout and records the smallest class of work required
+/// after state changes. Paint-only patches keep geometry and child structure
+/// intact; callers explicitly invalidate layout or structure when necessary.
+pub struct ReactiveUi {
+    layout: WidgetLayout
+    paths: Vec[WidgetPath]
+    paint_targets: Vec[str]
+    layout_targets: Vec[str]
+    interaction_bases: Vec[Widget]
+    structure_dirty: bool
+    generation: usize
+}
+
+impl for ReactiveUi {
+    pub fn new(layout: WidgetLayout) -> Self {
+        ret Self {
+            layout, widget_paths(layout, 1_usize), Vec[str]::new(),
+            Vec[str]::new(), Vec[Widget]::new(), false, 1_usize
+        }
+    }
+
+    pub fn layout(self: Self) -> WidgetLayout {
+        ret self.layout
+    }
+    pub fn paint_targets(self: Self) -> Vec[str] {
+        ret self.paint_targets
+    }
+    pub fn needs_layout(self: Self) -> bool {
+        ret self.layout_targets.len() > 0_usize || self.structure_dirty
+    }
+    pub fn needs_structure(self: Self) -> bool {
+        ret self.structure_dirty
+    }
+    pub fn is_dirty(self: Self) -> bool {
+        ret self.paint_targets.len() > 0_usize || self.layout_targets.len() > 0_usize || self.structure_dirty
+    }
+    pub fn segment_generation(self: Self, id: str) -> usize {
+        for entry in self.paths {
+            if entry.id == id {
+                ret entry.generation
+            }
+        }
+        ret 0_usize
+    }
+
+    /// Reconciles a newly rendered tree against retained state. Stable
+    /// structure and geometry become paint patches; geometry changes request
+    /// layout, and identity/order changes request a structural rebuild.
+    pub fn reconcile(self: mut Self, root: Widget) -> u32 {
+        let next = inherit_widget_styles(root)
+        let mut targets = Vec[str]::new()
+        let change = collect_widget_changes(
+            self.layout.retained_widget(), next, targets,)
+        if change == 1_u32 {
+            self.layout = self.layout.restyle(next)
+            self.generation = self.generation + 1_usize
+            self.paths = widget_paths(self.layout, self.generation)
+            for target in targets {
+                self.mark_paint(target)
+            }
+        } elif change == 2_u32 {
+            self.invalidate_layout(self.layout.widget().id())
+        } elif change == 3_u32 {
+            self.invalidate_structure()
+        }
+        ret change
+    }
+
+    fn path(self: Self, id: str) -> Option[Vec[usize]] {
+        for entry in self.paths {
+            if entry.id == id {
+                ret Option[Vec[usize]]::Some(entry.indices)
+            }
+        }
+        ret Option[Vec[usize]]::None
+    }
+
+    pub fn find_widget(self: Self, id: str) -> Option[Widget] {
+        for entry in self.paths {
+            if entry.id == id {
+                ret Option[Widget]::Some(entry.widget)
+            }
+        }
+        ret Option[Widget]::None
+    }
+
+    /// Returns the immutable declarative widget underneath transient
+    /// hover/active/focus styling, capturing it on first use.
+    pub fn interaction_base(self: mut Self, id: str) -> Option[Widget] {
+        for widget in self.interaction_bases {
+            if widget.id() == id {
+                ret Option[Widget]::Some(widget)
+            }
+        }
+        match self.find_widget(id) {
+            Option::Some(widget) => {
+                self.interaction_bases.push(widget)
+                ret Option[Widget]::Some(widget)
+            }
+            Option::None => {
+                ret Option[Widget]::None
+            }
+        }
+    }
+
+    pub fn release_interaction_base(self: mut Self, id: str) ->() {
+        let mut retained = Vec[Widget]::new()
+        for widget in self.interaction_bases {
+            if widget.id() != id {
+                retained.push(widget)
+            }
+        }
+        self.interaction_bases = retained
+        ret()
+    }
+
+    /// Hit-tests the retained flat paint-order index. This avoids recursively
+    /// copying the complete layout tree on every pointer-move event.
+    pub fn hit(self: Self, x: f32, y: f32) -> str {
+        let mut index = self.paths.len()
+        while index > 0_usize {
+            index -= 1_usize
+            match self.paths.get(index) {
+                Option::Some(entry) => {
+                    let inside = x >= entry.bounds.x() && y >= entry.bounds.y() &&
+                    x < entry.bounds.right() && y < entry.bounds.bottom()
+                    if inside && !entry.disabled && entry.visible &&
+                    entry.pointer_events && point_inside_clip(entry.clip, x, y) {
+                        ret entry.id
+                    }
+                }
+                Option::None => {
+                }
+            }
+        }
+        ret ""
+    }
+
+    pub fn find_layout(self: Self, id: str) -> Option[WidgetLayout] {
+        match self.path(id) {
+            Option::Some(indices) => {
+                ret self.layout.layout_at_path(indices, 0_usize)
+            }
+            Option::None => {
+            }
+        }
+        ret Option[WidgetLayout]::None
+    }
+
+    pub fn clip_for(self: Self, id: str) -> Option[Rect] {
+        for entry in self.paths {
+            if entry.id == id {
+                ret entry.clip
+            }
+        }
+        ret Option[Rect]::None
+    }
+
+    pub fn patch_widget(self: mut Self, id: str, replacement: Widget) -> bool {
+        match self.path(id) {
+            Option::Some(indices) => {
+                if !self.layout.patch_widget_at_path(indices, 0_usize, replacement) {
+                    ret false
+                }
+            }
+            Option::None => {
+                ret false
+            }
+        }
+        let mut index = 0_usize
+        while index < self.paths.len() {
+            match self.paths.get(index) {
+                Option::Some(entry) => {
+                    if entry.id == id {
+                        self.paths.set(index, WidgetPath {
+                            entry.id, entry.indices, entry.bounds, entry.clip,
+                            replacement, replacement.disabled(), replacement.style().visible(),
+                            replacement.style().pointer_events(),
+                            self.generation + 1_usize
+                        })
+                        self.generation = self.generation + 1_usize
+                        break
+                    }
+                }
+                Option::None => {}
+            }
+            index += 1_usize
+        }
+        self.mark_paint(id)
+        ret true
+    }
+    /// Restores a widget and marks it for repaint. This is required when the
+    /// previous reactive state has already been committed to the retained cache.
+    pub fn restore_widget(self: mut Self, id: str, replacement: Widget) -> bool {
+        ret self.patch_widget(id, replacement)
+    }
+    pub fn patch_text(self: mut Self, id: str, value: str) -> bool {
+        match self.find_widget(id) {
+            Option::Some(widget) => {
+                ret self.patch_widget(id, widget.with_text(value))
+            }
+            Option::None => {
+                ret false
+            }
+        }
+    }
+    pub fn patch_style(self: mut Self, id: str, value: Style) -> bool {
+        match self.find_widget(id) {
+            Option::Some(widget) => {
+                ret self.patch_widget(id, widget.with_style(value))
+            }
+            Option::None => {
+                ret false
+            }
+        }
+    }
+    pub fn patch_focus(self: mut Self, id: str, value: bool) -> bool {
+        match self.find_widget(id) {
+            Option::Some(widget) => {
+                ret self.patch_widget(id, widget.with_focus(value))
+            }
+            Option::None => {
+                ret false
+            }
+        }
+    }
+    pub fn patch_disabled(self: mut Self, id: str, value: bool) -> bool {
+        match self.find_widget(id) {
+            Option::Some(widget) => {
+                ret self.patch_widget(id, widget.with_disabled(value))
+            }
+            Option::None => {
+                ret false
+            }
+        }
+    }
+    pub fn patch_checked(self: mut Self, id: str, value: bool) -> bool {
+        match self.find_widget(id) {
+            Option::Some(widget) => {
+                ret self.patch_widget(id, widget.with_checked(value))
+            }
+            Option::None => {
+                ret false
+            }
+        }
+    }
+    pub fn patch_value(self: mut Self, id: str, value: f32) -> bool {
+        match self.find_widget(id) {
+            Option::Some(widget) => {
+                ret self.patch_widget(id, widget.with_value(value))
+            }
+            Option::None => {
+                ret false
+            }
+        }
+    }
+    pub fn replace_subtree(self: mut Self, id: str, replacement: Widget) -> bool {
+        match self.path(id) {
+            Option::Some(indices) => {
+                let inherited_clip = inherited_clip_at_path(
+                    self.layout, indices, 0_usize, Option[Rect]::None,)
+                if !self.layout.replace_subtree_at_path(indices, 0_usize,
+                    replacement,) {
+                    ret false
+                }
+                self.generation = self.generation + 1_usize
+                let replacement_generation = self.generation
+                let mut replacement_paths = Vec[WidgetPath]::new()
+                match self.layout.layout_at_path(indices, 0_usize) {
+                    Option::Some(updated) => {
+                        collect_widget_paths(updated, indices, inherited_clip,
+                            replacement_generation, replacement_paths,)
+                    }
+                    Option::None => {
+                        ret false
+                    }
+                }
+                // A retained animation normally replaces a subtree with the
+                // same shape. Its entries are contiguous in preorder, so
+                // overwrite that range without allocating and copying the
+                // complete window hit index.
+                let mut first = self.paths.len()
+                let mut former_count = 0_usize
+                let mut path_index = 0_usize
+                while path_index < self.paths.len() {
+                    match self.paths.get(path_index) {
+                        Option::Some(entry) => {
+                            if path_has_prefix(entry.indices, indices) {
+                                if first == self.paths.len() {
+                                    first = path_index
+                                }
+                                former_count = former_count + 1_usize
+                            }
+                        }
+                        Option::None => {
+                        }
+                    }
+                    path_index = path_index + 1_usize
+                }
+                if first < self.paths.len() &&
+                former_count == replacement_paths.len() {
+                    let mut replacement_index = 0_usize
+                    while replacement_index < replacement_paths.len() {
+                        match replacement_paths.get(replacement_index) {
+                            Option::Some(entry) => {
+                                self.paths.set(first + replacement_index, entry)
+                            }
+                            Option::None => {
+                            }
+                        }
+                        replacement_index = replacement_index + 1_usize
+                    }
+                } else {
+                    let mut next_paths = Vec[WidgetPath]::new()
+                    let mut inserted = false
+                    for entry in self.paths {
+                        if path_has_prefix(entry.indices, indices) {
+                            if !inserted {
+                                for replacement_path in replacement_paths {
+                                    next_paths.push(replacement_path)
+                                }
+                                inserted = true
+                            }
+                        } else {
+                            next_paths.push(entry)
+                        }
+                    }
+                    if !inserted {
+                        for replacement_path in replacement_paths {
+                            next_paths.push(replacement_path)
+                        }
+                    }
+                    self.paths = next_paths
+                }
+            }
+            Option::None => {
+                ret false
+            }
+        }
+        // A component background must be restored before any already-dirty
+        // descendants are painted on top of it.
+        let already_first = match self.paint_targets.get(0_usize) {
+            Option::Some(target) => { target == id }
+            Option::None => { false }
+        }
+        if !already_first {
+            let mut ordered = Vec[str]::new()
+            if id != "" {
+                ordered.push(id)
+            }
+            for target in self.paint_targets {
+                if target != id {
+                    ordered.push(target)
+                }
+            }
+            self.paint_targets = ordered
+        }
+        self.interaction_bases.clear()
+        ret true
+    }
+    pub fn invalidate_layout(self: mut Self, id: str) ->() {
+        self.mark_paint(id)
+        if id != "" {
+            let mut found = false
+            for target in self.layout_targets {
+                if target == id {
+                    found = true
+                }
+            }
+            if !found {
+                self.layout_targets.push(id)
+            }
+        }
+        ret()
+    }
+    /// Marks a stable widget subtree for repaint without changing its layout.
+    pub fn invalidate_paint(self: mut Self, id: str) ->() {
+        self.mark_paint(id)
+        ret()
+    }
+    pub fn invalidate_structure(self: mut Self) ->() {
+        self.structure_dirty = true
+        ret()
+    }
+    pub fn flush_layout(self: mut Self) -> bool {
+        if self.structure_dirty {
+            ret false
+        }
+        for target in self.layout_targets {
+            if !self.layout.relayout_subtree(target) {
+                ret false
+            }
+        }
+        self.layout_targets.clear()
+        self.generation = self.generation + 1_usize
+        self.paths = widget_paths(self.layout, self.generation)
+        ret true
+    }
+    pub fn replace_layout(self: mut Self, value: WidgetLayout) ->() {
+        self.layout = value
+        self.generation = self.generation + 1_usize
+        self.paths = widget_paths(value, self.generation)
+        self.paint_targets.clear()
+        self.layout_targets.clear()
+        self.structure_dirty = false
+        self.interaction_bases.clear()
+        ret()
+    }
+    pub fn clear_paint(self: mut Self) ->() {
+        self.paint_targets.clear()
+        ret()
+    }
+    /// Clears committed targets while retaining caller-owned transient layers.
+    pub fn retain_paint(self: mut Self, targets: Vec[str]) ->() {
+        let mut retained = Vec[str]::new()
+        for target in self.paint_targets {
+            let mut keep = false
+            for retained_target in targets {
+                if target == retained_target {
+                    keep = true
+                }
+            }
+            if keep {
+                retained.push(target)
+            }
+        }
+        self.paint_targets = retained
+        ret()
+    }
+
+    fn mark_paint(self: mut Self, id: str) ->() {
+        if id == "" {
+            ret()
+        }
+        for target in self.paint_targets {
+            if target == id {
+                ret()
+            }
+        }
+        self.paint_targets.push(id)
+        ret()
     }
 }
 
@@ -838,13 +2003,28 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
                         }
                     ) + cross_margin)
                 grid_placements.push(layout.grid_placement())
-                grid_minimum_content.push(child.min_content_size())
-                grid_maximum_content.push(child.max_content_size())
             }
             Option[Widget]::None => {
             }
         }
         index = index + 1_usize
+    }
+    let intrinsic_grid = widget_flex.grid() &&
+    (widget_flex.column_template() != "" || widget_flex.auto_column_template() != "" ||
+        widget_flex.auto_row_template() != "" || has_grid_placement(grid_placements))
+    if intrinsic_grid {
+        index = 0_usize
+        while index < children.len() {
+            match children.get(index) {
+                Option[Widget]::Some(child) => {
+                    grid_minimum_content.push(child.min_content_size())
+                    grid_maximum_content.push(child.max_content_size())
+                }
+                Option[Widget]::None => {
+                }
+            }
+            index = index + 1_usize
+        }
     }
     let row_gap = if widget_flex.row_gap() >= 0.0_f32 {
         widget_flex.row_gap()
@@ -867,8 +2047,7 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
         column_gap
     }
     let rects = if widget_flex.grid() {
-        if widget_flex.column_template() != "" || widget_flex.auto_column_template() != "" ||
-        widget_flex.auto_row_template() != "" || has_grid_placement(grid_placements) {
+        if intrinsic_grid {
             grid_layout_intrinsic_placed(scrolled_content, widget_flex.column_template(), widget_flex.row_template(),
                 widget_flex.auto_column_template(), widget_flex.auto_row_template(), row_gap, column_gap,
                 grid_placements,
@@ -925,7 +2104,7 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
     }
     layouts = stacked_layouts(layouts)
     ret WidgetLayout {
-        widget, bounds, layouts
+        widget, bounds, layouts, widget_paint_bounds(widget, bounds, layouts)
     }
 }
 
@@ -948,6 +2127,26 @@ fn has_grid_placement(values: Vec[GridPlacement]) -> bool {
 }
 
 fn stacked_layouts(source: Vec[WidgetLayout]) -> Vec[WidgetLayout] {
+    let mut ordered = true
+    let mut previous_z = - 2147483648_i32
+    let mut ordered_index = 0_usize
+    while ordered_index < source.len() {
+        match source.get(ordered_index) {
+            Option[WidgetLayout]::Some(layout) => {
+                let z = layout.widget().style().layout().position().z_index()
+                if z < previous_z {
+                    ordered = false
+                }
+                previous_z = z
+            }
+            Option[WidgetLayout]::None => {
+            }
+        }
+        ordered_index = ordered_index + 1_usize
+    }
+    if ordered {
+        ret source
+    }
     let mut result = Vec[WidgetLayout]::new()
     let mut used = Vec[bool]::new()
     let mut index = 0_usize
@@ -995,6 +2194,26 @@ fn stacked_layouts(source: Vec[WidgetLayout]) -> Vec[WidgetLayout] {
 }
 
 fn ordered_widgets(source: Vec[Widget]) -> Vec[Widget] {
+    let mut ordered = true
+    let mut previous_order = - 2147483648_i32
+    let mut ordered_index = 0_usize
+    while ordered_index < source.len() {
+        match source.get(ordered_index) {
+            Option[Widget]::Some(widget) => {
+                let order = widget.style().layout().flex().order()
+                if order < previous_order {
+                    ordered = false
+                }
+                previous_order = order
+            }
+            Option[Widget]::None => {
+            }
+        }
+        ordered_index = ordered_index + 1_usize
+    }
+    if ordered {
+        ret source
+    }
     let mut result = Vec[Widget]::new()
     let mut used = Vec[bool]::new()
     let mut index = 0_usize

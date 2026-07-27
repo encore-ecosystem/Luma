@@ -1,0 +1,99 @@
+import luma:: {
+    Color, DisplayCommand, DisplayList, Rect, RetainedDisplayList
+}
+import core::option::Option
+
+fn main() -> u32 {
+    let mut list = DisplayList::new()
+    let bounds = Rect::new(2.0_f32, 3.0_f32, 40.0_f32, 20.0_f32)
+    list.damage_rect(bounds)
+    list.fill_rect(bounds, Color::rgb(10_u8, 20_u8, 30_u8))
+    list.round_rect(bounds, 5.0_f32, Color::rgb(40_u8, 50_u8, 60_u8), false)
+    list.text(4.0_f32, 8.0_f32, "Luma", Color::rgb(255_u8, 255_u8, 255_u8))
+    if list.len() != 3_usize || list.damage().len() != 1_usize {
+        ret 1_u32
+    }
+    match list.commands().get(0_usize) {
+        Option::Some(command) => {
+            match command {
+                DisplayCommand::FillRect(value) => {
+                    if value.bounds().width() != 40.0_f32 {
+                        ret 2_u32
+                    }
+                }
+                _ => {
+                    ret 3_u32
+                }
+            }
+        }
+        Option::None => {
+            ret 3_u32
+        }
+    }
+    match list.commands().get(2_usize) {
+        Option::Some(command) => {
+            match command {
+                DisplayCommand::Text(value) => {
+                    if value.value() != "Luma" {
+                        ret 4_u32
+                    }
+                }
+                _ => {
+                    ret 5_u32
+                }
+            }
+        }
+        Option::None => {
+            ret 5_u32
+        }
+    }
+    let mut first = DisplayList::new()
+    first.fill_rect(bounds, Color::rgb(1_u8, 2_u8, 3_u8))
+    let mut overlay = DisplayList::new()
+    overlay.text(4.0_f32, 8.0_f32, "Overlay", Color::rgb(255_u8, 255_u8, 255_u8))
+    let mut retained = RetainedDisplayList::new()
+    retained.upsert("content", bounds, first.commands(), false)
+    retained.upsert("tooltip", Rect::new(8.0_f32, 8.0_f32, 20.0_f32, 10.0_f32),
+        overlay.commands(), true,)
+    retained.clear_damage()
+    let mut updated = DisplayList::new()
+    updated.fill_rect(bounds, Color::rgb(4_u8, 5_u8, 6_u8))
+    retained.upsert("content", bounds, updated.commands(), false)
+    if retained.len() != 2_usize || retained.damage().len() != 1_usize ||
+    retained.frame(false).len() != 1_usize ||
+    retained.frame(true).len() != 2_usize {
+        ret 6_u32
+    }
+    if retained.frame_for_damage(
+        Rect::new(30.0_f32, 15.0_f32, 20.0_f32, 20.0_f32), false,).len() != 1_usize ||
+    retained.frame_for_damage(
+        Rect::new(100.0_f32, 100.0_f32, 10.0_f32, 10.0_f32), true,).len() != 0_usize {
+        ret 9_u32
+    }
+    // The untouched overlay keeps its original generation.
+    match retained.segment("tooltip") {
+        Option::Some(tooltip) => {
+            if tooltip.generation() != 2_usize {
+                ret 7_u32
+            }
+        }
+        Option::None => {
+            ret 7_u32
+        }
+    }
+    match retained.segment("content") {
+        Option::Some(content) => {
+            if content.generation() != 3_usize {
+                ret 7_u32
+            }
+        }
+        Option::None => {
+            ret 7_u32
+        }
+    }
+    if !retained.remove("content") || retained.len() != 1_usize ||
+    retained.damage().len() != 1_usize {
+        ret 8_u32
+    }
+    ret 0_u32
+}

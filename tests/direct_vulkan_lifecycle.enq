@@ -1,0 +1,63 @@
+import luma:: {
+    Color, PresentMode, Rect, RendererKind, Widget, Window
+}
+import core::os::env
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma direct Vulkan lifecycle", 96_u32, 64_u32,
+        RendererKind::Auto,)
+    if !window.available() {
+        // The default test suite may run without a display or Vulkan device;
+        // local backend validation can make direct Vulkan mandatory.
+        ret if env("LUMA_REQUIRE_DIRECT_VULKAN").is_some() { 4_u32 } else { 0_u32 }
+    }
+    let info = window.renderer_info()
+    if info.backend() != "direct-vulkan" || !info.accelerated() {
+        let _destroyed = window.destroy()
+        ret 1_u32
+    }
+    let interop = window.vulkan_interop()
+    if !interop.valid() || interop.swapchain() == 0_usize ||
+    interop.render_device() == 0_usize {
+        let _destroyed = window.destroy()
+        ret 2_u32
+    }
+    let composed_layout = window.layout(Widget::render_surface("viewport"))
+    let borrowed = window.begin_vulkan_frame(
+        window.prepare_frame(composed_layout, false),)
+    if !borrowed.valid() || borrowed.swapchain() != interop.swapchain() ||
+    !window.present_vulkan_frame(borrowed) ||
+    window.present_vulkan_frame(borrowed) {
+        let _destroyed = window.destroy()
+        ret 6_u32
+    }
+    if !window.begin(Color::rgb(18_u8, 20_u8, 24_u8)) ||
+        !window.fill_rect(Rect::new(12.0_f32, 12.0_f32, 48.0_f32, 28.0_f32),
+            Color::rgb(80_u8, 160_u8, 240_u8),) ||
+        !window.present() {
+        let _destroyed = window.destroy()
+        ret 5_u32
+    }
+    if !window.set_present_mode(PresentMode::Immediate) {
+        let _destroyed = window.destroy()
+        ret 8_u32
+    }
+    if !window.begin(Color::rgb(24_u8, 26_u8, 30_u8)) ||
+        !window.fill_rect(Rect::new(18.0_f32, 16.0_f32, 72.0_f32, 44.0_f32),
+            Color::rgb(120_u8, 200_u8, 96_u8),) ||
+        !window.present() {
+        let _destroyed = window.destroy()
+        ret 7_u32
+    }
+    // Force another swapchain generation while the previous generation may
+    // still be retiring. This covers the nonblocking retirement chain even
+    // under tiling compositors that ignore programmatic window sizes.
+    if !window.set_present_mode(PresentMode::VSync) ||
+        !window.begin(Color::rgb(28_u8, 30_u8, 34_u8)) ||
+        !window.present() {
+        let _destroyed = window.destroy()
+        ret 9_u32
+    }
+    ret if window.destroy() { 0_u32 } else { 3_u32 }
+}

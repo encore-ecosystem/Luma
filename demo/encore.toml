@@ -1,7 +1,15 @@
 [project]
-name = "encore_ui_demo"
+name = "luma_demo"
 version = "0.1.0"
-description = "Complete Encore UI demonstration"
+description = "Complete Luma demonstration"
 dependencies = [
     "path@..[fonts]",
 ]
+
+[lint]
+default = "warn"
+dependencies = "allow"
+
+[lint.rules]
+unused-mut = "allow"
+missing-public-docstring = "allow"

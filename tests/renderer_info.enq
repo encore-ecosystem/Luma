@@ -1,0 +1,37 @@
+import luma:: {
+    RendererInfo, RendererKind, Window
+}
+
+fn main() -> u32 {
+    let gpu = RendererInfo::new("opengl")
+    if !gpu.accelerated() || gpu.software_emulated() || gpu.backend() != "opengl" {
+        ret 1_u32
+    }
+    if gpu.device() != "opengl" { ret 5_u32 }
+    let software = RendererInfo::new("software")
+    if software.accelerated() || !software.software_emulated() {
+        ret 2_u32
+    }
+    let pipe = RendererInfo::new("llvmpipe")
+    if !pipe.software_emulated() {
+        ret 3_u32
+    }
+    let invalid = Window::create_with_renderer("invalid", 0_u32, 0_u32,
+        RendererKind::Vulkan,)
+    if invalid.available() {
+        ret 4_u32
+    }
+    let direct = Window::create_with_renderer("direct", 32_u32, 32_u32,
+        RendererKind::DirectVulkan,)
+    if direct.available() {
+        if direct.renderer_info().backend() != "direct-vulkan" ||
+            !direct.vulkan_interop().valid() {
+            let _destroyed = direct.destroy()
+            ret 6_u32
+        }
+        if !direct.destroy() {
+            ret 7_u32
+        }
+    }
+    ret 0_u32
+}

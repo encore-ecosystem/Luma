@@ -1,0 +1,7 @@
+[project]
+name = "luma_counter_button"
+version = "0.1.0"
+description = "Minimal managed Luma application"
+dependencies = [
+    "path@../..",
+]

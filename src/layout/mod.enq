@@ -1,3 +1,5 @@
+//! Flex, grid, wrapping, alignment, sizing, and intrinsic layout algorithms.
+
 import core::option::Option
 import core::vec::Vec
 import geometry:: {
@@ -591,9 +593,10 @@ Vec[GridCell] {
             ,
         ) index = index + 1_usize
     }
-    let mut explicit_pass = true
+    let mut pass = 0_usize
     let mut cursor = 0_usize
-    while true {
+    while pass < 2_usize {
+        let explicit_pass = pass == 0_usize
         index = 0_usize
         while index < placements.len() {
             let placement = grid_placement_at(placements, index)
@@ -618,10 +621,7 @@ Vec[GridCell] {
             }
             index = index + 1_usize
         }
-        if !explicit_pass {
-            break
-        }
-        explicit_pass = false
+        pass = pass + 1_usize
     }
     ret cells
 }

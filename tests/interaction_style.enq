@@ -1,0 +1,50 @@
+import core::option::Option
+import luma::{RendererKind, StyleSheet, Widget, Window}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma interaction style test", 120_u32, 60_u32,
+        RendererKind::Software,)
+    if !window.available() {
+        ret 1_u32
+    }
+    let mut reactive = window.reactive(Widget::button("action", "Action"))
+    let sheet = StyleSheet::parse(
+        "button:hover { border-width: 2px; }")
+    if !window.patch_interaction_style(reactive, sheet, "action",
+        true, false, false,) {
+        window.destroy()
+        ret 2_u32
+    }
+    match reactive.find_widget("action") {
+        Option::Some(widget) => {
+            if widget.style().border_width() != 2.0_f32 {
+                window.destroy()
+                ret 3_u32
+            }
+        }
+        Option::None => {
+            window.destroy()
+            ret 4_u32
+        }
+    }
+    if !window.patch_interaction_style(reactive, sheet, "action",
+        false, false, false,) {
+        window.destroy()
+        ret 5_u32
+    }
+    match reactive.find_widget("action") {
+        Option::Some(widget) => {
+            if widget.style().border_width() == 2.0_f32 {
+                window.destroy()
+                ret 6_u32
+            }
+        }
+        Option::None => {
+            window.destroy()
+            ret 7_u32
+        }
+    }
+    window.destroy()
+    ret 0_u32
+}

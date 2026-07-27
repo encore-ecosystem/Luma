@@ -1,6 +1,6 @@
 # Luma
 
-Luma is a cross-platform native UI toolkit for Encore. It provides widgets,
+Luma is a cross-platform native UI framework for Encore. It provides widgets,
 flex and grid layout, CSS-like styling, animations, SVG and Lucide icons,
 font management, file picking, and an SDL3 renderer.
 
@@ -21,23 +21,30 @@ Once Luma is available in the Encore package index:
 encore add luma
 ```
 
-Then import the API from `luma`:
+Then use the managed, event-driven application runtime:
 
 ```enq
-import luma::{Rect, Theme, Widget, layout_widget, vertical}
+import luma::{AppEvent, Application, Widget, Window, run_application}
 
-fn view() -> Widget {
-    let theme = Theme::light()
-    let mut root = Widget::panel("root")
-        .with_direction(vertical())
-        .with_style(theme.panel())
-    root.push(Widget::button("save", "Save"))
-    ret root
+struct Counter { value: u32 }
+
+impl Application for Counter {
+    fn view(self: Self) -> Widget {
+        ret Widget::button("counter", "Count")
+    }
+    fn update(self: Self, event: AppEvent) -> Self {
+        if event.is_action() && event.action() == "counter" {
+            ret Self { self.value + 1_u32 }
+        }
+        ret self
+    }
 }
 
-fn layout() {
-    let tree = layout_widget(view(), Rect::new(
-        0.0_f32, 0.0_f32, 800.0_f32, 600.0_f32))
+fn main() -> u32 {
+    let window = Window::create("Counter", 320_u32, 180_u32)
+    if !window.available() { ret 1_u32 }
+    let _final = run_application(window, Counter { 0_u32 })
+    ret 0_u32
 }
 ```
 
@@ -49,11 +56,22 @@ fn layout() {
 - Color and geometry primitives
 - SVG path parsing and a bundled Lucide icon catalog
 - Bundled Open Sans, Inter, Roboto, and Roboto Mono font families
-- Native SDL3 windows, software rendering, clipboard, text input, and HiDPI
-  support
+- Native SDL3 windows, automatic hardware/software renderer selection,
+  reactive cached frames, clipboard, text input, and HiDPI support
 
-The `fonts` feature is available for consumers that want the bundled font
-assets:
+## Documentation
+
+The complete user guide is an mdBook in [`docs/`](docs/src/README.md):
+
+```sh
+mdbook serve docs --open
+```
+
+It covers application structure, reactive rendering, widgets, layout, CSS,
+text editing, animation, icons, fonts, GPU rendering, and embedding.
+
+Font support and native system-font discovery work by default. The `fonts`
+feature also makes bundled font assets available to package consumers:
 
 ```toml
 dependencies = [

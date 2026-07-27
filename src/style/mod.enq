@@ -1,3 +1,5 @@
+//! Typed visual, layout, typography, shadow, gradient, and theme styles.
+
 import color:: {
     Color, black, transparent, white
 }
@@ -1020,6 +1022,45 @@ impl for TextDecorationStyle {
     }
 }
 
+/// A two-stop background gradient. `vertical` selects top-to-bottom;
+/// otherwise the gradient is left-to-right.
+pub struct LinearGradient {
+    start: Color
+    end: Color
+    vertical: bool
+    enabled: bool
+}
+
+impl for LinearGradient {
+    pub fn none() -> Self {
+        ret Self {
+            transparent(), transparent(), true, false
+        }
+    }
+    pub fn vertical(start: Color, end: Color) -> Self {
+        ret Self {
+            start, end, true, true
+        }
+    }
+    pub fn horizontal(start: Color, end: Color) -> Self {
+        ret Self {
+            start, end, false, true
+        }
+    }
+    pub fn start(self: Self) -> Color {
+        ret self.start
+    }
+    pub fn end(self: Self) -> Color {
+        ret self.end
+    }
+    pub fn is_vertical(self: Self) -> bool {
+        ret self.vertical
+    }
+    pub fn is_enabled(self: Self) -> bool {
+        ret self.enabled
+    }
+}
+
 pub struct Style {
     background: Color
     foreground: Color
@@ -1046,6 +1087,7 @@ pub struct Style {
     outline: OutlineStyle
     shadow: ShadowStyle
     decoration: TextDecorationStyle
+    gradient: LinearGradient
 }
 
 impl for Style {
@@ -1054,7 +1096,7 @@ impl for Style {
             transparent(), black(), transparent(), 0.0_f32, 0.0_f32,
             Insets::all(0.0_f32), 0.0_f32, "", 14.0_f32, 400_u32, text_start(), 1.0_f32, LayoutStyle::default(),
             false, false, false, false, false, true, true, false, false, OutlineStyle::none(), ShadowStyle::none(),
-            TextDecorationStyle::none()
+            TextDecorationStyle::none(), LinearGradient::none()
         }
     }
 
@@ -1063,7 +1105,7 @@ impl for Style {
             white(), black(), Color::rgb(210_u8, 216_u8, 224_u8),
             1.0_f32, 4.0_f32, Insets::all(12.0_f32), 8.0_f32, "", 14.0_f32, 400_u32, text_start(), 1.0_f32,
             LayoutStyle::default(), false, false, false, false, false, true, true, false, false, OutlineStyle::none(),
-            ShadowStyle::none(), TextDecorationStyle::none()
+            ShadowStyle::none(), TextDecorationStyle::none(), LinearGradient::none()
         }
     }
 
@@ -1074,7 +1116,17 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, LinearGradient::none()
+        }
+    }
+    pub fn with_linear_gradient(self: Self, value: LinearGradient) -> Style {
+        ret Style {
+            value.start(), self.foreground, self.border_color, self.border_width,
+            self.radius, self.padding, self.gap, self.font_family, self.font_size, self.font_weight,
+            self.text_align, self.opacity, self.layout,
+            self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
+            self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
+            self.shadow, self.decoration, value
         }
     }
     pub fn with_foreground(self: Self, value: Color) -> Style {
@@ -1084,7 +1136,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             true, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_border(self: Self, width: f32, color: Color) -> Style {
@@ -1094,7 +1146,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_radius(self: Self, value: f32) -> Style {
@@ -1104,7 +1156,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_padding(self: Self, value: Insets) -> Style {
@@ -1114,7 +1166,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_gap(self: Self, value: f32) -> Style {
@@ -1124,7 +1176,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_font_family(self: Self, value: str) -> Style {
@@ -1134,7 +1186,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, true, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_font_size(self: Self, value: f32) -> Style {
@@ -1144,7 +1196,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, true, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_font_weight(self: Self, value: u32) -> Style {
@@ -1154,7 +1206,7 @@ impl for Style {
             value, self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, true, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_text_align(self: Self, value: usize) -> Style {
@@ -1164,7 +1216,7 @@ impl for Style {
             self.font_weight, value, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, true,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_opacity(self: Self, value: f32) -> Style {
@@ -1181,7 +1233,7 @@ impl for Style {
             self.font_weight, self.text_align, opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_visibility(self: Self, value: bool) -> Style {
@@ -1190,7 +1242,8 @@ impl for Style {
             self.radius, self.padding, self.gap, self.font_family, self.font_size, self.font_weight,
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
-            value, self.pointer_events, true, self.pointer_events_set, self.outline, self.shadow, self.decoration
+            value, self.pointer_events, true, self.pointer_events_set, self.outline, self.shadow, self.decoration,
+            self.gradient
         }
     }
     pub fn with_pointer_events(self: Self, value: bool) -> Style {
@@ -1199,7 +1252,8 @@ impl for Style {
             self.radius, self.padding, self.gap, self.font_family, self.font_size, self.font_weight,
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
-            self.visible, value, self.visibility_set, true, self.outline, self.shadow, self.decoration
+            self.visible, value, self.visibility_set, true, self.outline, self.shadow, self.decoration,
+            self.gradient
         }
     }
     pub fn with_outline(self: Self, width: f32, color: Color, offset: f32) -> Style {
@@ -1209,7 +1263,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set,
-            OutlineStyle::new(width, color, offset), self.shadow, self.decoration
+            OutlineStyle::new(width, color, offset), self.shadow, self.decoration, self.gradient
         }
     }
     pub fn with_shadow(self: Self, x: f32, y: f32, blur: f32, spread: f32, color: Color, inset: bool)
@@ -1220,7 +1274,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set,
-            self.outline, ShadowStyle::new(x, y, blur, spread, color, inset), self.decoration
+            self.outline, ShadowStyle::new(x, y, blur, spread, color, inset), self.decoration, self.gradient
         }
     }
     pub fn with_text_decoration(self: Self, underline: bool, overline: bool, line_through: bool,
@@ -1232,7 +1286,8 @@ impl for Style {
             self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set,
             self.outline, self.shadow,
-            TextDecorationStyle::new(underline, overline, line_through, color, color_set, thickness)
+            TextDecorationStyle::new(underline, overline, line_through, color, color_set, thickness),
+            self.gradient
         }
     }
     pub fn with_margin(self: Self, value: Insets) -> Style {
@@ -1395,7 +1450,7 @@ impl for Style {
             self.opacity, value,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration
+            self.shadow, self.decoration, self.gradient
         }
     }
     pub fn inherit_text(self: Self, parent: Style) -> Style {
@@ -1446,7 +1501,8 @@ impl for Style {
                 parent.pointer_events
             }
             ,
-            self.visibility_set, self.pointer_events_set, self.outline, self.shadow, self.decoration
+            self.visibility_set, self.pointer_events_set, self.outline, self.shadow, self.decoration,
+            self.gradient
         }
     }
     pub fn background(self: Self) -> Color {
@@ -1500,9 +1556,120 @@ impl for Style {
     pub fn decoration(self: Self) -> TextDecorationStyle {
         ret self.decoration
     }
+    pub fn linear_gradient(self: Self) -> LinearGradient {
+        ret self.gradient
+    }
     pub fn layout(self: Self) -> LayoutStyle {
         ret self.layout
     }
+    /// Returns whether changing to `other` preserves widget geometry.
+    pub fn layout_equivalent(self: Self, other: Style) -> bool {
+        ret self.border_width == other.border_width &&
+        insets_equal(self.padding, other.padding) &&
+        self.gap == other.gap &&
+        self.font_family == other.font_family &&
+        self.font_size == other.font_size &&
+        self.font_weight == other.font_weight &&
+        layout_style_equal(self.layout, other.layout)
+    }
+    /// Returns whether every rendered and inherited style property is equal.
+    pub fn equivalent(self: Self, other: Style) -> bool {
+        ret self.layout_equivalent(other) &&
+        self.background.packed() == other.background.packed() &&
+        self.foreground.packed() == other.foreground.packed() &&
+        self.border_color.packed() == other.border_color.packed() &&
+        self.radius == other.radius && self.text_align == other.text_align &&
+        self.opacity == other.opacity && self.foreground_set == other.foreground_set &&
+        self.font_family_set == other.font_family_set &&
+        self.font_size_set == other.font_size_set &&
+        self.font_weight_set == other.font_weight_set &&
+        self.text_align_set == other.text_align_set &&
+        self.visible == other.visible &&
+        self.pointer_events == other.pointer_events &&
+        self.visibility_set == other.visibility_set &&
+        self.pointer_events_set == other.pointer_events_set &&
+        outline_equal(self.outline, other.outline) &&
+        shadow_equal(self.shadow, other.shadow) &&
+        decoration_equal(self.decoration, other.decoration) &&
+        gradient_equal(self.gradient, other.gradient)
+    }
+}
+
+fn insets_equal(lhs: Insets, rhs: Insets) -> bool {
+    ret lhs.top() == rhs.top() && lhs.right() == rhs.right() &&
+    lhs.bottom() == rhs.bottom() && lhs.left() == rhs.left()
+}
+
+fn flex_style_equal(lhs: FlexStyle, rhs: FlexStyle) -> bool {
+    ret lhs.direction == rhs.direction && lhs.direction_set == rhs.direction_set &&
+    lhs.basis == rhs.basis && lhs.grow == rhs.grow &&
+    lhs.shrink == rhs.shrink && lhs.justify == rhs.justify &&
+    lhs.align == rhs.align && lhs.displayed == rhs.displayed &&
+    lhs.grid == rhs.grid && lhs.columns == rhs.columns &&
+    lhs.column_template == rhs.column_template &&
+    lhs.row_template == rhs.row_template &&
+    lhs.auto_column_template == rhs.auto_column_template &&
+    lhs.auto_row_template == rhs.auto_row_template &&
+    lhs.auto_flow_column == rhs.auto_flow_column &&
+    lhs.auto_flow_dense == rhs.auto_flow_dense &&
+    lhs.self_align == rhs.self_align && lhs.order == rhs.order &&
+    lhs.wrap == rhs.wrap && lhs.wrap_reverse == rhs.wrap_reverse &&
+    lhs.row_gap == rhs.row_gap && lhs.column_gap == rhs.column_gap &&
+    lhs.direction_reverse == rhs.direction_reverse &&
+    lhs.align_content == rhs.align_content
+}
+
+fn position_equal(lhs: PositionStyle, rhs: PositionStyle) -> bool {
+    ret lhs.absolute == rhs.absolute && lhs.relative == rhs.relative &&
+    lhs.top == rhs.top && lhs.right == rhs.right &&
+    lhs.bottom == rhs.bottom && lhs.left == rhs.left &&
+    lhs.top_set == rhs.top_set && lhs.right_set == rhs.right_set &&
+    lhs.bottom_set == rhs.bottom_set && lhs.left_set == rhs.left_set &&
+    lhs.z_index == rhs.z_index
+}
+
+fn grid_placement_equal(lhs: GridPlacement, rhs: GridPlacement) -> bool {
+    ret lhs.column == rhs.column && lhs.row == rhs.row &&
+    lhs.column_end == rhs.column_end && lhs.row_end == rhs.row_end &&
+    lhs.column_span == rhs.column_span && lhs.row_span == rhs.row_span
+}
+
+fn layout_style_equal(lhs: LayoutStyle, rhs: LayoutStyle) -> bool {
+    ret insets_equal(lhs.margin, rhs.margin) && lhs.width == rhs.width &&
+    lhs.height == rhs.height && lhs.min_width == rhs.min_width &&
+    lhs.min_height == rhs.min_height && lhs.max_width == rhs.max_width &&
+    lhs.max_height == rhs.max_height && flex_style_equal(lhs.flex, rhs.flex) &&
+    lhs.overflow_hidden == rhs.overflow_hidden &&
+    position_equal(lhs.position, rhs.position) &&
+    lhs.relative.width == rhs.relative.width &&
+    lhs.relative.height == rhs.relative.height &&
+    lhs.scroll.x == rhs.scroll.x && lhs.scroll.y == rhs.scroll.y &&
+    lhs.content_box == rhs.content_box &&
+    grid_placement_equal(lhs.grid_placement, rhs.grid_placement)
+}
+
+fn outline_equal(lhs: OutlineStyle, rhs: OutlineStyle) -> bool {
+    ret lhs.width == rhs.width && lhs.offset == rhs.offset &&
+    lhs.color.packed() == rhs.color.packed()
+}
+
+fn shadow_equal(lhs: ShadowStyle, rhs: ShadowStyle) -> bool {
+    ret lhs.x == rhs.x && lhs.y == rhs.y && lhs.blur == rhs.blur &&
+    lhs.spread == rhs.spread && lhs.inset == rhs.inset &&
+    lhs.color.packed() == rhs.color.packed()
+}
+
+fn decoration_equal(lhs: TextDecorationStyle, rhs: TextDecorationStyle) -> bool {
+    ret lhs.underline == rhs.underline && lhs.overline == rhs.overline &&
+    lhs.line_through == rhs.line_through &&
+    lhs.color.packed() == rhs.color.packed() &&
+    lhs.color_set == rhs.color_set && lhs.thickness == rhs.thickness
+}
+
+fn gradient_equal(lhs: LinearGradient, rhs: LinearGradient) -> bool {
+    ret lhs.start.packed() == rhs.start.packed() &&
+    lhs.end.packed() == rhs.end.packed() &&
+    lhs.vertical == rhs.vertical && lhs.enabled == rhs.enabled
 }
 
 pub struct Theme {

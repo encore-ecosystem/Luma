@@ -1,3 +1,5 @@
+//! CSS declarations, stylesheets, selectors, variables, and cascade support.
+
 import color:: {
     Color, black, transparent, white
 }
@@ -10,7 +12,7 @@ import refrain::layout:: {
     vertical
 }
 import refrain::style:: {
-    Style, align_content_center, align_content_end, align_content_space_around,
+    LinearGradient, Style, align_content_center, align_content_end, align_content_space_around,
     align_content_space_between, align_content_space_evenly, align_content_start, align_content_stretch,
     text_center, text_end, text_start
 }
@@ -46,6 +48,7 @@ struct SelectorCombinator {
 
 pub struct StyleSheet {
     rules: Vec[StyleRule]
+    maximum_specificity: usize
 }
 
 impl for StyleSheet {
@@ -69,8 +72,14 @@ impl for StyleSheet {
             }
             cursor = close + 1_usize
         }
+        let mut maximum_specificity = 0_usize
+        for rule in rules {
+            if rule.specificity > maximum_specificity {
+                maximum_specificity = rule.specificity
+            }
+        }
         ret StyleSheet {
-            rules
+            rules, maximum_specificity
         }
     }
 
@@ -96,21 +105,7 @@ impl for StyleSheet {
     }
 
     fn maximum_specificity(self: Self) -> usize {
-        let mut maximum = 0_usize
-        let mut index = 0_usize
-        while index < self.rules.len() {
-            match self.rules.get(index) {
-                Option[StyleRule]::Some(rule) => {
-                    if rule.specificity > maximum {
-                        maximum = rule.specificity
-                    }
-                }
-                Option[StyleRule]::None => {
-                }
-            }
-            index = index + 1_usize
-        }
-        ret maximum
+        ret self.maximum_specificity
     }
 }
 
@@ -358,6 +353,9 @@ fn apply_declaration(style: Style, declaration: str) -> Style {
     let property = trim(declaration.slice(0_usize, colon))
     let value = trim(declaration.slice(colon + 1_usize, declaration.char_len() - colon - 1_usize))
     if property == "background" || property == "background-color" {
+        if starts_with(value, "linear-gradient(") && ends_with(value, ")") {
+            ret css_linear_gradient(style, value)
+        }
         ret style.with_background(css_color(value))
     }
     if property == "color" {
@@ -702,6 +700,42 @@ fn apply_declaration(style: Style, declaration: str) -> Style {
         ret style.with_opacity(css_number(value))
     }
     ret style
+}
+
+fn css_linear_gradient(style: Style, value: str) -> Style {
+    let inner = trim(value.slice(16_usize, value.char_len() - 17_usize))
+    let first_comma = top_level_comma(inner)
+    if first_comma == inner.char_len() {
+        ret style
+    }
+    let first = trim(inner.slice(0_usize, first_comma))
+    let remainder = trim(inner.slice(first_comma + 1_usize, inner.char_len() - first_comma - 1_usize))
+    let second_comma = top_level_comma(remainder)
+    let mut vertical_gradient = true
+    let mut start_value = first
+    let mut end_value = remainder
+    if starts_with(first, "to ") {
+        vertical_gradient = first == "to bottom" || first == "to top"
+        if second_comma == remainder.char_len() {
+            ret style
+        }
+        start_value = trim(remainder.slice(0_usize, second_comma))
+        end_value = trim(remainder.slice(second_comma + 1_usize, remainder.char_len() - second_comma
+                - 1_usize,))
+        if first == "to top" || first == "to left" {
+            let swap = start_value
+            start_value = end_value
+            end_value = swap
+        }
+    }
+    let start = css_color(start_value)
+    let end = css_color(end_value)
+    ret style.with_linear_gradient(if vertical_gradient {
+            LinearGradient::vertical(start, end)
+        } else {
+            LinearGradient::horizontal(start, end)
+        }
+    )
 }
 
 fn css_flex(style: Style, value: str) -> Style {

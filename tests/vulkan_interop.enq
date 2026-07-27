@@ -1,0 +1,26 @@
+import luma::{ExternalVulkanImage, RendererKind, Window}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma Vulkan interop", 96_u32, 64_u32, RendererKind::Vulkan)
+    // Vulkan is optional on test hosts; when selected successfully, every
+    // interop handle must be complete and self-consistent.
+    if !window.available() {
+        ret 0_u32
+    }
+    let interop = window.vulkan_interop()
+    if window.renderer_name() != "vulkan" || !interop.valid() ||
+        interop.instance() == 0_usize || interop.physical_device() == 0_usize ||
+        interop.device() == 0_usize ||
+        interop.graphics_queue_family() == 4294967295_u32 {
+        window.destroy()
+        ret 1_u32
+    }
+    if window.bind_external_vulkan_image(
+            ExternalVulkanImage::new(0_u64, 64_u32, 64_u32, 5_u32)) {
+        window.destroy()
+        ret 2_u32
+    }
+    window.destroy()
+    ret 0_u32
+}

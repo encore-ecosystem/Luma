@@ -1,3 +1,5 @@
+//! Bundled Lucide icon browser and multi-size SVG quality showcase.
+
 import core::fmt::Debug
 import core::option::Option
 import luma:: {
@@ -64,6 +66,30 @@ fn card_label(name: str) -> str {
     ret name.slice(0_usize, 19_usize) + "..."
 }
 
+fn size_sample(document: SvgDocument, size: u32) -> Widget {
+    let pixels = Debug::fmt(size)
+    let mut sample = Widget::panel("icon-size-" + pixels).with_direction(vertical())
+    .with_flex(64.0_f32, 1.0_f32).with_style(
+        css_style("background: #f7fafc; border: 1px solid #d8e0e8; border-radius: 4px; padding: 4px; gap: 3px; align-items: center;"))
+    sample.push(Widget::icon("icon-size-preview-" + pixels, document)
+        .with_flex(size as f32, 0.0_f32).with_style(
+            css_style("width: " + pixels + "px; height: " + pixels + "px; color: #12997e;")))
+    sample.push(Widget::label(pixels + "px").with_flex(16.0_f32, 0.0_f32)
+        .with_style(css_style("color: #66707d; font-size: 9px; text-align: center;")))
+    ret sample
+}
+
+fn size_row(document: SvgDocument, first: u32, second: u32, third: u32, fourth: u32) -> Widget {
+    let mut row = Widget::panel("icon-sizes-" + Debug::fmt(first)).with_direction(horizontal())
+    .with_flex(64.0_f32, 0.0_f32).with_style(
+        css_style("background: transparent; gap: 6px; align-items: center;"))
+    row.push(size_sample(document, first))
+    row.push(size_sample(document, second))
+    row.push(size_sample(document, third))
+    row.push(size_sample(document, fourth))
+    ret row
+}
+
 pub fn view(manager: IconManager, page: usize, selected: str) -> Widget {
     let icons = manager.icons()
     let per_page = 20_usize
@@ -82,14 +108,14 @@ pub fn view(manager: IconManager, page: usize, selected: str) -> Widget {
     let mut header = Widget::panel("icons-header").with_direction(horizontal()).with_flex(46.0_f32, 0.0_f32).with_style(css_style("background: transparent; gap: 10px;"))
     header.push(Widget::heading("Lucide Icons").with_flex(220.0_f32, 0.0_f32))
     header.push(Widget::label(Debug::fmt(manager.len()) + " bundled SVG assets").with_flex(220.0_f32,
-    0.0_f32).with_style(css_style("color: #66707d;")))
+            0.0_f32,).with_style(css_style("color: #66707d;")))
     header.push(Widget::spacer(1.0_f32))
     header.push(Widget::button("icons-previous", "Previous").with_flex(92.0_f32, 0.0_f32).with_disabled(safe_page
-    == 0_usize))
+            == 0_usize))
     header.push(Widget::label(Debug::fmt(safe_page + 1_usize) + " / " + Debug::fmt(page_count)).with_flex(72.0_f32,
-    0.0_f32).with_style(css_style("text-align: center;")))
+            0.0_f32,).with_style(css_style("text-align: center;")))
     header.push(Widget::button("icons-next", "Next").with_flex(72.0_f32, 0.0_f32).with_disabled(safe_page
-    + 1_usize >= page_count))
+            + 1_usize >= page_count))
     root.push(header)
     let mut body = Widget::panel("icons-body").with_direction(horizontal()).with_flex(0.0_f32, 1.0_f32).with_style(css_style("background: transparent; gap: 14px;"))
     let mut grid = Widget::panel("icons-grid").with_flex(0.0_f32, 1.0_f32).with_style(
@@ -115,13 +141,17 @@ pub fn view(manager: IconManager, page: usize, selected: str) -> Widget {
     body.push(grid)
     let chosen = manager.document(selected)
     let mut inspector = Widget::panel("icon-inspector").with_direction(vertical()).with_flex(260.0_f32,
-    0.0_f32).with_style(
+        0.0_f32,).with_style(
         css_style("background: #ffffff; border: 1px solid #cbd3dc; border-radius: 6px; padding: 18px; gap: 14px;"))
     inspector.push(Widget::label("SELECTED ICON").with_flex(20.0_f32, 0.0_f32).with_style(css_style("color: #66707d; font-size: 11px; font-weight: 700;")))
-    inspector.push(Widget::icon("selected-icon", chosen).with_flex(180.0_f32, 0.0_f32).with_style(css_style("color: #12997e; padding: 28px; background: #edf9f6; border-radius: 6px;")))
+    inspector.push(Widget::icon("selected-icon", chosen).with_flex(120.0_f32, 0.0_f32).with_style(css_style("color: #12997e; padding: 20px; background: #edf9f6; border-radius: 6px;")))
+    inspector.push(Widget::label("RENDER SIZES").with_flex(16.0_f32, 0.0_f32)
+        .with_style(css_style("color: #66707d; font-size: 10px; font-weight: 700;")))
+    inspector.push(size_row(chosen, 12_u32, 14_u32, 16_u32, 20_u32))
+    inspector.push(size_row(chosen, 24_u32, 32_u32, 48_u32, 64_u32))
     inspector.push(Widget::heading(selected).with_flex(34.0_f32, 0.0_f32).with_style(css_style("font-size: 20px;")))
-    inspector.push(Widget::label("Scalable, CSS-colored and rendered by Encore").with_flex(48.0_f32,
-    0.0_f32).with_style(css_style("color: #66707d; font-size: 13px;")))
+    inspector.push(Widget::label("Scalable, CSS-colored and rendered by Luma").with_flex(48.0_f32,
+            0.0_f32,).with_style(css_style("color: #66707d; font-size: 13px;")))
     inspector.push(Widget::icon_button("icon-action", "Use this icon", chosen).with_flex(42.0_f32, 0.0_f32).with_style(
             css_style("background: #12997e; color: #ffffff; border: 1px solid #0d745f; border-radius: 4px; padding: 8px;")))
     inspector.push(Widget::spacer(1.0_f32))

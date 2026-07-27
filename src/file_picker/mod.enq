@@ -1,3 +1,5 @@
+//! Native-style file picker state, entries, icons, and widget construction.
+
 import color::Color
 import core::option::Option
 import core::os:: {

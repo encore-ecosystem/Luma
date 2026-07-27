@@ -1,0 +1,24 @@
+import core::vec::Vec
+import luma::{CompositeFrame, RendererKind, Widget, WidgetLayout, Window}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma lifetime test", 64_u32, 64_u32, RendererKind::Software,)
+    if !window.available() { ret 1_u32 }
+    let layout = window.layout(Widget::label("overlay").with_id("overlay-layer"))
+    let mut overlay_layouts = Vec[WidgetLayout]::new()
+    overlay_layouts.push(layout)
+    let mut excluded = Vec[str]::new()
+    excluded.push("overlay-layer")
+    if !window.cache_layout_excluding(layout, excluded) ||
+    !window.cache_overlay_layouts(overlay_layouts) ||
+    !window.present_frame(CompositeFrame::cached(layout)
+            .with_overlays(excluded).with_cached_overlays(true)) {
+        window.destroy()
+        ret 4_u32
+    }
+    let stale_copy = window
+    if !window.destroy() { ret 2_u32 }
+    if stale_copy.is_open() || stale_copy.destroy() { ret 3_u32 }
+    ret 0_u32
+}

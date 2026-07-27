@@ -1,0 +1,46 @@
+import core::option::Option
+import luma::{ExternalVulkanImage, RendererKind, Widget, Window}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer(
+        "Luma render surface test", 100_u32, 80_u32, RendererKind::Software,)
+    if !window.available() {
+        ret 1_u32
+    }
+    let layout = window.layout(Widget::render_surface("scene"))
+    let mut frame = window.prepare_frame(layout, false)
+    match frame.surface("scene") {
+        Option::Some(slot) => {
+            if slot.pixel_width() == 0_u32 || slot.pixel_height() == 0_u32 ||
+            slot.logical_bounds().width() != 100.0_f32 ||
+            slot.logical_bounds().height() != 80.0_f32 {
+                window.destroy()
+                ret 2_u32
+            }
+            let image = ExternalVulkanImage::new(1_u64, slot.pixel_width(),
+                slot.pixel_height(), 5_u32,)
+            if frame.submit_external("scene", slot.generation() + 1_u64, image) {
+                window.destroy()
+                ret 3_u32
+            }
+            let wrong_size = ExternalVulkanImage::new(1_u64,
+                slot.pixel_width() + 1_u32, slot.pixel_height(), 5_u32,)
+            if frame.submit_external("scene", slot.generation(), wrong_size) {
+                window.destroy()
+                ret 4_u32
+            }
+            if !frame.submit_external("scene", slot.generation(), image) {
+                window.destroy()
+                ret 5_u32
+            }
+        }
+        Option::None => {
+            window.destroy()
+            ret 6_u32
+        }
+    }
+    if !window.destroy() {
+        ret 7_u32
+    }
+    ret 0_u32
+}

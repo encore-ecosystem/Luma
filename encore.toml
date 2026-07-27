@@ -9,8 +9,20 @@ dependencies = [
     "index@color@^0.1.0",
     "index@geometry@^0.1.0",
     "workspace@ui_native",
+    "workspace@vulkan_native",
 ]
 
 [features]
-default = []
+default = ["fonts"]
 fonts = []
+
+[lint]
+default = "warn"
+dependencies = "allow"
+
+[lint.rules]
+# Encore's current mutability lint treats collection builders and retained
+# tree patching as immutable even though their methods mutate through the
+# receiver. Keep actionable lints enabled without flooding consumers.
+unused-mut = "allow"
+missing-public-docstring = "allow"

@@ -1,8 +1,16 @@
+//! Native windows, events, rendering, and reactive frame presentation.
+
 import color:: {
     Color, white
 }
+import refrain::css::StyleSheet
 import core::option::Option
+import core::result::Result
+import core::vec::Vec
 import geometry::Rect
+import refrain::display:: {
+    DisplayCommand, DisplayList, RetainedDisplayList
+}
 import refrain::style:: {
     Style, text_center, text_end
 }
@@ -10,24 +18,48 @@ import refrain::svg:: {
     SvgDocument, SvgLine
 }
 import refrain::widget:: {
-    Widget, WidgetLayout, inherit_widget_styles, layout_widget, widget_button, widget_checkbox, widget_heading,
+    ReactiveUi, Widget, WidgetLayout, inherit_widget_styles, layout_widget, widget_button, widget_checkbox,
+    widget_heading,
     widget_color_channel, widget_color_picker, widget_color_swatch, widget_icon, widget_icon_button,
-    widget_icon_card, widget_input, widget_label, widget_link, widget_progress, widget_radio, widget_select,
+    widget_icon_card, widget_input, widget_label, widget_link, widget_progress, widget_radio,
+    widget_render_surface, widget_select,
     widget_separator, widget_slider, widget_spacer, widget_switch, widget_textarea
 }
 import ui_native:: {
-    native_backend_error, native_backend_name, native_begin, native_create, native_gpu_create,
+    native_backend_error, native_backend_name, native_renderer_name, native_renderer_device_name,
+    native_begin, native_create_with_renderer,
     native_circle, native_clip, native_clipboard_set, native_clipboard_text, native_destroy, native_end,
     native_event_key, native_event_modifiers, native_event_text, native_event_wheel_x,
     native_event_wheel_y, native_event_x, native_event_y, native_fill_rect,
     native_font_clear, native_font_load, native_font_register, native_font_select, native_font_style,
-    native_line, native_open, native_poll, native_round_rect,
-    native_stroke_rect, native_text, native_text_height, native_text_index, native_text_width, native_text_wrapped,
-    native_vector_line,
-    native_vector_path_begin, native_vector_path_point, native_vector_path_stroke, native_width, native_height,
-    native_pixel_density,
-    native_pixels, native_layout_cache_begin, native_layout_cache_end, native_cached_frame_begin,
-    native_platform_handle, native_surface_pixels, native_surface_width, native_surface_height, native_surface_pitch
+    native_line, native_open, native_poll, native_wait, native_round_rect,
+    native_stroke_rect, native_text, native_text_height, native_text_index, native_text_width,
+    native_vector_line, native_vector_path_begin, native_vector_path_point, native_vector_path_stroke,
+    native_width, native_height, native_pixel_width, native_pixel_height,
+    native_pixel_density, native_present_count, native_read_pixel,
+    native_layout_cache_begin, native_layout_cache_patch_begin,
+    native_layout_cache_end, native_cached_frame_begin, native_layout_cache_ready,
+    native_overlay_cache_begin, native_overlay_cache_end, native_overlay_cache_draw,
+    native_platform_handle,
+    native_vulkan_instance, native_vulkan_physical_device, native_vulkan_device,
+    native_vulkan_graphics_queue_family, native_external_vulkan_image_bind,
+    native_external_image_draw, native_external_vulkan_images_clear,
+    native_set_present_mode, native_backend_set_error,
+    native_direct_compositor_bind, native_direct_resources_release,
+    native_direct_frame_acquire, native_direct_frame_finish,
+    native_direct_composition_split
+}
+import vulkan_native:: {
+    direct_context_create, direct_context_available, direct_context_error,
+    direct_context_destroy, direct_context_instance, direct_context_physical_device,
+    direct_adapter_name, direct_window_attach, direct_window_available,
+    direct_window_error, direct_window_destroy, direct_device_create,
+    direct_device_available, direct_device_error, direct_device_destroy,
+    direct_device_handle, direct_device_queue_family, direct_swapchain_create,
+    direct_swapchain_available, direct_swapchain_error, direct_swapchain_destroy,
+    native_frame_slot,
+    direct_ui_create, direct_ui_available,
+    direct_ui_error, direct_ui_destroy
 }
 
 pub fn event_none() -> u32 {
@@ -145,21 +177,459 @@ pub struct Window {
     width: u32
     height: u32
     background: Color
+    direct_context: usize
+    direct_window: usize
+    direct_device: usize
+    direct_swapchain: usize
+    direct_compositor: usize
+}
+
+pub enum RendererKind {
+    Auto
+    /// Luma-owned Vulkan instance, device, swapchain and frame graph.
+    DirectVulkan
+    /// SDL's GPU renderer. Kept as the compatibility and reference backend.
+    Vulkan
+    Software
+}
+
+/// Controls whether presentation waits for the display refresh.
+pub enum PresentMode {
+    VSync
+    Immediate
+}
+
+pub struct RendererInfo {
+    backend: str
+    device: str
+    accelerated: bool
+    software_emulated: bool
+}
+
+/// Opaque Vulkan handles owned by Luma. Embedded renderers may allocate
+/// resources on the exact device and, for direct composition, record through
+/// the borrowed backend device/swapchain. They must not destroy any handle.
+pub struct VulkanInterop {
+    instance: usize
+    physical_device: usize
+    device: usize
+    graphics_queue_family: u32
+    swapchain: usize
+    render_device: usize
+}
+
+/// One short-lived frame borrowed from Luma's direct Vulkan swapchain.
+/// Luma retains ownership and is the only component allowed to submit,
+/// present, or destroy it.
+pub struct VulkanFrameInterop {
+    frame: usize
+    swapchain: usize
+    slot: u32
+    pixel_width: u32
+    pixel_height: u32
+}
+
+/// A producer-owned Vulkan image ready for shader reads by Luma. The producer
+/// retains ownership and must finish GPU writes before presentation.
+pub struct ExternalVulkanImage {
+    image: u64
+    width: u32
+    height: u32
+    layout: u32
+}
+
+/// Immutable geometry assigned to one render-surface widget for a prepared
+/// frame. Pixel bounds use the exact edge-rounded destination used by Luma,
+/// so producers never derive a subtly different fractional-DPI extent.
+pub struct SurfaceSlot {
+    id: str
+    logical_bounds: Rect
+    pixel_x: u32
+    pixel_y: u32
+    pixel_width: u32
+    pixel_height: u32
+    density: f32
+    generation: u64
+    clip: Option[Rect]
+}
+
+struct SurfaceSubmission {
+    id: str
+    generation: u64
+    image: ExternalVulkanImage
+}
+
+/// One immutable layout/DPI transaction. A frame containing render surfaces
+/// can only be presented after every visible slot has a matching submission.
+pub struct PreparedFrame {
+    layout: WidgetLayout
+    cached: bool
+    surfaces: Vec[SurfaceSlot]
+    submissions: Vec[SurfaceSubmission]
+    overlays: Vec[str]
+    overlay_layouts: Vec[WidgetLayout]
+    cached_overlays: bool
+}
+
+/// Backend-neutral description of one composed window frame.
+pub struct CompositeFrame {
+    layout: WidgetLayout
+    cached: bool
+    external_target: str
+    external_image: Option[ExternalVulkanImage]
+    external_bounds: Option[Rect]
+    external_top_inset: f32
+    overlays: Vec[str]
+    overlay_layouts: Vec[WidgetLayout]
+    cached_overlays: bool
+}
+
+impl for CompositeFrame {
+    pub fn full(layout: WidgetLayout) -> Self {
+        ret Self {
+            layout, false, "", Option[ExternalVulkanImage]::None,
+            Option[Rect]::None, 0.0_f32, Vec[str]::new(), Vec[WidgetLayout]::new(), false
+        }
+    }
+    pub fn cached(layout: WidgetLayout) -> Self {
+        ret Self {
+            layout, true, "", Option[ExternalVulkanImage]::None,
+            Option[Rect]::None, 0.0_f32, Vec[str]::new(), Vec[WidgetLayout]::new(), false
+        }
+    }
+    pub fn with_external_vulkan_image(self: Self, target: str,
+        image: ExternalVulkanImage, top_inset: f32,) -> Self {
+        ret Self {
+            self.layout, self.cached, target,
+            Option[ExternalVulkanImage]::Some(image), Option[Rect]::None,
+            top_inset, self.overlays, self.overlay_layouts, self.cached_overlays
+        }
+    }
+    /// Uses caller-retained geometry for an embedded image, avoiding a
+    /// recursive target lookup on every animation frame.
+    pub fn with_external_vulkan_image_at(self: Self, target: str,
+        image: ExternalVulkanImage, bounds: Rect, top_inset: f32,) -> Self {
+        ret Self {
+            self.layout, self.cached, target,
+            Option[ExternalVulkanImage]::Some(image), Option[Rect]::Some(bounds),
+            top_inset, self.overlays, self.overlay_layouts, self.cached_overlays
+        }
+    }
+    pub fn with_overlays(self: Self, overlays: Vec[str]) -> Self {
+        ret Self {
+            self.layout, self.cached, self.external_target,
+            self.external_image, self.external_bounds, self.external_top_inset,
+            overlays, self.overlay_layouts, self.cached_overlays
+        }
+    }
+    /// Supplies already indexed overlay subtrees. `with_overlays` still names
+    /// the targets excluded from the base cache; these layouts avoid searching
+    /// the full tree again during every composed frame.
+    pub fn with_overlay_layouts(self: Self, layouts: Vec[WidgetLayout]) -> Self {
+        ret Self {
+            self.layout, self.cached, self.external_target,
+            self.external_image, self.external_bounds, self.external_top_inset,
+            self.overlays, layouts, self.cached_overlays
+        }
+    }
+    /// Composites a previously prepared transparent overlay texture after the
+    /// external image. The cache is refreshed only when overlay state changes.
+    pub fn with_cached_overlays(self: Self, enabled: bool) -> Self {
+        ret Self {
+            self.layout, self.cached, self.external_target,
+            self.external_image, self.external_bounds, self.external_top_inset,
+            self.overlays, self.overlay_layouts, enabled
+        }
+    }
+}
+
+impl for RendererKind {
+    fn native_value(self: Self) -> u32 {
+        match self {
+            RendererKind::Auto => {
+                ret 0_u32
+            }
+            RendererKind::DirectVulkan => {
+                ret 3_u32
+            }
+            RendererKind::Vulkan => {
+                ret 1_u32
+            }
+            RendererKind::Software => {
+                ret 2_u32
+            }
+        }
+    }
+}
+
+impl for PresentMode {
+    fn native_value(self: Self) -> u32 {
+        match self {
+            PresentMode::VSync => {
+                ret 0_u32
+            }
+            PresentMode::Immediate => {
+                ret 1_u32
+            }
+        }
+    }
+}
+
+impl for RendererInfo {
+    pub fn new(backend: str) -> Self {
+        ret RendererInfo::with_device(backend, backend)
+    }
+    fn with_device(backend: str, device: str) -> Self {
+        let software = backend == "software" || backend == "unavailable"
+        let emulated = software || device.contains("llvmpipe") || device.contains("lavapipe") ||
+        device.contains("SwiftShader") || device.contains("swiftshader")
+        ret Self {
+            backend, device, !software, emulated
+        }
+    }
+    pub fn backend(self: Self) -> str {
+        ret self.backend
+    }
+    pub fn device(self: Self) -> str {
+        ret self.device
+    }
+    pub fn accelerated(self: Self) -> bool {
+        ret self.accelerated
+    }
+    pub fn software_emulated(self: Self) -> bool {
+        ret self.software_emulated
+    }
+}
+
+impl for VulkanInterop {
+    fn new(instance: usize, physical_device: usize, device: usize,
+        graphics_queue_family: u32, swapchain: usize, render_device: usize,) -> Self {
+        ret Self {
+            instance, physical_device, device, graphics_queue_family,
+            swapchain, render_device
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.instance != 0_usize && self.physical_device != 0_usize &&
+        self.device != 0_usize && self.graphics_queue_family != 4294967295_u32
+    }
+    pub fn instance(self: Self) -> usize {
+        ret self.instance
+    }
+    pub fn physical_device(self: Self) -> usize {
+        ret self.physical_device
+    }
+    pub fn device(self: Self) -> usize {
+        ret self.device
+    }
+    pub fn graphics_queue_family(self: Self) -> u32 {
+        ret self.graphics_queue_family
+    }
+    pub fn swapchain(self: Self) -> usize {
+        ret self.swapchain
+    }
+    /// Opaque Luma RHI device owner used only for direct frame recording.
+    pub fn render_device(self: Self) -> usize {
+        ret self.render_device
+    }
+}
+
+impl for VulkanFrameInterop {
+    fn new(frame: usize, swapchain: usize, pixel_width: u32, pixel_height: u32) -> Self {
+        ret Self {
+            frame, swapchain,
+            if frame == 0_usize { 0_u32 } else { native_frame_slot(frame) },
+            pixel_width, pixel_height
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.frame != 0_usize && self.swapchain != 0_usize &&
+            self.pixel_width > 0_u32 && self.pixel_height > 0_u32
+    }
+    pub fn frame(self: Self) -> usize {
+        ret self.frame
+    }
+    pub fn swapchain(self: Self) -> usize {
+        ret self.swapchain
+    }
+    pub fn slot(self: Self) -> u32 {
+        ret self.slot
+    }
+    pub fn pixel_width(self: Self) -> u32 {
+        ret self.pixel_width
+    }
+    pub fn pixel_height(self: Self) -> u32 {
+        ret self.pixel_height
+    }
+}
+
+impl for ExternalVulkanImage {
+    pub fn new(image: u64, width: u32, height: u32, layout: u32) -> Self {
+        ret Self {
+            image, width, height, layout
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.image != 0_u64 && self.width > 0_u32 && self.height > 0_u32
+    }
+    pub fn image(self: Self) -> u64 {
+        ret self.image
+    }
+    pub fn width(self: Self) -> u32 {
+        ret self.width
+    }
+    pub fn height(self: Self) -> u32 {
+        ret self.height
+    }
+    pub fn layout(self: Self) -> u32 {
+        ret self.layout
+    }
+}
+
+impl for SurfaceSlot {
+    pub fn id(self: Self) -> str {
+        ret self.id
+    }
+    pub fn logical_bounds(self: Self) -> Rect {
+        ret self.logical_bounds
+    }
+    pub fn pixel_x(self: Self) -> u32 {
+        ret self.pixel_x
+    }
+    pub fn pixel_y(self: Self) -> u32 {
+        ret self.pixel_y
+    }
+    pub fn pixel_width(self: Self) -> u32 {
+        ret self.pixel_width
+    }
+    pub fn pixel_height(self: Self) -> u32 {
+        ret self.pixel_height
+    }
+    pub fn density(self: Self) -> f32 {
+        ret self.density
+    }
+    pub fn generation(self: Self) -> u64 {
+        ret self.generation
+    }
+    pub fn clip(self: Self) -> Option[Rect] {
+        ret self.clip
+    }
+}
+
+impl for PreparedFrame {
+    pub fn surface(self: Self, id: str) -> Option[SurfaceSlot] {
+        for slot in self.surfaces {
+            if slot.id == id {
+                ret Option[SurfaceSlot]::Some(slot)
+            }
+        }
+        ret Option[SurfaceSlot]::None
+    }
+    pub fn surfaces(self: Self) -> Vec[SurfaceSlot] {
+        ret self.surfaces
+    }
+    /// Adds producer output only when it exactly matches the prepared slot.
+    /// This rejects a completed image from an earlier resize generation.
+    pub fn submit_external(self: mut Self, id: str, generation: u64,
+        image: ExternalVulkanImage,) -> bool {
+        match self.surface(id) {
+            Option::Some(slot) => {
+                if slot.generation != generation || !image.valid() ||
+                image.width() != slot.pixel_width ||
+                image.height() != slot.pixel_height {
+                    ret false
+                }
+            }
+            Option::None => {
+                ret false
+            }
+        }
+        let mut index = 0_usize
+        while index < self.submissions.len() {
+            match self.submissions.get(index) {
+                Option::Some(submission) => {
+                    if submission.id == id {
+                        self.submissions.set(index, SurfaceSubmission {
+                            id, generation, image
+                        })
+                        ret true
+                    }
+                }
+                Option::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        self.submissions.push(SurfaceSubmission {
+            id, generation, image
+        })
+        ret true
+    }
+    pub fn with_overlays(self: Self, overlays: Vec[str],
+        layouts: Vec[WidgetLayout], cached: bool,) -> Self {
+        ret Self {
+            self.layout, self.cached, self.surfaces, self.submissions,
+            overlays, layouts, cached
+        }
+    }
 }
 
 impl for Window {
-    pub fn create(title: str, width: u32, height: u32) -> Window {
-        ret Window {
-            native_create(title, width, height), width, height, white()
+    /// Creates a window and preserves the native failure at the call site.
+    pub fn try_create(title: str, width: u32, height: u32) ->
+    Result[Window, str] {
+        ret Window::try_create_with_renderer(
+            title, width, height, RendererKind::Auto,)
+    }
+    pub fn try_create_with_renderer(title: str, width: u32, height: u32,
+        renderer: RendererKind,) -> Result[Window, str] {
+        let window = Window::create_with_renderer(title, width, height, renderer)
+        ret if window.available() {
+            Result[Window, str]::Ok(window)
+        } else {
+            Result[Window, str]::Err(backend_error())
         }
     }
-    pub fn create_gpu_surface(title: str, width: u32, height: u32) -> Window {
+    pub fn create(title: str, width: u32, height: u32) -> Window {
+        ret Window::create_with_renderer(title, width, height, RendererKind::Auto)
+    }
+    /// Creates a window with an explicit rendering policy. `Auto` selects the
+    /// Luma-owned Direct Vulkan backend; initialization errors are returned
+    /// without selecting another renderer.
+    pub fn create_with_renderer(title: str, width: u32, height: u32,
+        renderer: RendererKind,) -> Window {
+        match renderer {
+            RendererKind::Auto => {
+                ret create_direct_vulkan_window(title, width, height)
+            }
+            RendererKind::DirectVulkan => {
+                ret create_direct_vulkan_window(title, width, height)
+            }
+            _ => {
+            }
+        }
         ret Window {
-            native_gpu_create(title, width, height), width, height, white()
+            native_create_with_renderer(title, width, height, renderer.native_value()),
+            width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize
         }
     }
     pub fn available(self: Self) -> bool {
         ret self.handle != 0_usize
+    }
+    /// Changes presentation pacing without recreating the window. Normal Luma
+    /// applications use VSync; simulation and profiling tools may opt into
+    /// Immediate presentation.
+    pub fn set_present_mode(self: Self, mode: PresentMode) -> bool {
+        ret self.handle != 0_usize &&
+        native_set_present_mode(self.handle, mode.native_value())
+    }
+    pub fn try_set_present_mode(self: Self, mode: PresentMode) ->
+    Result[bool, str] {
+        ret if self.set_present_mode(mode) {
+            Result[bool, str]::Ok(true)
+        } else {
+            Result[bool, str]::Err(backend_error())
+        }
     }
     pub fn is_open(self: Self) -> bool {
         ret self.handle != 0_usize && native_open(self.handle)
@@ -188,11 +658,112 @@ impl for Window {
             value
         }
     }
+    pub fn pixel_width(self: Self) -> u32 {
+        let value = if self.handle == 0_usize {
+            0_u32
+        } else {
+            native_pixel_width(self.handle)
+        }
+        ret if value == 0_u32 {
+            ((self.width() as f32) * self.pixel_density()) as u32
+        } else {
+            value
+        }
+    }
+    pub fn pixel_height(self: Self) -> u32 {
+        let value = if self.handle == 0_usize {
+            0_u32
+        } else {
+            native_pixel_height(self.handle)
+        }
+        ret if value == 0_u32 {
+            ((self.height() as f32) * self.pixel_density()) as u32
+        } else {
+            value
+        }
+    }
     pub fn pixel_density(self: Self) -> f32 {
         if self.handle == 0_usize {
             ret 1.0_f32
         }
         ret native_pixel_density(self.handle)
+    }
+    /// Number of complete application frames submitted by this window.
+    /// Transparent compositor-setup work is intentionally excluded.
+    pub fn presented_frames(self: Self) -> u64 {
+        ret if self.handle == 0_usize {
+            0_u64
+        } else {
+            native_present_count(self.handle)
+        }
+    }
+    /// Reads one logical pixel from the active frame. This is a synchronous
+    /// diagnostic operation intended for screenshots and visual regression
+    /// tests, never for an interactive frame loop.
+    pub fn read_pixel(self: Self, x: u32, y: u32) -> Color {
+        let packed = if self.handle == 0_usize {
+            0_u32
+        } else {
+            native_read_pixel(self.handle, x, y)
+        }
+        ret Color::rgba((packed >> 24) as u8,(packed >> 16) as u8,
+            (packed >> 8) as u8, packed as u8,)
+    }
+    /// Returns the SDL renderer selected for this window, for example
+    /// "vulkan", "metal", "direct3d12", "opengl", or "software".
+    pub fn renderer_name(self: Self) -> str {
+        if self.handle == 0_usize {
+            ret "unavailable"
+        }
+        ret native_renderer_name(self.handle)
+    }
+    /// Reports both the SDL backend and the physical adapter. Software Vulkan
+    /// implementations such as llvmpipe are detected by adapter name.
+    pub fn renderer_info(self: Self) -> RendererInfo {
+        let backend = self.renderer_name()
+        let device = if self.direct_context != 0_usize {
+            direct_adapter_name(self.direct_context, 0_usize)
+        } else {
+            if self.handle == 0_usize {
+                "unavailable"
+            } else {
+                native_renderer_device_name(self.handle)
+            }
+        }
+        ret RendererInfo::with_device(backend, device)
+    }
+    pub fn vulkan_interop(self: Self) -> VulkanInterop {
+        if self.direct_context != 0_usize && self.direct_device != 0_usize {
+            ret VulkanInterop::new(direct_context_instance(self.direct_context),
+                direct_context_physical_device(self.direct_context, 0_usize),
+                direct_device_handle(self.direct_device),
+                direct_device_queue_family(self.direct_device), self.direct_swapchain,
+                self.direct_device,)
+        }
+        if self.handle == 0_usize || self.renderer_name() != "vulkan" {
+            ret VulkanInterop::new(0_usize, 0_usize, 0_usize,
+                4294967295_u32, 0_usize, 0_usize,)
+        }
+        ret VulkanInterop::new(native_vulkan_instance(self.handle),
+            native_vulkan_physical_device(self.handle),
+            native_vulkan_device(self.handle),
+            native_vulkan_graphics_queue_family(self.handle), 0_usize, 0_usize,)
+    }
+    /// Wraps an offscreen VkImage created on `vulkan_interop().device()`.
+    /// No pixel upload occurs. The producer must synchronize its queue and
+    /// transition the image to the supplied shader-readable layout first.
+    pub fn bind_external_vulkan_image(self: Self, image: ExternalVulkanImage) -> bool {
+        if self.handle == 0_usize || !image.valid() {
+            ret false
+        }
+        ret native_external_vulkan_image_bind(self.handle, image.image(),
+            image.width(), image.height(), image.layout(),)
+    }
+    /// Releases renderer-side wrappers before a producer destroys or replaces
+    /// its Vulkan images. Luma never destroys the producer-owned VkImage.
+    pub fn clear_external_vulkan_images(self: Self) -> bool {
+        ret self.handle != 0_usize &&
+        native_external_vulkan_images_clear(self.handle)
     }
     pub fn platform_handle(self: Self) -> usize {
         ret if self.handle == 0_usize {
@@ -201,37 +772,11 @@ impl for Window {
             native_platform_handle(self.handle)
         }
     }
-    pub fn surface_pixels(self: Self) -> usize {
-        ret if self.handle == 0_usize {
-            0_usize
-        } else {
-            native_surface_pixels(self.handle)
-        }
-    }
-    pub fn surface_width(self: Self) -> u32 {
-        ret if self.handle == 0_usize {
-            0_u32
-        } else {
-            native_surface_width(self.handle)
-        }
-    }
-    pub fn surface_height(self: Self) -> u32 {
-        ret if self.handle == 0_usize {
-            0_u32
-        } else {
-            native_surface_height(self.handle)
-        }
-    }
-    pub fn surface_pitch(self: Self) -> u32 {
-        ret if self.handle == 0_usize {
-            0_u32
-        } else {
-            native_surface_pitch(self.handle)
-        }
-    }
     pub fn with_background(self: Self, color: Color) -> Window {
         ret Window {
-            self.handle, self.width, self.height, color
+            self.handle, self.width, self.height, color, self.direct_context,
+            self.direct_window, self.direct_device, self.direct_swapchain,
+            self.direct_compositor
         }
     }
     pub fn poll(self: Self) -> Event {
@@ -245,6 +790,22 @@ impl for Window {
             native_event_key(self.handle), native_event_modifiers(self.handle), native_event_wheel_x(self.handle),
             native_event_wheel_y(self.handle), native_event_text(self.handle)
         }
+    }
+    /// Waits until an OS event arrives or the timeout expires, then returns
+    /// the next coalesced event. This is the event-driven alternative to
+    /// application-side polling and sleeping.
+    pub fn wait(self: Self, timeout_ms: u32) -> Event {
+        if self.handle == 0_usize {
+            ret Event::none()
+        }
+        let _ready = native_wait(self.handle, timeout_ms)
+        ret self.poll()
+    }
+    /// Sleeps until the operating system delivers an event. A low-frequency
+    /// watchdog wake keeps signal-driven shutdown and future scheduler
+    /// deadlines observable without a busy loop.
+    pub fn wait_event(self: Self) -> Event {
+        ret self.wait(1000_u32)
     }
     pub fn begin(self: Self, color: Color) -> bool {
         if self.handle == 0_usize {
@@ -289,39 +850,33 @@ impl for Window {
         }
         ret native_text(self.handle, x, y, value, color.packed())
     }
-    #cfg(feature = "fonts")
     pub fn load_font(self: Self, path: str, size: f32) -> bool {
         ret self.load_font_with_weight(path, size, 400_u32)
     }
-    #cfg(feature = "fonts")
     pub fn load_font_with_weight(self: Self, path: str, size: f32, weight: u32) -> bool {
         if self.handle == 0_usize || size <= 0.0_f32 {
             ret false
         }
         ret native_font_load(self.handle, path, size, weight)
     }
-    #cfg(feature = "fonts")
     pub fn register_font(self: Self, family: str, path: str) -> bool {
         if self.handle == 0_usize || family == "" || path == "" {
             ret false
         }
         ret native_font_register(self.handle, family, path)
     }
-    #cfg(feature = "fonts")
     pub fn select_font(self: Self, family: str, size: f32, weight: u32) -> bool {
         if self.handle == 0_usize || family == "" || size <= 0.0_f32 {
             ret false
         }
         ret native_font_select(self.handle, family, size, weight)
     }
-    #cfg(feature = "fonts")
     pub fn clear_font(self: Self) -> bool {
         if self.handle == 0_usize {
             ret false
         }
         ret native_font_clear(self.handle)
     }
-    #cfg(feature = "fonts")
     pub fn text_width(self: Self, value: str) -> f32 {
         if self.handle == 0_usize {
             ret 0.0_f32
@@ -340,7 +895,6 @@ impl for Window {
         }
         ret wrapped_text_index(self.handle, value, width, x, y)
     }
-    #cfg(feature = "fonts")
     pub fn text_height(self: Self, value: str) -> f32 {
         if self.handle == 0_usize {
             ret 0.0_f32
@@ -353,98 +907,819 @@ impl for Window {
         }
         ret native_end(self.handle)
     }
+    /// Replays a backend-independent display list through the renderer owned
+    /// by this window. Vulkan and software backends share this entrypoint.
+    pub fn draw_display_list(self: Self, list: DisplayList) -> bool {
+        if self.handle == 0_usize || !native_begin(self.handle, self.background.packed()) {
+            ret false
+        }
+        replay_display_commands(self.handle, list.commands(), Option[Rect]::None)
+        ret native_end(self.handle)
+    }
+    /// Compiles the stable base segments into the backend cache. Overlay
+    /// segments remain transient and are composed at presentation time.
+    pub fn cache_retained_display_list(self: Self,
+        retained: RetainedDisplayList,) -> bool {
+        if self.handle == 0_usize ||
+        !native_layout_cache_begin(self.handle, self.background.packed()) {
+            ret false
+        }
+        for segment in retained.segments() {
+            if !segment.overlay() {
+                replay_display_commands(self.handle,
+                    segment.commands(), Option[Rect]::None,)
+            }
+        }
+        ret native_layout_cache_end(self.handle)
+    }
+    /// Applies only damaged base regions. Each patch replays intersecting
+    /// segments in original paint order and keeps damage as the outer clip.
+    pub fn commit_retained_display_list(self: Self,
+        retained: RetainedDisplayList,) -> bool {
+        if self.handle == 0_usize || !native_layout_cache_ready(self.handle) {
+            ret false
+        }
+        let mut committed = true
+        for damage in retained.damage() {
+            if native_layout_cache_patch_begin(self.handle,
+                self.background.packed(), damage.x(), damage.y(),
+                damage.width(), damage.height(),) {
+                for segment in retained.segments() {
+                    if !segment.overlay() && segment.intersects(damage) {
+                        replay_display_commands(self.handle,
+                            segment.commands(), Option[Rect]::Some(damage),)
+                    }
+                }
+                committed = native_layout_cache_end(self.handle) && committed
+            } else {
+                committed = false
+            }
+        }
+        ret committed
+    }
+    /// Presents the cached base and transient overlay segments.
+    pub fn present_retained_display_list(self: Self,
+        retained: RetainedDisplayList,) -> bool {
+        if self.handle == 0_usize ||
+        !native_cached_frame_begin(self.handle, self.background.packed()) {
+            ret false
+        }
+        for segment in retained.segments() {
+            if segment.overlay() {
+                replay_display_commands(self.handle,
+                    segment.commands(), Option[Rect]::None,)
+            }
+        }
+        ret native_end(self.handle)
+    }
     pub fn draw(self: Self, root: Widget) -> WidgetLayout {
         let layout = self.layout(root)
         self.draw_layout(layout)
         ret layout
     }
+    /// Creates a retained reactive tree, uploads its stable base frame to the
+    /// renderer cache, and presents it. Subsequent paint-only updates should
+    /// use `draw_reactive` instead of rebuilding the whole widget tree.
+    pub fn reactive(self: Self, root: Widget) -> ReactiveUi {
+        let layout = self.layout(root)
+        if self.cache_layout(layout) {
+            let _presented = self.draw_cached_layout()
+        } else {
+            // A backend without render-target support still gets one complete
+            // first frame; it never exposes a technical or partial frame.
+            let _presented = self.draw_layout(layout)
+        }
+        ret ReactiveUi::new(layout)
+    }
+    /// Flushes pending subtree layout work, commits only dirty widgets into
+    /// the cached frame, and presents the result.
+    pub fn draw_reactive(self: Self, reactive: mut ReactiveUi) -> ReactiveUi {
+        if reactive.needs_structure() {
+            let _presented = if native_layout_cache_ready(self.handle) {
+                self.draw_cached_layout()
+            } else {
+                self.draw_layout(reactive.layout())
+            }
+            ret reactive
+        }
+        if reactive.needs_layout() && !reactive.flush_layout() {
+            ret reactive
+        }
+        if !native_layout_cache_ready(self.handle) {
+            if self.cache_layout(reactive.layout()) {
+                let _presented = self.draw_cached_layout()
+                reactive.clear_paint()
+            } else {
+                let _presented = self.draw_layout(reactive.layout())
+            }
+            ret reactive
+        }
+        let targets = reactive.paint_targets()
+        let mut cache_valid = true
+        if targets.len() > 0_usize {
+            let committed = self.commit_cached_layout_targets(reactive.layout(), targets, Vec[str]::new())
+            if committed {
+                reactive.clear_paint()
+            } else {
+                cache_valid = false
+            }
+        }
+        if cache_valid {
+            let _presented = self.draw_cached_layout()
+        } else {
+            let _presented = self.draw_layout(reactive.layout())
+            if self.cache_layout(reactive.layout()) {
+                reactive.clear_paint()
+            }
+        }
+        ret reactive
+    }
+    /// Applies one transient CSS state directly to the retained widget index.
+    /// The original declarative widget is captured once and restored when the
+    /// state clears, so pseudo-only declarations cannot leak into the base
+    /// style or require rebuilding the complete tree.
+    pub fn patch_interaction_style(self: Self, reactive: mut ReactiveUi,
+        sheet: StyleSheet, id: str, hovered: bool, active: bool,
+        focused: bool,) -> bool {
+        if id == "" {
+            ret false
+        }
+        match reactive.interaction_base(id) {
+            Option::Some(base) => {
+                if !hovered && !active && !focused {
+                    let restored = reactive.restore_widget(id,
+                        base.with_focus(false),)
+                    reactive.release_interaction_base(id)
+                    ret restored
+                }
+                let styled = base.with_style(sheet.style(base, hovered, active,
+                        focused,)).with_focus(focused)
+                ret reactive.patch_widget(id, styled)
+            }
+            Option::None => {
+                ret false
+            }
+        }
+    }
+    /// Reflows a retained reactive tree after a window resize, rebuilds the
+    /// cached frame, and presents it.
+    pub fn relayout_reactive(self: Self, reactive: mut ReactiveUi) -> ReactiveUi {
+        let layout = self.relayout(reactive.layout())
+        reactive.replace_layout(layout)
+        if self.cache_layout(layout) {
+            let _presented = self.draw_cached_layout()
+        } else {
+            let _presented = self.draw_layout(layout)
+        }
+        ret reactive
+    }
+    /// Replaces the complete root after a structural state change and rebuilds
+    /// the retained cache while preserving the caller's `ReactiveUi` value.
+    pub fn rebuild_reactive(self: Self, reactive: mut ReactiveUi, root: Widget) -> ReactiveUi {
+        let layout = self.layout(root)
+        reactive.replace_layout(layout)
+        if self.cache_layout(layout) {
+            let _presented = self.draw_cached_layout()
+        } else {
+            let _presented = self.draw_layout(layout)
+        }
+        ret reactive
+    }
+    /// Reconciles a new declarative tree and automatically chooses paint,
+    /// layout, or structural work.
+    pub fn update_reactive(self: Self, reactive: mut ReactiveUi,
+        root: Widget,) -> ReactiveUi {
+        let change = reactive.reconcile(root)
+        if change == 0_u32 {
+            ret reactive
+        }
+        if change >= 2_u32 {
+            ret self.rebuild_reactive(reactive, root)
+        }
+        ret self.draw_reactive(reactive)
+    }
+    /// Applies a new styled tree while preserving geometry, invalidates the
+    /// requested stable widget IDs, and commits only their screen regions.
+    pub fn restyle_reactive(self: Self, reactive: mut ReactiveUi, root: Widget,
+        targets: Vec[str],) -> ReactiveUi {
+        let mut replaced = false
+        let replacements = root.find_many(targets)
+        for raw in replacements {
+            let target = raw.id()
+            if target != "" {
+                // The retained widget already contains the effective parent
+                // text style. Seed only this replacement from it, then inherit
+                // within the replacement subtree. No unrelated layout branch
+                // is traversed or reconstructed.
+                match reactive.find_widget(target) {
+                    Option::Some(previous) => {
+                        let replacement = inherit_widget_styles(
+                            raw.with_style(raw.style().inherit_text(
+                                    previous.style(),)),)
+                        replaced = reactive.replace_subtree(target,
+                            replacement,) || replaced
+                    }
+                    Option::None => {
+                    }
+                }
+            }
+        }
+        if !replaced {
+            ret reactive
+        }
+        ret self.draw_reactive(reactive)
+    }
     pub fn layout(self: Self, root: Widget) -> WidgetLayout {
         ret layout_widget(inherit_widget_styles(root),
+            Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),)
+    }
+    /// Reflows the current retained tree for new window bounds without asking
+    /// application code to construct the widget tree again.
+    pub fn relayout(self: Self, layout: WidgetLayout) -> WidgetLayout {
+        ret layout_widget(layout.retained_widget(),
             Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),)
     }
     pub fn restyle_layout(self: Self, layout: WidgetLayout, root: Widget) -> WidgetLayout {
         ret layout.restyle(inherit_widget_styles(root))
     }
-    pub fn draw_layout(self: Self, layout: WidgetLayout) -> bool {
-        if self.handle != 0_usize && native_begin(self.handle, self.background.packed()) {
-            render_layout(self.handle, layout, Option[Rect]::None)
-            ret native_end(self.handle)
+    /// Captures render-surface geometry and DPI for one immutable frame
+    /// transaction. Producers must render against the returned slot rather
+    /// than querying layout and window metrics independently.
+    pub fn prepare_frame(self: Self, layout: WidgetLayout, cached: bool) -> PreparedFrame {
+        let density = self.pixel_density()
+        let logical_width = self.width()
+        let logical_height = self.height()
+        let scale_x = if logical_width == 0_u32 {
+            density
+        } else {
+            (self.pixel_width() as f32) /(logical_width as f32)
         }
-        ret false
+        let scale_y = if logical_height == 0_u32 {
+            density
+        } else {
+            (self.pixel_height() as f32) /(logical_height as f32)
+        }
+        let mut surfaces = Vec[SurfaceSlot]::new()
+        collect_surface_slots(layout, scale_x, scale_y, density, surfaces)
+        ret PreparedFrame {
+            layout, cached, surfaces, Vec[SurfaceSubmission]::new(),
+            Vec[str]::new(), Vec[WidgetLayout]::new(), false
+        }
     }
-    pub fn draw_layout_with_pixels(self: Self, layout: WidgetLayout, target: str, pixels: usize,
-        source_width: u32, source_height: u32, source_pitch: u32, top_inset: f32,) -> bool {
-        if self.handle == 0_usize || !native_begin(self.handle, self.background.packed()) {
+    /// Builds the retained base for a prepared frame. Render surfaces and
+    /// transient overlays are excluded automatically.
+    pub fn cache_prepared_frame(self: Self, frame: PreparedFrame) -> bool {
+        let mut excluded = Vec[str]::new()
+        for slot in frame.surfaces {
+            excluded.push(slot.id)
+        }
+        for overlay in frame.overlays {
+            excluded.push(overlay)
+        }
+        ret self.cache_layout_excluding(frame.layout, excluded)
+    }
+    /// Presents only a complete prepared transaction. A missing, stale or
+    /// incorrectly sized producer image leaves the previous complete frame on
+    /// screen instead of exposing mixed resize generations.
+    pub fn present_prepared(self: Self, frame: PreparedFrame) -> bool {
+        if self.handle == 0_usize {
             ret false
         }
-        render_layout(self.handle, layout, Option[Rect]::None)
-        match layout.find_bounds(target) {
-            Option[Rect]::Some(bounds) => {
-                let height = bounds.height() - top_inset
-                if pixels != 0_usize && height > 0.0_f32 {
-                    native_pixels(self.handle, pixels, source_width, source_height, source_pitch,
-                        bounds.x(), bounds.y() + top_inset, bounds.width(), height,)
+        for slot in frame.surfaces {
+            let mut matched = false
+            for submission in frame.submissions {
+                if submission.id == slot.id &&
+                submission.generation == slot.generation &&
+                submission.image.width() == slot.pixel_width &&
+                submission.image.height() == slot.pixel_height {
+                    matched = true
                 }
             }
-            Option[Rect]::None => {
+            if !matched {
+                ret false
+            }
+        }
+        let begun = if frame.cached {
+            native_cached_frame_begin(self.handle, self.background.packed())
+        } else {
+            native_begin(self.handle, self.background.packed())
+        }
+        if !begun {
+            ret false
+        }
+        if !frame.cached {
+            let mut excluded = frame.overlays
+            for slot in frame.surfaces {
+                excluded.push(slot.id)
+            }
+            render_layout_filtered(self.handle, frame.layout,
+                Option[Rect]::None, excluded,)
+        }
+        for slot in frame.surfaces {
+            for submission in frame.submissions {
+                if submission.id == slot.id &&
+                submission.generation == slot.generation {
+                    if !self.bind_external_vulkan_image(submission.image) {
+                        let _ended = native_end(self.handle)
+                        ret false
+                    }
+                    let bounds = slot.logical_bounds
+                    apply_clip(self.handle, slot.clip)
+                    if !native_external_image_draw(self.handle, bounds.x(), bounds.y(),
+                        bounds.width(), bounds.height(),) {
+                        apply_clip(self.handle, Option[Rect]::None)
+                        let _ended = native_end(self.handle)
+                        ret false
+                    }
+                    apply_clip(self.handle, Option[Rect]::None)
+                }
+            }
+        }
+        if frame.cached_overlays {
+            let _overlay = native_overlay_cache_draw(self.handle)
+        } elif frame.overlay_layouts.len() > 0_usize {
+            for overlay in frame.overlay_layouts {
+                render_layout(self.handle, overlay, Option[Rect]::None)
+            }
+        } else {
+            for overlay in frame.overlays {
+                let _drawn = render_layout_target(self.handle, frame.layout,
+                    overlay, Option[Rect]::None,)
             }
         }
         ret native_end(self.handle)
     }
+    /// Records the retained UI transaction and lends Graphene the active
+    /// direct-Vulkan command buffer. The viewport pass is recorded by the
+    /// borrower; Luma later appends these UI batches and remains the sole
+    /// submit/present owner.
+    pub fn begin_vulkan_frame(self: Self, frame: PreparedFrame) -> VulkanFrameInterop {
+        if self.handle == 0_usize || self.direct_swapchain == 0_usize ||
+        self.direct_compositor == 0_usize {
+            ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        let begun = if frame.cached {
+            native_cached_frame_begin(self.handle, self.background.packed())
+        } else {
+            native_begin(self.handle, self.background.packed())
+        }
+        if !begun {
+            ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if !frame.cached {
+            let mut excluded = frame.overlays
+            for slot in frame.surfaces {
+                excluded.push(slot.id)
+            }
+            render_layout_filtered(self.handle, frame.layout,
+                Option[Rect]::None, excluded,)
+        }
+        if !native_direct_composition_split(self.handle) {
+            ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if frame.cached_overlays {
+            let _overlay = native_overlay_cache_draw(self.handle)
+        } elif frame.overlay_layouts.len() > 0_usize {
+            for overlay in frame.overlay_layouts {
+                render_layout(self.handle, overlay, Option[Rect]::None)
+            }
+        } else {
+            for overlay in frame.overlays {
+                let _drawn = render_layout_target(self.handle, frame.layout,
+                    overlay, Option[Rect]::None,)
+            }
+        }
+        let borrowed = native_direct_frame_acquire(self.handle)
+        ret VulkanFrameInterop::new(borrowed, self.direct_swapchain,
+            self.pixel_width(), self.pixel_height(),)
+    }
+    /// Appends Luma's UI pass with color-load semantics, then submits and
+    /// presents the borrowed frame exactly once.
+    pub fn present_vulkan_frame(self: Self, frame: VulkanFrameInterop) -> bool {
+        ret frame.valid() && frame.swapchain() == self.direct_swapchain &&
+            native_direct_frame_finish(self.handle, frame.frame())
+    }
+    /// Presents retained UI, embedded renderer output and transient overlays
+    /// through one composition path.
+    pub fn present_frame(self: Self, frame: CompositeFrame) -> bool {
+        if self.handle == 0_usize {
+            ret false
+        }
+        match frame.external_image {
+            Option::Some(image) => {
+                if !self.bind_external_vulkan_image(image) {
+                    ret false
+                }
+            }
+            Option::None => {
+            }
+        }
+        let begun = if frame.cached {
+            native_cached_frame_begin(self.handle, self.background.packed())
+        } else {
+            native_begin(self.handle, self.background.packed())
+        }
+        if !begun {
+            ret false
+        }
+        if !frame.cached {
+            let mut excluded = frame.overlays
+            if frame.external_target != "" {
+                excluded.push(frame.external_target)
+            }
+            render_layout_filtered(self.handle, frame.layout, Option[Rect]::None, excluded)
+        }
+        match frame.external_image {
+            Option::Some(_) => {
+                let external_bounds = match frame.external_bounds {
+                    Option::Some(bounds) => {
+                        Option[Rect]::Some(bounds)
+                    }
+                    Option::None => {
+                        frame.layout.find_bounds(frame.external_target)
+                    }
+                }
+                match external_bounds {
+                    Option::Some(bounds) => {
+                        let height = bounds.height() - frame.external_top_inset
+                        if height > 0.0_f32 {
+                            let _external = native_external_image_draw(self.handle,
+                                bounds.x(), bounds.y() + frame.external_top_inset,
+                                bounds.width(), height,)
+                        }
+                    }
+                    Option::None => {
+                    }
+                }
+            }
+            Option::None => {
+            }
+        }
+        if frame.cached_overlays {
+            let _overlay = native_overlay_cache_draw(self.handle)
+        } elif frame.overlay_layouts.len() > 0_usize {
+            for overlay_layout in frame.overlay_layouts {
+                render_layout(self.handle, overlay_layout, Option[Rect]::None)
+            }
+        } else {
+            for overlay in frame.overlays {
+                if overlay != "" && overlay != frame.external_target {
+                    let _drawn = render_layout_target(self.handle, frame.layout,
+                        overlay, Option[Rect]::None,)
+                }
+            }
+        }
+        ret native_end(self.handle)
+    }
+    pub fn draw_layout(self: Self, layout: WidgetLayout) -> bool {
+        ret self.present_frame(CompositeFrame::full(layout))
+    }
+    /// Composites a producer-owned Vulkan image into one layout target without
+    /// staging through CPU memory. Both renderers must use `vulkan_interop()`.
+    pub fn draw_layout_with_external_vulkan_image(self: Self, layout: WidgetLayout,
+        target: str, image: ExternalVulkanImage, top_inset: f32,) -> bool {
+        ret self.present_frame(CompositeFrame::full(layout)
+            .with_external_vulkan_image(target, image, top_inset))
+    }
     pub fn cache_layout(self: Self, layout: WidgetLayout) -> bool {
+        ret self.cache_layout_excluding(layout, Vec[str]::new())
+    }
+    /// Builds the retained base without external-renderer targets or transient
+    /// overlays. Excluded layers are composed exactly once by `present_frame`.
+    pub fn cache_layout_excluding(self: Self, layout: WidgetLayout,
+        excluded: Vec[str],) -> bool {
         if self.handle == 0_usize || !native_layout_cache_begin(self.handle, self.background.packed())
         {
             ret false
         }
-        render_layout(self.handle, layout, Option[Rect]::None)
+        render_layout_filtered(self.handle, layout, Option[Rect]::None, excluded)
         ret native_layout_cache_end(self.handle)
     }
-    pub fn draw_cached_layout_with_pixels(self: Self, layout: WidgetLayout, target: str, pixels: usize,
-        source_width: u32, source_height: u32, source_pitch: u32, top_inset: f32,) -> bool {
-        if self.handle == 0_usize || !native_cached_frame_begin(self.handle, self.background.packed())
-        {
+    /// Rebuilds the transparent layer composited above an embedded renderer.
+    /// Applications refresh it on overlay damage, then reuse it across
+    /// continuous viewport frames.
+    pub fn cache_overlay_layouts(self: Self, layouts: Vec[WidgetLayout]) -> bool {
+        if self.handle == 0_usize || !native_overlay_cache_begin(self.handle) {
             ret false
         }
-        match layout.find_bounds(target) {
-            Option[Rect]::Some(bounds) => {
-                let height = bounds.height() - top_inset
-                if pixels != 0_usize && height > 0.0_f32 {
-                    native_pixels(self.handle, pixels, source_width, source_height, source_pitch,
-                        bounds.x(), bounds.y() + top_inset, bounds.width(), height,)
-                }
-            }
-            Option[Rect]::None => {
-            }
+        for layout in layouts {
+            render_layout(self.handle, layout, Option[Rect]::None)
         }
-        ret native_end(self.handle)
+        ret native_overlay_cache_end(self.handle)
+    }
+    pub fn draw_cached_layout_with_external_vulkan_image(self: Self,
+        layout: WidgetLayout, target: str, image: ExternalVulkanImage,
+        top_inset: f32,) -> bool {
+        ret self.present_frame(CompositeFrame::cached(layout)
+            .with_external_vulkan_image(target, image, top_inset))
+    }
+    /// Composites a shared Vulkan image into the retained base and then paints
+    /// transient targets above it. This keeps menus, dialogs and tooltips out
+    /// of the cached texture without hiding them behind the viewport.
+    pub fn draw_cached_layout_targets_with_external_vulkan_image(self: Self,
+        layout: WidgetLayout, target: str, image: ExternalVulkanImage,
+        top_inset: f32, overlay_targets: Vec[str],) -> bool {
+        ret self.present_frame(CompositeFrame::cached(layout)
+            .with_external_vulkan_image(target, image, top_inset)
+            .with_overlays(overlay_targets))
     }
     pub fn draw_cached_layout(self: Self) -> bool {
-        if self.handle == 0_usize || !native_cached_frame_begin(self.handle, self.background.packed())
-        {
+        // The retained texture is already owned by the native renderer; an
+        // empty layout is not available here, so this compatibility method
+        // keeps the minimal direct presentation path.
+        if self.handle == 0_usize ||
+        !native_cached_frame_begin(self.handle, self.background.packed()) {
             ret false
         }
         ret native_end(self.handle)
     }
     pub fn draw_cached_layout_overlays(self: Self, layout: WidgetLayout, first: str, second: str) ->
     bool {
-        if self.handle == 0_usize || !native_cached_frame_begin(self.handle, self.background.packed())
-        {
-            ret false
-        }
+        let mut overlays = Vec[str]::new()
         if first != "" {
-            let _first_drawn = render_layout_target(self.handle, layout, first, Option[Rect]::None)
+            overlays.push(first)
         }
         if second != "" && second != first {
-            let _second_drawn = render_layout_target(self.handle, layout, second, Option[Rect]::None)
+            overlays.push(second)
         }
-        ret native_end(self.handle)
+        ret self.present_frame(CompositeFrame::cached(layout)
+            .with_overlays(overlays))
+    }
+    /// Draws the cached base plus only the retained widgets invalidated by a
+    /// reactive update. Geometry remains unchanged and no tree construction or
+    /// layout pass is performed.
+    pub fn draw_cached_layout_targets(self: Self, layout: WidgetLayout, targets: Vec[str]) -> bool {
+        ret self.present_frame(CompositeFrame::cached(layout)
+            .with_overlays(targets))
+    }
+    /// Commits stable reactive component updates into the retained cache.
+    /// Transient overlays stay composited at frame time so opening and closing
+    /// them never destroys the cached content underneath.
+    pub fn commit_cached_layout_targets(self: Self, layout: WidgetLayout,
+        targets: Vec[str], transient_targets: Vec[str],) -> bool {
+        if self.handle == 0_usize {
+            ret false
+        }
+        let mut committed = true
+        let mut committed_bounds = Vec[Rect]::new()
+        for target in targets {
+            let mut transient = false
+            for transient_target in transient_targets {
+                if target == transient_target {
+                    transient = true
+                }
+            }
+            if target != "" && !transient {
+                match layout.find_bounds(target) {
+                    Option[Rect]::Some(bounds) => {
+                        let mut covered = false
+                        for previous in committed_bounds {
+                            if bounds.x() >= previous.x() && bounds.y() >= previous.y() &&
+                            bounds.right() <= previous.right() &&
+                            bounds.bottom() <= previous.bottom() {
+                                covered = true
+                            }
+                        }
+                        if !covered {
+                            if native_layout_cache_patch_begin(self.handle,
+                                self.background.packed(), bounds.x(), bounds.y(),
+                                bounds.width(), bounds.height(),) {
+                                // Repaint the complete scene through the dirty
+                                // rectangle. Rendering only the target loses
+                                // translucent parent backgrounds and
+                                // overlapping siblings after the cache region
+                                // is cleared.
+                                render_layout(self.handle, layout, Option[Rect]::Some(bounds))
+                                let rendered = true
+                                committed = native_layout_cache_end(self.handle) &&
+                                rendered && committed
+                                if rendered {
+                                    committed_bounds.push(bounds)
+                                }
+                            } else {
+                                committed = false
+                            }
+                        }
+                    }
+                    // The target may have been removed by a later parent
+                    // replacement in the same transaction. The parent patch
+                    // already clears its former pixels.
+                    Option[Rect]::None => {
+                    }
+                }
+            }
+        }
+        ret committed
     }
     pub fn destroy(self: Self) -> bool {
         if self.handle == 0_usize {
             ret false
         }
-        ret native_destroy(self.handle)
+        let mut destroyed = true
+        if self.direct_compositor != 0_usize {
+            destroyed = native_direct_resources_release(self.handle) && destroyed
+        }
+        if self.direct_compositor != 0_usize {
+            destroyed = direct_ui_destroy(self.direct_compositor) && destroyed
+        }
+        if self.direct_swapchain != 0_usize {
+            destroyed = direct_swapchain_destroy(self.direct_swapchain) && destroyed
+        }
+        if self.direct_device != 0_usize {
+            destroyed = direct_device_destroy(self.direct_device) && destroyed
+        }
+        if self.direct_window != 0_usize {
+            destroyed = direct_window_destroy(self.direct_window) && destroyed
+        }
+        if self.direct_context != 0_usize {
+            destroyed = direct_context_destroy(self.direct_context) && destroyed
+        }
+        ret native_destroy(self.handle) && destroyed
     }
+}
+
+fn failed_direct_window(handle: usize, context: usize, window: usize,
+    device: usize, swapchain: usize, compositor: usize, message: str,
+    width: u32, height: u32,) -> Window {
+    native_backend_set_error(message)
+    if compositor != 0_usize {
+        let _compositor = direct_ui_destroy(compositor)
+    }
+    if swapchain != 0_usize {
+        let _swapchain = direct_swapchain_destroy(swapchain)
+    }
+    if device != 0_usize {
+        let _device = direct_device_destroy(device)
+    }
+    if window != 0_usize {
+        let _window = direct_window_destroy(window)
+    }
+    if context != 0_usize {
+        let _context = direct_context_destroy(context)
+    }
+    if handle != 0_usize {
+        let _handle = native_destroy(handle)
+    }
+    ret Window {
+        0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize
+    }
+}
+
+fn create_direct_vulkan_window(title: str, width: u32, height: u32) -> Window {
+    let handle = native_create_with_renderer(title, width, height, 3_u32)
+    if handle == 0_usize {
+        ret Window {
+            0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize
+        }
+    }
+    let context = direct_context_create()
+    if !direct_context_available(context) {
+        ret failed_direct_window(handle, context, 0_usize, 0_usize, 0_usize, 0_usize,
+            direct_context_error(context), width, height,)
+    }
+    let window = direct_window_attach(context, native_platform_handle(handle), width, height)
+    if !direct_window_available(window) {
+        ret failed_direct_window(handle, context, window, 0_usize, 0_usize, 0_usize,
+            direct_window_error(window), width, height,)
+    }
+    let device = direct_device_create(context, window)
+    if !direct_device_available(device) {
+        ret failed_direct_window(handle, context, window, device, 0_usize, 0_usize,
+            direct_device_error(device), width, height,)
+    }
+    let swapchain = direct_swapchain_create(device, window)
+    if !direct_swapchain_available(swapchain) {
+        ret failed_direct_window(handle, context, window, device, swapchain, 0_usize,
+            direct_swapchain_error(swapchain), width, height,)
+    }
+    let compositor = direct_ui_create(device, swapchain)
+    if !direct_ui_available(compositor) ||
+    !native_direct_compositor_bind(handle, compositor) {
+        ret failed_direct_window(handle, context, window, device, swapchain, compositor,
+            direct_ui_error(compositor), width, height,)
+    }
+    ret Window {
+        handle, width, height, white(), context, window, device, swapchain, compositor
+    }
+}
+
+fn surface_edge_floor(value: f32) -> u32 {
+    ret if value <= 0.0_f32 {
+        0_u32
+    } else {
+        value as u32
+    }
+}
+
+fn surface_edge_ceil(value: f32) -> u32 {
+    if value <= 0.0_f32 {
+        ret 0_u32
+    }
+    let floor = value as u32
+    ret if (floor as f32) < value {
+        floor + 1_u32
+    } else {
+        floor
+    }
+}
+
+fn surface_slot_generation(x: u32, y: u32, width: u32, height: u32,
+    density: f32,) -> u64 {
+    // Geometry itself is the generation identity. The factors are pairwise
+    // odd and include density so a same-sized slot on another DPI generation
+    // cannot accidentally accept an old producer image.
+    let scaled_density =(density * 1000.0_f32) as u64
+    ret(x as u64) * 73856093_u64 +(y as u64) * 19349663_u64 +
+    (width as u64) * 83492791_u64 +(height as u64) * 2654435761_u64 +
+    scaled_density * 97531_u64
+}
+
+fn collect_surface_slots(layout: WidgetLayout, scale_x: f32, scale_y: f32,
+    density: f32,
+    slots: mut Vec[SurfaceSlot],) ->() {
+    collect_surface_slots_clipped(layout, scale_x, scale_y, density,
+        Option[Rect]::None, slots,)
+    ret()
+}
+
+fn collect_surface_slots_clipped(layout: WidgetLayout, scale_x: f32,
+    scale_y: f32, density: f32,
+    inherited_clip: Option[Rect], slots: mut Vec[SurfaceSlot],) ->() {
+    let widget = layout.widget()
+    let bounds = layout.bounds()
+    let clip = if widget.style().layout().overflow_hidden() {
+        clipped_bounds(inherited_clip, bounds)
+    } else {
+        inherited_clip
+    }
+    if widget.kind() == widget_render_surface() && widget.id() != "" &&
+    widget.style().visible() && bounds.width() > 0.0_f32 &&
+    bounds.height() > 0.0_f32 {
+        let pixel_x = surface_edge_floor(bounds.x() * scale_x)
+        let pixel_y = surface_edge_floor(bounds.y() * scale_y)
+        let pixel_right = surface_edge_ceil(bounds.right() * scale_x)
+        let pixel_bottom = surface_edge_ceil(bounds.bottom() * scale_y)
+        let pixel_width = if pixel_right > pixel_x {
+            pixel_right - pixel_x
+        } else {
+            1_u32
+        }
+        let pixel_height = if pixel_bottom > pixel_y {
+            pixel_bottom - pixel_y
+        } else {
+            1_u32
+        }
+        slots.push(SurfaceSlot {
+            widget.id(), bounds, pixel_x, pixel_y, pixel_width, pixel_height,
+            density, surface_slot_generation(pixel_x, pixel_y, pixel_width,
+                pixel_height, density,), clip
+        })
+    }
+    for child in layout.children() {
+        collect_surface_slots_clipped(child, scale_x, scale_y, density,
+            clip, slots,)
+    }
+    ret()
+}
+
+fn replay_display_commands(handle: usize, commands: Vec[DisplayCommand],
+    damage: Option[Rect],) ->() {
+    apply_clip(handle, damage)
+    for command in commands {
+        match command {
+            DisplayCommand::FillRect(value) => {
+                let bounds = value.bounds()
+                native_fill_rect(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(),
+                    value.color().packed(),)
+            }
+            DisplayCommand::StrokeRect(value) => {
+                let bounds = value.bounds()
+                native_stroke_rect(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(),
+                    value.color().packed(),)
+            }
+            DisplayCommand::RoundRect(value) => {
+                let bounds = value.bounds()
+                native_round_rect(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(),
+                    value.radius(), value.color().packed(), value.filled(),)
+            }
+            DisplayCommand::Line(value) => {
+                native_vector_line(handle, value.x0(), value.y0(), value.x1(), value.y1(),
+                    value.width(), value.color().packed(),)
+            }
+            DisplayCommand::Text(value) => {
+                native_text(handle, value.x(), value.y(), value.value(), value.color().packed())
+            }
+            DisplayCommand::Clip(value) => {
+                if value.enabled() {
+                    apply_clip(handle, clipped_bounds(damage, value.bounds()))
+                } else {
+                    apply_clip(handle, damage)
+                }
+            }
+        }
+    }
+    apply_clip(handle, Option[Rect]::None)
+    ret()
 }
 
 fn render_layout_target(handle: usize, layout: WidgetLayout, target: str, inherited_clip: Option[Rect])
@@ -477,9 +1752,30 @@ fn render_layout_target(handle: usize, layout: WidgetLayout, target: str, inheri
 }
 
 fn render_layout(handle: usize, layout: WidgetLayout, inherited_clip: Option[Rect]) ->() {
+    render_layout_filtered(handle, layout, inherited_clip, Vec[str]::new())
+    ret()
+}
+
+fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: Option[Rect],
+    excluded: Vec[str],) ->() {
     let widget = layout.widget()
+    if contains_target(excluded, widget.id()) {
+        ret()
+    }
     let bounds = layout.bounds()
     let style = widget.style()
+    // Dirty-region commits pass the damage rectangle as the inherited clip.
+    // A clipping container whose bounds do not touch that damage cannot
+    // contribute any pixels, including through its descendants.
+    match inherited_clip {
+        Option::Some(damage) => {
+            if !rectangles_intersect(layout.paint_bounds(), damage) {
+                ret()
+            }
+        }
+        Option::None => {
+        }
+    }
     let opacity = style.opacity() * if widget.disabled() {
         0.5_f32
     } else {
@@ -495,7 +1791,7 @@ fn render_layout(handle: usize, layout: WidgetLayout, inherited_clip: Option[Rec
     let foreground = apply_opacity(style.foreground(), opacity)
     let border_color = apply_opacity(style.border_color(), opacity)
     if !style.visible() {
-        render_children(handle, layout, clip)
+        render_children_filtered(handle, layout, clip, excluded)
         apply_clip(handle, inherited_clip)
         ret()
     }
@@ -507,7 +1803,9 @@ fn render_layout(handle: usize, layout: WidgetLayout, inherited_clip: Option[Rec
         render_outer_shadow(handle, bounds, style, opacity)
     }
     if widget.kind() != widget_spacer() {
-        if style.radius() > 0.0_f32 {
+        if style.linear_gradient().is_enabled() {
+            render_linear_gradient(handle, bounds, style, opacity)
+        } elif style.radius() > 0.0_f32 {
             native_round_rect(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(), style.radius(),
                 background.packed(), true,)
         } else {
@@ -681,18 +1979,67 @@ fn render_layout(handle: usize, layout: WidgetLayout, inherited_clip: Option[Rec
         native_line(handle, arrow_x, arrow_y + 4.0_f32, arrow_x + 4.0_f32, arrow_y, foreground.packed())
     } elif kind == widget_color_swatch() {
     }
-    render_children(handle, layout, clip)
+    render_children_filtered(handle, layout, clip, excluded)
     apply_clip(handle, inherited_clip)
     ret()
 }
 
-fn render_children(handle: usize, layout: WidgetLayout, clip: Option[Rect]) ->() {
+fn rectangles_intersect(lhs: Rect, rhs: Rect) -> bool {
+    ret lhs.x() < rhs.right() && lhs.right() > rhs.x() &&
+    lhs.y() < rhs.bottom() && lhs.bottom() > rhs.y()
+}
+
+fn render_linear_gradient(handle: usize, bounds: Rect, style: Style, opacity: f32) ->() {
+    let gradient = style.linear_gradient()
+    let extent = if gradient.is_vertical() {
+        bounds.height()
+    } else {
+        bounds.width()
+    }
+    let mut steps = extent as usize
+    if steps < 1_usize {
+        steps = 1_usize
+    }
+    if steps > 64_usize {
+        steps = 64_usize
+    }
+    let mut index = 0_usize
+    while index < steps {
+        let progress = if steps > 1_usize {
+            index as f32 /(steps - 1_usize) as f32
+        } else {
+            0.0_f32
+        }
+        let color = apply_opacity(mix_gradient_color(gradient.start(), gradient.end(), progress), opacity)
+        let offset = extent * index as f32 / steps as f32
+        let size = extent / steps as f32 + 1.0_f32
+        if gradient.is_vertical() {
+            native_fill_rect(handle, bounds.x(), bounds.y() + offset, bounds.width(), size, color.packed())
+        } else {
+            native_fill_rect(handle, bounds.x() + offset, bounds.y(), size, bounds.height(), color.packed())
+        }
+        index = index + 1_usize
+    }
+    ret()
+}
+
+fn mix_gradient_color(start: Color, end: Color, progress: f32) -> Color {
+    ret Color::rgba(
+        ((start.red() as f32) +((end.red() as f32) -(start.red() as f32)) * progress) as u8,
+        ((start.green() as f32) +((end.green() as f32) -(start.green() as f32)) * progress) as u8,
+        ((start.blue() as f32) +((end.blue() as f32) -(start.blue() as f32)) * progress) as u8,
+        ((start.alpha() as f32) +((end.alpha() as f32) -(start.alpha() as f32)) * progress) as u8,
+    )
+}
+
+fn render_children_filtered(handle: usize, layout: WidgetLayout, clip: Option[Rect],
+    excluded: Vec[str],) ->() {
     let children = layout.children()
     let mut index = 0_usize
     while index < children.len() {
         match children.get(index) {
             Option[WidgetLayout]::Some(child) => {
-                render_layout(handle, child, clip)
+                render_layout_filtered(handle, child, clip, excluded)
             }
             Option[WidgetLayout]::None => {
             }
@@ -702,23 +2049,28 @@ fn render_children(handle: usize, layout: WidgetLayout, clip: Option[Rect]) ->()
     ret()
 }
 
+fn contains_target(targets: Vec[str], target: str) -> bool {
+    if target == "" {
+        ret false
+    }
+    for value in targets {
+        if value == target {
+            ret true
+        }
+    }
+    ret false
+}
+
 fn render_svg(handle: usize, bounds: Rect, document: SvgDocument, color: Color, stroke_width: f32) ->()
 {
     if !document.valid() || document.width() <= 0.0_f32 || document.height() <= 0.0_f32 {
         ret()
     }
-    let render_width = if bounds.width() > 2.0_f32 {
-        bounds.width() - 2.0_f32
-    } else {
-        bounds.width()
-    }
-    let render_height = if bounds.height() > 2.0_f32 {
-        bounds.height() - 2.0_f32
-    } else {
-        bounds.height()
-    }
-    let scale_x = render_width /(document.width() + stroke_width)
-    let scale_y = render_height /(document.height() + stroke_width)
+    // The SVG viewBox already owns its visual padding (Lucide paths normally
+    // stay within 2..22 of a 24-unit box). Scaling the box plus stroke and then
+    // subtracting another two pixels made small icons undersized and blurry.
+    let scale_x = bounds.width() / document.width()
+    let scale_y = bounds.height() / document.height()
     let scale = if scale_x < scale_y {
         scale_x
     } else {
@@ -739,10 +2091,10 @@ fn render_svg(handle: usize, bounds: Rect, document: SvgDocument, color: Color, 
             Option[SvgLine]::Some(line) => {
                 let start = line.start()
                 let finish = line.finish()
-                let x0 = offset_x + start.x() * scale
-                let y0 = offset_y + start.y() * scale
-                let x1 = offset_x + finish.x() * scale
-                let y1 = offset_y + finish.y() * scale
+                let x0 = offset_x +(start.x() - document.min_x()) * scale
+                let y0 = offset_y +(start.y() - document.min_y()) * scale
+                let x1 = offset_x +(finish.x() - document.min_x()) * scale
+                let y1 = offset_y +(finish.y() - document.min_y()) * scale
                 if !has_previous || previous_x != x0 || previous_y != y0 {
                     if has_previous {
                         native_vector_path_stroke(handle, thickness, color.packed(), false)
@@ -807,8 +2159,9 @@ struct WrappedLine {
 }
 
 fn wrapped_line(handle: usize, value: str, start: usize, width: f32) -> WrappedLine {
+    let length = value.char_len()
     let mut newline = start
-    while newline < value.char_len() && value.slice(newline, 1_usize) != "\n" {
+    while newline < length && value.slice(newline, 1_usize) != "\n" {
         newline = newline + 1_usize
     }
     if newline == start {
@@ -828,7 +2181,7 @@ fn wrapped_line(handle: usize, value: str, start: usize, width: f32) -> WrappedL
     } else {
         newline
     }
-    let hard_break = end == newline && newline < value.char_len()
+    let hard_break = end == newline && newline < length
     ret WrappedLine {
         start, end, if hard_break {
             newline + 1_usize
@@ -840,7 +2193,8 @@ fn wrapped_line(handle: usize, value: str, start: usize, width: f32) -> WrappedL
 }
 
 fn wrapped_text_index(handle: usize, value: str, width: f32, x: f32, y: f32) -> usize {
-    if value.char_len() == 0_usize || width <= 0.0_f32 {
+    let length = value.char_len()
+    if length == 0_usize || width <= 0.0_f32 {
         ret 0_usize
     }
     let height = native_text_height(handle, "Mg")
@@ -857,7 +2211,7 @@ fn wrapped_text_index(handle: usize, value: str, width: f32, x: f32, y: f32) -> 
     ) as usize
     let mut start = 0_usize
     let mut row = 0_usize
-    while start < value.char_len() {
+    while start < length {
         let line = wrapped_line(handle, value, start, width)
         if row == target_row {
             let text = value.slice(line.start, line.end - line.start)
@@ -878,12 +2232,13 @@ fn wrapped_text_index(handle: usize, value: str, width: f32, x: f32, y: f32) -> 
         start = line.next
         row = row + 1_usize
     }
-    ret value.char_len()
+    ret length
 }
 
 fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
     foreground: Color, opacity: f32,) ->() {
     let value = widget.text()
+    let value_length = value.char_len()
     let x = bounds.x() + 10.0_f32
     let width = bounds.width() - 20.0_f32
     let height = native_text_height(handle, "Mg")
@@ -897,15 +2252,18 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
     let mut row = 0_usize
     let mut finished = false
     while !finished {
-        let line = if value.char_len() == 0_usize || start >= value.char_len() {
+        let line = if value_length == 0_usize || start >= value_length {
             WrappedLine {
                 start, start, start, false
             }
         } else {
             wrapped_line(handle, value, start, width)
         }
-        let text = value.slice(line.start, line.end - line.start)
         let y = bounds.y() + 10.0_f32 +(row as f32) * line_height
+        if y > bounds.bottom() {
+            break
+        }
+        let text = value.slice(line.start, line.end - line.start)
         if widget.focused() && selection.end() > selection.start() {
             let selected_start = if selection.start() > line.start {
                 selection.start()
@@ -927,19 +2285,19 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
         native_text(handle, x, y, text, foreground.packed())
         render_text_decoration(handle, x, y, text, style, foreground, opacity)
         let cursor_on_line = widget.cursor() >= line.start &&
-        (widget.cursor() < line.end || line.end == value.char_len() ||(line.hard_break && widget.cursor()
+        (widget.cursor() < line.end || line.end == value_length ||(line.hard_break && widget.cursor()
                 == line.end))
         if widget.focused() && cursor_on_line {
             let prefix = value.slice(line.start, widget.cursor() - line.start)
             let caret_x = x + native_text_width(handle, prefix) + 1.0_f32
             native_line(handle, caret_x, y, caret_x, y + height, Color::rgb(18_u8, 153_u8, 126_u8).packed())
         }
-        finished = line.next >= value.char_len()
-        if line.hard_break && line.next == value.char_len() {
+        finished = line.next >= value_length
+        if line.hard_break && line.next == value_length {
             start = line.next
             row = row + 1_usize
             let empty_y = bounds.y() + 10.0_f32 +(row as f32) * line_height
-            if widget.focused() && widget.cursor() == value.char_len() {
+            if widget.focused() && widget.cursor() == value_length {
                 native_line(handle, x + 1.0_f32, empty_y, x + 1.0_f32, empty_y + height,
                     Color::rgb(18_u8, 153_u8, 126_u8).packed(),)
             }

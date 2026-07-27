@@ -1,3 +1,5 @@
+//! Live CSS editor, color picker, and preview showcase.
+
 import core::fmt::Debug
 import luma:: {
     Color, TextEditor, Widget, css_style, horizontal, key_delete, key_end, key_home, key_left, key_right,
@@ -55,11 +57,11 @@ impl for PlaygroundState {
     pub fn click(self: Self, target: str) -> PlaygroundState {
         if target == "css-editor" {
             ret playground(self, self.editor, "css-editor", self.red, self.green, self.blue, self.alpha,
-            self.picker_open, self.drag)
+                self.picker_open, self.drag,)
         }
         if target == "playground-color" {
             ret playground(self, self.editor, "", self.red, self.green, self.blue, self.alpha, !self.picker_open,
-            "")
+                "",)
         }
         if target == "css-reset" {
             ret PlaygroundState::new()
@@ -85,21 +87,21 @@ impl for PlaygroundState {
             ret with_color(self, 207_u8, 72_u8, 72_u8, 255_u8)
         }
         ret playground(self, self.editor, "", self.red, self.green, self.blue, self.alpha, self.picker_open,
-        self.drag)
+            self.drag,)
     }
     pub fn begin_drag(self: Self, target: str) -> PlaygroundState {
         let drag = if target == "picker-red" || target == "picker-green" || target == "picker-blue" ||
-        target == "picker-alpha" {
+        target == "picker-alpha" || target == "css-editor" {
             target
         } else {
             ""
         }
         ret playground(self, self.editor, self.focus, self.red, self.green, self.blue, self.alpha, self.picker_open,
-        drag)
+            drag,)
     }
     pub fn end_drag(self: Self) -> PlaygroundState {
         ret playground(self, self.editor, self.focus, self.red, self.green, self.blue, self.alpha, self.picker_open,
-        "")
+            "",)
     }
     pub fn with_channel(self: Self, target: str, value: f32) -> PlaygroundState {
         let clamped = if value < 0.0_f32 {
@@ -140,18 +142,25 @@ impl for PlaygroundState {
             ret self
         }
         ret playground(self, self.editor.insert(value), self.focus, self.red, self.green, self.blue,
-        self.alpha, self.picker_open, self.drag)
+            self.alpha, self.picker_open, self.drag,)
     }
     pub fn backspace(self: Self) -> PlaygroundState {
         if self.focus != "css-editor" {
             ret self
         }
         ret playground(self, self.editor.backspace(), self.focus, self.red, self.green, self.blue, self.alpha,
-        self.picker_open, self.drag)
+            self.picker_open, self.drag,)
     }
     pub fn place_cursor(self: Self, cursor: usize) -> PlaygroundState {
         ret playground(self, self.editor.with_cursor(cursor), "css-editor", self.red, self.green, self.blue,
-        self.alpha, self.picker_open, self.drag)
+            self.alpha, self.picker_open, self.drag,)
+    }
+    pub fn extend_selection(self: Self, cursor: usize) -> PlaygroundState {
+        if self.drag != "css-editor" {
+            ret self
+        }
+        ret playground(self, self.editor.with_selection(self.editor.selection_anchor(), cursor), "css-editor",
+            self.red, self.green, self.blue, self.alpha, self.picker_open, self.drag,)
     }
     pub fn navigate(self: Self, key: u32, shift: bool, control: bool) -> PlaygroundState {
         if self.focus != "css-editor" {
@@ -173,7 +182,7 @@ impl for PlaygroundState {
             self.editor
         }
         ret playground(self, editor, self.focus, self.red, self.green, self.blue, self.alpha, self.picker_open,
-        self.drag)
+            self.drag,)
     }
 }
 
@@ -185,7 +194,7 @@ fn playground(previous: PlaygroundState, editor: TextEditor, focus: str, red: f3
 }
 
 fn with_color(previous: PlaygroundState, red: u8, green: u8, blue: u8, alpha: u8) -> PlaygroundState
-    {
+{
     ret playground(previous, previous.editor, previous.focus, red as f32 / 255.0_f32,
         green as f32 / 255.0_f32, blue as f32 / 255.0_f32, alpha as f32 / 255.0_f32, true, "",)
 }
@@ -209,15 +218,15 @@ fn color_popup(model: PlaygroundState) -> Widget {
     popup.push(channel("picker-blue", "Blue", model.blue, model.color(), "blue"))
     popup.push(channel("picker-alpha", "Alpha", model.alpha, model.color(), "alpha"))
     let mut swatches = Widget::panel("picker-swatches").with_direction(horizontal()).with_flex(34.0_f32,
-    0.0_f32).with_style(css_style("background: transparent; gap: 8px;"))
+        0.0_f32,).with_style(css_style("background: transparent; gap: 8px;"))
     swatches.push(Widget::color_swatch("swatch-teal", Color::rgb(18_u8, 153_u8, 126_u8), false).with_flex(34.0_f32,
-    0.0_f32))
+            0.0_f32,))
     swatches.push(Widget::color_swatch("swatch-blue", Color::rgb(40_u8, 120_u8, 208_u8), false).with_flex(34.0_f32,
-    0.0_f32))
+            0.0_f32,))
     swatches.push(Widget::color_swatch("swatch-violet", Color::rgb(117_u8, 87_u8, 200_u8), false).with_flex(34.0_f32,
-    0.0_f32))
+            0.0_f32,))
     swatches.push(Widget::color_swatch("swatch-red", Color::rgb(207_u8, 72_u8, 72_u8), false).with_flex(34.0_f32,
-    0.0_f32))
+            0.0_f32,))
     popup.push(swatches)
     ret popup
 }
@@ -231,7 +240,7 @@ pub fn view(model: PlaygroundState) -> Widget {
     actions.push(Widget::button("css-flat", "Flat").with_flex(68.0_f32, 0.0_f32))
     actions.push(Widget::button("css-pill", "Pill").with_flex(68.0_f32, 0.0_f32))
     actions.push(Widget::color_picker("playground-color", model.color_css(), model.color()).with_flex(246.0_f32,
-    0.0_f32))
+            0.0_f32,))
     actions.push(Widget::spacer(1.0_f32))
     root.push(actions)
     let mut work = Widget::panel("css-work").with_direction(horizontal()).with_flex(0.0_f32, 1.0_f32).with_style(css_style("background: transparent; gap: 14px;"))
@@ -241,9 +250,9 @@ pub fn view(model: PlaygroundState) -> Widget {
         .with_focus(model.focus() == "css-editor").with_flex(0.0_f32, 1.0_f32).with_style(css_style("font-size: 14px; padding: 12px;")))
     work.push(editor)
     let mut preview = Widget::panel("css-preview-pane").with_direction(vertical()).with_flex(0.0_f32,
-    1.0_f32).with_style(css_style("background: #dfe5eb; border: 1px solid #cbd3dc; padding: 24px; gap: 14px;"))
+        1.0_f32,).with_style(css_style("background: #dfe5eb; border: 1px solid #cbd3dc; padding: 24px; gap: 14px;"))
     preview.push(Widget::label("Live preview").with_flex(24.0_f32, 0.0_f32).with_style(css_style("color: #66707d;")))
-    preview.push(Widget::button("css-preview", "Encore UI").with_flex(120.0_f32, 0.0_f32).with_style(
+    preview.push(Widget::button("css-preview", "Luma").with_flex(120.0_f32, 0.0_f32).with_style(
             css_style(model.css() + " background-color: " + model.color_css() + ";")))
     if model.picker_open() {
         preview.push(color_popup(model))
