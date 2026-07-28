@@ -53,7 +53,10 @@ extern fn graphene_vk_sampler_error(handle: usize) -> str
 extern fn graphene_vk_sampler_destroy(handle: usize) -> bool
 extern fn graphene_vk_material_bind_group_create(device: usize, layout: usize, uniform_binding: u32,
     buffer: usize, offset: u64, range: u64, texture_binding: u32, texture: usize, sampler: usize,) ->
-usize
+        usize
+extern fn graphene_vk_scene_bind_group_create(device: usize, layout: usize,
+    uniform_binding: u32, uniform_buffer: usize, uniform_range: u64,
+    storage_binding: u32, storage_buffer: usize, storage_range: u64,) -> usize
 extern fn graphene_vk_pipeline_create(device: usize, swapchain: usize, vertex: usize, fragment: usize,
     bind_group_layout: usize, depth_test: bool, cull_mode: u32, alpha_blend: bool,
     load_color: bool,
@@ -91,6 +94,8 @@ extern fn graphene_vk_buffer_size(handle: usize) -> u64
 extern fn graphene_vk_buffer_host_visible(handle: usize) -> bool
 extern fn graphene_vk_buffer_write_u32(handle: usize, offset: u64, value: u32) -> bool
 extern fn graphene_vk_buffer_write_f32(handle: usize, offset: u64, value: f32) -> bool
+extern fn graphene_vk_buffer_write_u32s(handle: usize, offset: u64, values: Vec[u32]) -> bool
+extern fn graphene_vk_buffer_write_f32s(handle: usize, offset: u64, values: Vec[f32]) -> bool
 extern fn graphene_vk_buffer_read_u32(handle: usize, offset: u64) -> u32
 extern fn graphene_vk_buffer_destroy(handle: usize) -> bool
 extern fn graphene_vk_texture_create(device: usize, width: u32, height: u32, mip_levels: u32, format:
@@ -375,6 +380,14 @@ pub fn native_storage_bind_group_create(device: usize, layout: usize, buffer: us
         ret graphene_vk_storage_bind_group_create(device, layout, buffer, offset, range)
     }
 }
+pub fn native_scene_bind_group_create(device: usize, layout: usize,
+    uniform_binding: u32, uniform_buffer: usize, uniform_range: u64,
+    storage_binding: u32, storage_buffer: usize, storage_range: u64,) -> usize {
+    unsafe {
+        ret graphene_vk_scene_bind_group_create(device, layout, uniform_binding,
+            uniform_buffer, uniform_range, storage_binding, storage_buffer, storage_range,)
+    }
+}
 pub fn native_bind_group_available(handle: usize) -> bool {
     unsafe {
         ret graphene_vk_bind_group_available(handle)
@@ -586,6 +599,16 @@ pub fn native_buffer_write_u32(handle: usize, offset: u64, value: u32) -> bool {
 pub fn native_buffer_write_f32(handle: usize, offset: u64, value: f32) -> bool {
     unsafe {
         ret graphene_vk_buffer_write_f32(handle, offset, value)
+    }
+}
+pub fn native_buffer_write_u32s(handle: usize, offset: u64, values: Vec[u32]) -> bool {
+    unsafe {
+        ret graphene_vk_buffer_write_u32s(handle, offset, values)
+    }
+}
+pub fn native_buffer_write_f32s(handle: usize, offset: u64, values: Vec[f32]) -> bool {
+    unsafe {
+        ret graphene_vk_buffer_write_f32s(handle, offset, values)
     }
 }
 pub fn native_buffer_read_u32(handle: usize, offset: u64) -> u32 {

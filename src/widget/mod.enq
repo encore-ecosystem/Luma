@@ -726,7 +726,7 @@ fn collect_widget_paths(layout: WidgetLayout, indices: Vec[usize],
                 let mut child_indices = indices
                 child_indices.push(index)
                 collect_widget_paths(child, child_indices, clip, generation,
-                    paths)
+                    paths,)
             }
             Option::None => {
             }
@@ -739,7 +739,7 @@ fn collect_widget_paths(layout: WidgetLayout, indices: Vec[usize],
 fn widget_paths(layout: WidgetLayout, generation: usize) -> Vec[WidgetPath] {
     let mut paths = Vec[WidgetPath]::new()
     collect_widget_paths(layout, Vec[usize]::new(), Option[Rect]::None,
-        generation, paths)
+        generation, paths,)
     ret paths
 }
 
@@ -1624,16 +1624,18 @@ impl for ReactiveUi {
                 Option::Some(entry) => {
                     if entry.id == id {
                         self.paths.set(index, WidgetPath {
-                            entry.id, entry.indices, entry.bounds, entry.clip,
-                            replacement, replacement.disabled(), replacement.style().visible(),
-                            replacement.style().pointer_events(),
-                            self.generation + 1_usize
-                        })
+                                entry.id, entry.indices, entry.bounds, entry.clip,
+                                replacement, replacement.disabled(), replacement.style().visible(),
+                                replacement.style().pointer_events(),
+                                self.generation + 1_usize
+                            }
+                            ,)
                         self.generation = self.generation + 1_usize
                         break
                     }
                 }
-                Option::None => {}
+                Option::None => {
+                }
             }
             index += 1_usize
         }
@@ -1791,8 +1793,12 @@ impl for ReactiveUi {
         // A component background must be restored before any already-dirty
         // descendants are painted on top of it.
         let already_first = match self.paint_targets.get(0_usize) {
-            Option::Some(target) => { target == id }
-            Option::None => { false }
+            Option::Some(target) => {
+                target == id
+            }
+            Option::None => {
+                false
+            }
         }
         if !already_first {
             let mut ordered = Vec[str]::new()

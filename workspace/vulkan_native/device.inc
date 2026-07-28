@@ -573,6 +573,67 @@ size_t graphene_vk_material_bind_group_create(size_t device_handle, size_t layou
     result->available = true; return (size_t)result;
 }
 
+size_t graphene_vk_scene_bind_group_create(size_t device_handle, size_t layout_handle,
+    uint32_t uniform_binding, size_t uniform_handle, uint64_t uniform_range,
+    uint32_t storage_binding, size_t storage_handle, uint64_t storage_range) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    GrapheneVkBindGroupLayout *layout = (GrapheneVkBindGroupLayout *)layout_handle;
+    GrapheneVkBuffer *uniform = (GrapheneVkBuffer *)uniform_handle;
+    GrapheneVkBuffer *storage = (GrapheneVkBuffer *)storage_handle;
+    GrapheneVkBindGroup *result = (GrapheneVkBindGroup *)calloc(1, sizeof(GrapheneVkBindGroup));
+    if (result == NULL) return 0;
+    result->owner = device; result->layout = layout;
+    bool uniform_found = false, storage_found = false;
+    if (layout != NULL) for (uint32_t i = 0; i < layout->binding_count; ++i) {
+        if (layout->bindings[i] == uniform_binding &&
+            layout->types[i] == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) uniform_found = true;
+        if (layout->bindings[i] == storage_binding &&
+            layout->types[i] == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) storage_found = true;
+    }
+    if (device == NULL || !device->available || layout == NULL || !layout->available ||
+        layout->owner != device || layout->binding_count != 2 || !uniform_found || !storage_found ||
+        uniform == NULL || !uniform->available || uniform->owner != device ||
+        storage == NULL || !storage->available || storage->owner != device ||
+        uniform_range == 0 || uniform_range > uniform->size ||
+        storage_range == 0 || storage_range > storage->size) {
+        strncpy(result->error, "Invalid scene bind group resources", sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    PFN_vkCreateDescriptorPool create_pool =
+        (PFN_vkCreateDescriptorPool)device->get_device_proc(device->device, "vkCreateDescriptorPool");
+    result->destroy_pool =
+        (PFN_vkDestroyDescriptorPool)device->get_device_proc(device->device, "vkDestroyDescriptorPool");
+    PFN_vkAllocateDescriptorSets allocate_sets =
+        (PFN_vkAllocateDescriptorSets)device->get_device_proc(device->device, "vkAllocateDescriptorSets");
+    PFN_vkUpdateDescriptorSets update_sets =
+        (PFN_vkUpdateDescriptorSets)device->get_device_proc(device->device, "vkUpdateDescriptorSets");
+    if (create_pool == NULL || result->destroy_pool == NULL ||
+        allocate_sets == NULL || update_sets == NULL) return (size_t)result;
+    VkDescriptorPoolSize pool_sizes[2] = {
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}
+    };
+    VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        NULL, 0, 1, 2, pool_sizes};
+    if (create_pool(device->device, &pool_info, NULL, &result->pool) != VK_SUCCESS)
+        return (size_t)result;
+    VkDescriptorSetAllocateInfo allocate = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        NULL, result->pool, 1, &layout->layout};
+    if (allocate_sets(device->device, &allocate, &result->set) != VK_SUCCESS)
+        return (size_t)result;
+    VkDescriptorBufferInfo uniform_info = {uniform->buffer, 0, uniform_range};
+    VkDescriptorBufferInfo storage_info = {storage->buffer, 0, storage_range};
+    VkWriteDescriptorSet writes[2] = {
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, result->set, uniform_binding, 0, 1,
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, NULL, &uniform_info, NULL},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, result->set, storage_binding, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, NULL, &storage_info, NULL}
+    };
+    update_sets(device->device, 2, writes, 0, NULL);
+    result->available = true;
+    return (size_t)result;
+}
+
 size_t graphene_vk_pipeline_create(size_t device_handle, size_t swapchain_handle, size_t vertex_handle, size_t fragment_handle,
     size_t bind_group_layout_handle, bool depth_test, uint32_t cull_mode, bool alpha_blend,
     bool load_color,
@@ -663,7 +724,7 @@ size_t graphene_vk_pipeline_create(size_t device_handle, size_t swapchain_handle
     VkPipelineInputAssemblyStateCreateInfo assembly = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, NULL, 0, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0};
     VkPipelineViewportStateCreateInfo viewport = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, NULL, 0, 1, NULL, 1, NULL};
     VkPipelineRasterizationStateCreateInfo raster = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, NULL, 0,
-        0, 0, VK_POLYGON_MODE_FILL, cull_mode, VK_FRONT_FACE_CLOCKWISE, 0, 0.0f, 0.0f, 0.0f, 1.0f};
+        0, 0, VK_POLYGON_MODE_FILL, cull_mode, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0, 0.0f, 0.0f, 0.0f, 1.0f};
     VkPipelineMultisampleStateCreateInfo multisample = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, NULL, 0,
         VK_SAMPLE_COUNT_1_BIT, 0, 0.0f, NULL, 0, 0};
     VkPipelineDepthStencilStateCreateInfo depth = {

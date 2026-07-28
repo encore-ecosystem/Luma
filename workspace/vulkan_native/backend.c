@@ -710,6 +710,7 @@ typedef struct {
     GrapheneVkDevice *owner;
     void *buffer;
     void *memory;
+    void *mapped;
     uint64_t size;
     uint32_t usage;
     bool host_visible;

@@ -238,6 +238,13 @@ size_t graphene_vk_buffer_create(size_t device_handle, uint64_t size, uint32_t u
     if (device->bind_buffer_memory(device->device, buffer->buffer, buffer->memory, 0) != VK_SUCCESS) {
         strncpy(buffer->error, "Unable to bind Vulkan buffer memory", sizeof(buffer->error) - 1); return (size_t)buffer;
     }
+    if (host_visible &&
+        (device->map_memory(device->device, buffer->memory, 0, size, 0, &buffer->mapped) != VK_SUCCESS ||
+            buffer->mapped == NULL)) {
+        strncpy(buffer->error, "Unable to persistently map Vulkan buffer memory",
+            sizeof(buffer->error) - 1);
+        return (size_t)buffer;
+    }
     buffer->available = true;
     return (size_t)buffer;
 }
@@ -250,30 +257,49 @@ bool graphene_vk_buffer_host_visible(size_t handle) { GrapheneVkBuffer *b = (Gra
 bool graphene_vk_buffer_write_u32(size_t handle, uint64_t offset, uint32_t value) {
     GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
     if (buffer == NULL || !buffer->available || !buffer->host_visible || offset > buffer->size || buffer->size - offset < 4) return false;
-    void *mapped = NULL;
-    if (buffer->owner->map_memory(buffer->owner->device, buffer->memory, offset, 4, 0, &mapped) != VK_SUCCESS || mapped == NULL) return false;
-    memcpy(mapped, &value, sizeof(value));
-    buffer->owner->unmap_memory(buffer->owner->device, buffer->memory);
+    if (buffer->mapped == NULL) return false;
+    memcpy((uint8_t *)buffer->mapped + offset, &value, sizeof(value));
     return true;
 }
 
 bool graphene_vk_buffer_write_f32(size_t handle, uint64_t offset, float value) {
     GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
     if (buffer == NULL || !buffer->available || !buffer->host_visible || offset > buffer->size || buffer->size - offset < 4) return false;
-    void *mapped = NULL;
-    if (buffer->owner->map_memory(buffer->owner->device, buffer->memory, offset, 4, 0, &mapped) != VK_SUCCESS || mapped == NULL) return false;
-    memcpy(mapped, &value, sizeof(value));
-    buffer->owner->unmap_memory(buffer->owner->device, buffer->memory);
+    if (buffer->mapped == NULL) return false;
+    memcpy((uint8_t *)buffer->mapped + offset, &value, sizeof(value));
+    return true;
+}
+
+bool graphene_vk_buffer_write_u32s(size_t handle, uint64_t offset,
+    const uint32_t *values, size_t count, size_t capacity) {
+    (void)capacity;
+    GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
+    uint64_t bytes = (uint64_t)count * sizeof(uint32_t);
+    if (buffer == NULL || !buffer->available || !buffer->host_visible ||
+        buffer->mapped == NULL || values == NULL || offset > buffer->size ||
+        bytes > buffer->size - offset) return false;
+    memcpy((uint8_t *)buffer->mapped + offset, values, (size_t)bytes);
+    return true;
+}
+
+bool graphene_vk_buffer_write_f32s(size_t handle, uint64_t offset,
+    const float *values, size_t count, size_t capacity) {
+    (void)capacity;
+    GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
+    uint64_t bytes = (uint64_t)count * sizeof(float);
+    if (buffer == NULL || !buffer->available || !buffer->host_visible ||
+        buffer->mapped == NULL || values == NULL || offset > buffer->size ||
+        bytes > buffer->size - offset) return false;
+    memcpy((uint8_t *)buffer->mapped + offset, values, (size_t)bytes);
     return true;
 }
 
 uint32_t graphene_vk_buffer_read_u32(size_t handle, uint64_t offset) {
     GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
     if (buffer == NULL || !buffer->available || !buffer->host_visible || offset > buffer->size || sizeof(uint32_t) > buffer->size - offset) return 0;
-    void *mapped = NULL;
-    if (buffer->owner->map_memory(buffer->owner->device, buffer->memory, offset, sizeof(uint32_t), 0, &mapped) != VK_SUCCESS || mapped == NULL) return 0;
-    uint32_t value = 0; memcpy(&value, mapped, sizeof(value));
-    buffer->owner->unmap_memory(buffer->owner->device, buffer->memory);
+    if (buffer->mapped == NULL) return 0;
+    uint32_t value = 0;
+    memcpy(&value, (uint8_t *)buffer->mapped + offset, sizeof(value));
     return value;
 }
 
@@ -281,6 +307,8 @@ bool graphene_vk_buffer_destroy(size_t handle) {
     GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
     if (buffer == NULL) return false;
     if (buffer->owner != NULL && buffer->owner->device != NULL) {
+        if (buffer->mapped != NULL && buffer->memory != NULL)
+            buffer->owner->unmap_memory(buffer->owner->device, buffer->memory);
         if (buffer->buffer != NULL) buffer->owner->destroy_buffer(buffer->owner->device, buffer->buffer, NULL);
         if (buffer->memory != NULL) buffer->owner->free_memory(buffer->owner->device, buffer->memory, NULL);
     }

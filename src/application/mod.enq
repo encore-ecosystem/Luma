@@ -3,11 +3,11 @@
 import color:: {
     Color, white
 }
-import refrain::css::StyleSheet
 import core::option::Option
 import core::result::Result
 import core::vec::Vec
 import geometry::Rect
+import refrain::css::StyleSheet
 import refrain::display:: {
     DisplayCommand, DisplayList, RetainedDisplayList
 }
@@ -438,13 +438,18 @@ impl for VulkanFrameInterop {
     fn new(frame: usize, swapchain: usize, pixel_width: u32, pixel_height: u32) -> Self {
         ret Self {
             frame, swapchain,
-            if frame == 0_usize { 0_u32 } else { native_frame_slot(frame) },
+            if frame == 0_usize {
+                0_u32
+            } else {
+                native_frame_slot(frame)
+            }
+            ,
             pixel_width, pixel_height
         }
     }
     pub fn valid(self: Self) -> bool {
         ret self.frame != 0_usize && self.swapchain != 0_usize &&
-            self.pixel_width > 0_u32 && self.pixel_height > 0_u32
+        self.pixel_width > 0_u32 && self.pixel_height > 0_u32
     }
     pub fn frame(self: Self) -> usize {
         ret self.frame
@@ -550,8 +555,9 @@ impl for PreparedFrame {
                 Option::Some(submission) => {
                     if submission.id == id {
                         self.submissions.set(index, SurfaceSubmission {
-                            id, generation, image
-                        })
+                                id, generation, image
+                            }
+                            ,)
                         ret true
                     }
                 }
@@ -561,8 +567,9 @@ impl for PreparedFrame {
             index = index + 1_usize
         }
         self.submissions.push(SurfaceSubmission {
-            id, generation, image
-        })
+                id, generation, image
+            }
+            ,)
         ret true
     }
     pub fn with_overlays(self: Self, overlays: Vec[str],
@@ -1297,7 +1304,7 @@ impl for Window {
     /// presents the borrowed frame exactly once.
     pub fn present_vulkan_frame(self: Self, frame: VulkanFrameInterop) -> bool {
         ret frame.valid() && frame.swapchain() == self.direct_swapchain &&
-            native_direct_frame_finish(self.handle, frame.frame())
+        native_direct_frame_finish(self.handle, frame.frame())
     }
     /// Presents retained UI, embedded renderer output and transient overlays
     /// through one composition path.
@@ -1670,10 +1677,11 @@ fn collect_surface_slots_clipped(layout: WidgetLayout, scale_x: f32,
             1_u32
         }
         slots.push(SurfaceSlot {
-            widget.id(), bounds, pixel_x, pixel_y, pixel_width, pixel_height,
-            density, surface_slot_generation(pixel_x, pixel_y, pixel_width,
-                pixel_height, density,), clip
-        })
+                widget.id(), bounds, pixel_x, pixel_y, pixel_width, pixel_height,
+                density, surface_slot_generation(pixel_x, pixel_y, pixel_width,
+                    pixel_height, density,), clip
+            }
+            ,)
     }
     for child in layout.children() {
         collect_surface_slots_clipped(child, scale_x, scale_y, density,
