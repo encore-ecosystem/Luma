@@ -1111,6 +1111,18 @@ bool graphene_vk_swapchain_destroy_retired(size_t handle) {
     return true;
 }
 bool graphene_vk_swapchain_available(size_t handle) { GrapheneVkSwapchain *s = (GrapheneVkSwapchain *)handle; return s != NULL && s->available; }
+bool graphene_vk_swapchain_set_present_mode(size_t handle, bool immediate) {
+    GrapheneVkSwapchain *swapchain = (GrapheneVkSwapchain *)handle;
+    if (swapchain == NULL || !swapchain->available || swapchain->offscreen)
+        return false;
+    uint32_t requested = immediate
+        ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
+    if (swapchain->requested_present_mode != requested) {
+        swapchain->requested_present_mode = requested;
+        swapchain->needs_rebuild = true;
+    }
+    return true;
+}
 encore_str graphene_vk_swapchain_error(size_t handle) { GrapheneVkSwapchain *s = (GrapheneVkSwapchain *)handle; return graphene_string(s == NULL ? "Invalid swapchain" : s->error); }
 uint32_t graphene_vk_swapchain_width(size_t handle) { GrapheneVkSwapchain *s = (GrapheneVkSwapchain *)handle; return s == NULL ? 0 : s->width; }
 uint32_t graphene_vk_swapchain_height(size_t handle) { GrapheneVkSwapchain *s = (GrapheneVkSwapchain *)handle; return s == NULL ? 0 : s->height; }

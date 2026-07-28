@@ -123,6 +123,7 @@ extern fn graphene_vk_swapchain_create(device: usize, window: usize) -> usize
 extern fn graphene_vk_offscreen_create(device: usize, width: u32, height: u32) -> usize
 extern fn graphene_vk_shared_offscreen_create(device: usize, width: u32, height: u32) -> usize
 extern fn graphene_vk_swapchain_available(handle: usize) -> bool
+extern fn graphene_vk_swapchain_set_present_mode(handle: usize, immediate: bool) -> bool
 extern fn graphene_vk_swapchain_error(handle: usize) -> str
 extern fn graphene_vk_swapchain_width(handle: usize) -> u32
 extern fn graphene_vk_swapchain_height(handle: usize) -> u32
@@ -737,6 +738,11 @@ pub fn native_shared_offscreen_create(device: usize, width: u32, height: u32) ->
 pub fn native_swapchain_available(handle: usize) -> bool {
     unsafe {
         ret graphene_vk_swapchain_available(handle)
+    }
+}
+pub fn native_swapchain_set_present_mode(handle: usize, immediate: bool) -> bool {
+    unsafe {
+        ret graphene_vk_swapchain_set_present_mode(handle, immediate)
     }
 }
 pub fn native_swapchain_error(handle: usize) -> str {

@@ -817,6 +817,7 @@ size_t graphene_vk_swapchain_create(size_t device_handle, size_t window_handle);
 size_t graphene_vk_offscreen_create(size_t device_handle, uint32_t width, uint32_t height);
 size_t graphene_vk_shared_offscreen_create(size_t device_handle, uint32_t width, uint32_t height);
 bool graphene_vk_swapchain_clear(size_t handle, float red, float green, float blue, float alpha);
+bool graphene_vk_swapchain_set_present_mode(size_t handle, bool immediate);
 bool graphene_vk_swapchain_destroy(size_t handle);
 size_t graphene_vk_swapchain_pixels(size_t handle);
 uint32_t graphene_vk_swapchain_pitch(size_t handle);
