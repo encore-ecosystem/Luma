@@ -1,6 +1,6 @@
 [project]
 name = "luma"
-version = "0.2.0"
+version = "0.2.1"
 description = "Cross-platform native UI toolkit"
 repository = "https://github.com/encore-ecosystem/Luma"
 encore = ">=0.2.1, <0.3.0"
@@ -12,8 +12,11 @@ dependencies = [
     "index@color@^0.1.0",
     "index@geometry@^0.1.0",
     "workspace@ui_native",
-    "workspace@vulkan_native",
+    "index@vulkan_native@^0.1.0",
 ]
+
+[publish]
+exclude = ["workspace/vulkan_native/**"]
 
 [features]
 default = ["fonts"]

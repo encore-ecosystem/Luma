@@ -30,10 +30,10 @@ path = "workspace/ui_native"
 
 [[packages]]
 name = "vulkan_native"
-ref = "workspace@vulkan_native"
+ref = "index@vulkan_native@^0.1.0"
 version = "0.1.0"
-source = "embedded@luma"
-path = "workspace/vulkan_native"
+archive = "https://github.com/encore-ecosystem/Luma/releases/download/vulkan_native-v0.1.0/vulkan_native-0.1.0.tar.gz"
+checksum = "f7afc3e810c43d899a6b69c032c3df3b88413186fb59d9ff4af56aa5d663ae53"
 
 [[packages]]
 name = "core"

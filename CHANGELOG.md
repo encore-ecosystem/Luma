@@ -4,6 +4,11 @@ All notable changes to Luma are documented here.
 
 ## Unreleased
 
+## 0.2.1 - 2026-08-16
+
+- Published the direct Vulkan backend as a standalone companion package and
+  excluded its duplicate workspace copy from consumer archives.
+
 ## 0.2.0 - 2026-08-16
 
 - Added managed zero-copy `DirectRenderApplication` surfaces, explicit overlay
