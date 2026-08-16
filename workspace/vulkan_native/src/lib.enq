@@ -37,16 +37,16 @@ extern fn graphene_vk_device_compute(handle: usize) -> bool
 extern fn graphene_vk_device_requested_features(handle: usize) -> u32
 extern fn graphene_vk_device_enabled_features(handle: usize) -> u32
 extern fn graphene_vk_shader_create(
-    device: usize, words: u32*, word_count: usize, stage: u32,) -> usize
+    device: usize, words: u32 *, word_count: usize, stage: u32,) -> usize
 extern fn graphene_vk_shader_available(handle: usize) -> bool
 extern fn graphene_vk_shader_error(handle: usize) -> str
 extern fn graphene_vk_shader_stage(handle: usize) -> u32
 extern fn graphene_vk_shader_destroy(handle: usize) -> bool
 extern fn graphene_vk_bind_group_layout_create(device: usize, binding: u32, stage: u32) -> usize
 extern fn graphene_vk_bind_group_layout_create_entries(device: usize,
-    bindings: u32*, binding_count: usize,
-    types: u32*, type_count: usize,
-    stages: u32*, stage_count: usize,) -> usize
+    bindings: u32 *, binding_count: usize,
+    types: u32 *, type_count: usize,
+    stages: u32 *, stage_count: usize,) -> usize
 extern fn graphene_vk_bind_group_layout_available(handle: usize) -> bool
 extern fn graphene_vk_bind_group_layout_error(handle: usize) -> str
 extern fn graphene_vk_bind_group_layout_destroy(handle: usize) -> bool
@@ -55,27 +55,27 @@ extern fn graphene_vk_bind_group_create(device: usize, layout: usize, buffer: us
 extern fn graphene_vk_storage_bind_group_create(device: usize, layout: usize, buffer: usize, offset:
     u64, range: u64,) -> usize
 extern fn graphene_vk_storage_bind_group_create_many(device: usize, layout: usize,
-    bindings: u32*, binding_count: usize,
-    buffers: usize*, buffer_count: usize,
-    offsets: u64*, offset_count: usize,
-    ranges: u64*, range_count: usize,) -> usize
+    bindings: u32 *, binding_count: usize,
+    buffers: usize *, buffer_count: usize,
+    offsets: u64 *, offset_count: usize,
+    ranges: u64 *, range_count: usize,) -> usize
 extern fn graphene_vk_buffer_bind_group_create_many(device: usize, layout: usize,
-    bindings: u32*, binding_count: usize,
-    buffers: usize*, buffer_count: usize,
-    offsets: u64*, offset_count: usize,
-    ranges: u64*, range_count: usize,) -> usize
+    bindings: u32 *, binding_count: usize,
+    buffers: usize *, buffer_count: usize,
+    offsets: u64 *, offset_count: usize,
+    ranges: u64 *, range_count: usize,) -> usize
 extern fn graphene_vk_buffer_texture_bind_group_create_many(device: usize, layout: usize,
-    bindings: u32*, binding_count: usize,
-    buffers: usize*, buffer_count: usize,
-    offsets: u64*, offset_count: usize,
-    ranges: u64*, range_count: usize,
+    bindings: u32 *, binding_count: usize,
+    buffers: usize *, buffer_count: usize,
+    offsets: u64 *, offset_count: usize,
+    ranges: u64 *, range_count: usize,
     texture_binding: u32, texture: usize, sampler: usize,) -> usize
 extern fn graphene_vk_ray_query_bind_group_create(device: usize, layout: usize,
     acceleration_binding: u32, acceleration: usize,
-    bindings: u32*, binding_count: usize,
-    buffers: usize*, buffer_count: usize,
-    offsets: u64*, offset_count: usize,
-    ranges: u64*, range_count: usize,) -> usize
+    bindings: u32 *, binding_count: usize,
+    buffers: usize *, buffer_count: usize,
+    offsets: u64 *, offset_count: usize,
+    ranges: u64 *, range_count: usize,) -> usize
 extern fn graphene_vk_bind_group_available(handle: usize) -> bool
 extern fn graphene_vk_bind_group_error(handle: usize) -> str
 extern fn graphene_vk_bind_group_destroy(handle: usize) -> bool
@@ -100,9 +100,9 @@ extern fn graphene_vk_pipeline_create(device: usize, swapchain: usize, vertex: u
     additive_blend: bool,
     load_color: bool,
     vertex_stride: u32,
-    locations: u32*, location_count: usize,
-    formats: u32*, format_count: usize,
-    offsets: u32*, offset_count: usize,) -> usize
+    locations: u32 *, location_count: usize,
+    formats: u32 *, format_count: usize,
+    offsets: u32 *, offset_count: usize,) -> usize
 extern fn graphene_vk_pipeline_available(handle: usize) -> bool
 extern fn graphene_vk_pipeline_error(handle: usize) -> str
 extern fn graphene_vk_pipeline_destroy(handle: usize) -> bool
@@ -137,9 +137,9 @@ extern fn graphene_vk_buffer_host_visible(handle: usize) -> bool
 extern fn graphene_vk_buffer_write_u32(handle: usize, offset: u64, value: u32) -> bool
 extern fn graphene_vk_buffer_write_f32(handle: usize, offset: u64, value: f32) -> bool
 extern fn graphene_vk_buffer_write_u32s(
-    handle: usize, offset: u64, values: u32*, count: usize,) -> bool
+    handle: usize, offset: u64, values: u32 *, count: usize,) -> bool
 extern fn graphene_vk_buffer_write_f32s(
-    handle: usize, offset: u64, values: f32*, count: usize,) -> bool
+    handle: usize, offset: u64, values: f32 *, count: usize,) -> bool
 extern fn graphene_vk_buffer_read_u32(handle: usize, offset: u64) -> u32
 extern fn graphene_vk_buffer_read_f32(handle: usize, offset: u64) -> f32
 extern fn graphene_vk_buffer_destroy(handle: usize) -> bool
@@ -147,8 +147,8 @@ extern fn graphene_vk_blas_create_triangles(device: usize,
     vertices: usize, vertex_stride: u64, vertex_count: u32,
     indices: usize, index_count: u32,) -> usize
 extern fn graphene_vk_tlas_create_instances(device: usize,
-    blas: usize*, blas_count: usize,
-    transforms: f32*, transform_count: usize,) -> usize
+    blas: usize *, blas_count: usize,
+    transforms: f32 *, transform_count: usize,) -> usize
 extern fn graphene_vk_acceleration_structure_available(handle: usize) -> bool
 extern fn graphene_vk_acceleration_structure_error(handle: usize) -> str
 extern fn graphene_vk_acceleration_structure_destroy(handle: usize) -> bool
@@ -566,7 +566,9 @@ pub fn native_sampler_create(device: usize) -> usize {
     }
 }
 pub fn native_sampler_create_repeat(device: usize) -> usize {
-    unsafe { ret graphene_vk_sampler_create_repeat(device) }
+    unsafe {
+        ret graphene_vk_sampler_create_repeat(device)
+    }
 }
 pub fn native_sampler_available(handle: usize) -> bool {
     unsafe {
