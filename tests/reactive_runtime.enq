@@ -1,4 +1,6 @@
-import luma::{Insets, ReactiveUi, Rect, Style, Widget, layout_widget, vertical}
+import luma:: {
+    Color, Insets, ReactiveUi, Rect, Style, TransitionStyle, Widget, layout_widget, vertical
+}
 
 fn tree(text: str) -> Widget {
     let mut root = Widget::panel("root").with_direction(vertical())
@@ -10,20 +12,20 @@ fn main() -> u32 {
     let bounds = Rect::new(0.0_f32, 0.0_f32, 320.0_f32, 180.0_f32)
     let mut ui = ReactiveUi::new(layout_widget(tree("Count: 0"), bounds))
     if ui.hit(8.0_f32, 8.0_f32) !=
-        ui.layout().hit(8.0_f32, 8.0_f32) {
+    ui.layout().hit(8.0_f32, 8.0_f32) {
         ret 4_u32
     }
 
     if ui.reconcile(tree("Count: 1")) != 1_u32 ||
-        ui.paint_targets().len() != 1_usize ||
-        ui.find_widget("value").unwrap_or(Widget::spacer(0.0_f32)).text() !=
-            "Count: 1" {
+    ui.paint_targets().len() != 1_usize ||
+    ui.find_widget("value").unwrap_or(Widget::spacer(0.0_f32)).text() !=
+    "Count: 1" {
         ret 1_u32
     }
     ui.clear_paint()
 
     let mut geometry = Widget::panel("root").with_direction(vertical())
-        .with_style(Style::default().with_padding(Insets::all(8.0_f32)))
+    .with_style(Style::default().with_padding(Insets::all(8.0_f32)))
     geometry.push(Widget::label("Count: 1").with_id("value"))
     if ui.reconcile(geometry) != 2_u32 || !ui.needs_layout() {
         ret 2_u32
@@ -37,7 +39,7 @@ fn main() -> u32 {
     }
 
     let mut retained_root = Widget::panel("retained-root")
-        .with_direction(vertical())
+    .with_direction(vertical())
     let mut animated_row = Widget::panel("animated-row")
     animated_row.push(Widget::button("animated-before", "Before"))
     retained_root.push(animated_row)
@@ -47,16 +49,152 @@ fn main() -> u32 {
     let animated_generation = ui.segment_generation("animated-row")
     let mut next_row = Widget::panel("animated-row")
     next_row.push(Widget::button("animated-after", "After"))
-    if !ui.replace_subtree("animated-row", next_row) ||
-    ui.find_widget("animated-after").unwrap_or(
-        Widget::spacer(0.0_f32),).text() != "After" ||
-    ui.find_widget("animated-before").is_some() ||
-    ui.find_widget("stable").unwrap_or(
-        Widget::spacer(0.0_f32),).text() != "Stable" ||
-    ui.segment_generation("stable") != stable_generation ||
-    ui.segment_generation("animated-row") <= animated_generation ||
-    ui.paint_targets().len() != 1_usize {
-        ret 5_u32
+    if !ui.replace_subtree("animated-row", next_row) {
+        ret 51_u32
+    }
+    if ui.find_widget("animated-after").unwrap_or(
+        Widget::spacer(0.0_f32),).text() != "After" {
+        ret 52_u32
+    }
+    if ui.find_widget("animated-before").is_some() {
+        ret 53_u32
+    }
+    if ui.find_widget("stable").unwrap_or(
+        Widget::spacer(0.0_f32),).text() != "Stable" {
+        ret 54_u32
+    }
+    if ui.segment_generation("stable") != stable_generation {
+        ret 55_u32
+    }
+    if ui.segment_generation("animated-row") <= animated_generation {
+        ret 56_u32
+    }
+    if ui.paint_targets().len() != 1_usize {
+        ret 57_u32
+    }
+
+    // A transient interaction snapshot must not survive a declarative model
+    // update. Otherwise leaving hover/focus can restore stale text or values.
+    ui = ReactiveUi::new(layout_widget(tree("Count: 1"), bounds))
+    let _base = ui.interaction_base("value")
+    ui.clear_interaction_bases()
+    if ui.reconcile(tree("Count: 2")) != 1_u32 {
+        ret 58_u32
+    }
+    if ui.interaction_base("value").unwrap_or(
+        Widget::spacer(0.0_f32),).text() != "Count: 2" {
+        ret 59_u32
+    }
+
+    // Switching an otherwise identical style from computed to explicit
+    // changes whether the application stylesheet participates in cascade.
+    // Reconciliation must invalidate layout instead of issuing a paint patch.
+    let base_style = Style::default()
+    let computed = Widget::label("Cascade").with_id("cascade")
+    .with_computed_style(base_style)
+    ui = ReactiveUi::new(layout_widget(computed, bounds))
+    let explicit = Widget::label("Cascade").with_id("cascade")
+    .with_style(base_style)
+    if ui.reconcile(explicit) != 2_u32 || !ui.needs_layout() {
+        ret 60_u32
+    }
+
+    // Retained transitions interpolate paint and layout without replacing the
+    // widget tree, then commit the exact target style.
+    let transition = TransitionStyle::new(
+        "background-color,width", "100ms", "0ms", "linear",)
+    let initial_style = Style::default()
+    .with_background(Color::rgb(0_u8, 0_u8, 0_u8)).with_width(100.0_f32)
+    let target_style = Style::default()
+    .with_background(Color::rgb(200_u8, 100_u8, 50_u8)).with_width(200.0_f32)
+    .with_transition(transition)
+    let initial = Widget::button("transition", "Move").with_style(initial_style)
+    ui = ReactiveUi::new(layout_widget(initial, bounds))
+    if !ui.transition_widget("transition",
+        Widget::button("transition", "Move").with_style(target_style), 1000_u64,) ||
+    !ui.has_active_transitions() {
+        ret 61_u32
+    }
+    if !ui.advance_transitions(1050_u64) {
+        ret 62_u32
+    }
+    let halfway = ui.find_widget("transition").unwrap_or(Widget::spacer(0.0_f32))
+    if halfway.style().background().red() != 100_u8 ||
+    halfway.style().layout().width() != 150.0_f32 || !ui.needs_layout() {
+        ret 63_u32
+    }
+    let _finished = ui.advance_transitions(1100_u64)
+    let committed = ui.find_widget("transition").unwrap_or(Widget::spacer(0.0_f32))
+    if ui.has_active_transitions() || committed.style().background().red() != 200_u8 ||
+    committed.style().layout().width() != 200.0_f32 {
+        ret 64_u32
+    }
+
+    let mut reduced = ReactiveUi::new(layout_widget(initial, bounds)).with_reduced_motion(true)
+    if !reduced.transition_widget("transition",
+        Widget::button("transition", "Move").with_style(target_style), 2000_u64,) ||
+    reduced.has_active_transitions() {
+        ret 65_u32
+    }
+    if reduced.find_widget("transition").unwrap_or(Widget::spacer(0.0_f32))
+    .style().layout().width() != 200.0_f32 {
+        ret 66_u32
+    }
+
+    let countdown_initial = Widget::progress(1.0_f32).with_id("countdown")
+    ui = ReactiveUi::new(layout_widget(countdown_initial, bounds))
+    if !ui.transition_widget("countdown", Widget::countdown("countdown", 100_u64, 1_u64),
+        3000_u64,) || !ui.has_active_transitions() {
+        ret 67_u32
+    }
+    let _countdown_half = ui.advance_transitions(3050_u64)
+    let countdown_half = ui.find_widget("countdown").unwrap_or(Widget::spacer(0.0_f32))
+    if countdown_half.value() < 0.49_f32 || countdown_half.value() > 0.51_f32 ||
+    ui.needs_layout() {
+        ret 68_u32
+    }
+    let _countdown_done = ui.advance_transitions(3100_u64)
+    if ui.has_active_transitions() || ui.find_widget("countdown")
+    .unwrap_or(Widget::spacer(1.0_f32)).value() != 0.0_f32 {
+        ret 69_u32
+    }
+
+    // A transparent full-window overlay is a common retained popup host. Its
+    // own pointer-events setting must not make children inserted by a subtree
+    // replacement click through to the content painted underneath it.
+    let viewport_style = Style::default().with_absolute(true)
+    .with_left(0.0_f32).with_top(0.0_f32)
+    .with_width(320.0_f32).with_height(180.0_f32)
+    let overlay_style = Style::default().with_absolute(true)
+    .with_left(0.0_f32).with_top(0.0_f32)
+    .with_width(320.0_f32).with_height(180.0_f32)
+    .with_pointer_events(false)
+    let popup_style = Style::default().with_absolute(true)
+    .with_left(50.0_f32).with_top(40.0_f32)
+    .with_width(120.0_f32).with_height(80.0_f32)
+    .with_pointer_events(true)
+    let mut overlay_root = Widget::panel("overlay-root")
+    overlay_root.push(Widget::button("viewport", "Viewport")
+        .with_style(viewport_style))
+    overlay_root.push(Widget::panel("overlay-layer")
+        .with_style(overlay_style))
+    ui = ReactiveUi::new(layout_widget(overlay_root, bounds))
+    let mut popup = Widget::panel("popup").with_style(popup_style)
+    popup.push(Widget::button("popup-action", "Action"))
+    let mut populated_overlay = Widget::panel("overlay-layer")
+        .with_style(overlay_style)
+    populated_overlay.push(popup)
+    if !ui.replace_subtree("overlay-layer", populated_overlay) {
+        ret 70_u32
+    }
+    let popup_layout = ui.find_layout("popup").unwrap_or(layout_widget(
+        Widget::spacer(0.0_f32), bounds,))
+    if popup_layout.hit(70.0_f32, 60.0_f32) !=
+    "popup-action" {
+        ret 71_u32
+    }
+    if ui.hit(70.0_f32, 60.0_f32) != "popup-action" {
+        ret 72_u32
     }
     ret 0_u32
 }

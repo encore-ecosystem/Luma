@@ -1,66 +1,19 @@
 //! Native windows, events, rendering, and reactive frame presentation.
 
-import color:: {
-    Color, white
-}
+import color::{Color, white}
+import core::fmt::Debug
 import core::option::Option
 import core::result::Result
 import core::vec::Vec
 import geometry::Rect
 import refrain::css::StyleSheet
-import refrain::display:: {
-    DisplayCommand, DisplayList, RetainedDisplayList
-}
-import refrain::style:: {
-    Style, text_center, text_end
-}
-import refrain::svg:: {
-    SvgDocument, SvgLine
-}
-import refrain::widget:: {
-    ReactiveUi, Widget, WidgetLayout, inherit_widget_styles, layout_widget, widget_button, widget_checkbox,
-    widget_heading,
-    widget_color_channel, widget_color_picker, widget_color_swatch, widget_icon, widget_icon_button,
-    widget_icon_card, widget_input, widget_label, widget_link, widget_progress, widget_radio,
-    widget_render_surface, widget_select,
-    widget_separator, widget_slider, widget_spacer, widget_switch, widget_textarea
-}
-import ui_native:: {
-    native_backend_error, native_backend_name, native_renderer_name, native_renderer_device_name,
-    native_begin, native_create_with_renderer,
-    native_circle, native_clip, native_clipboard_set, native_clipboard_text, native_destroy, native_end,
-    native_event_key, native_event_modifiers, native_event_text, native_event_wheel_x,
-    native_event_wheel_y, native_event_x, native_event_y, native_fill_rect,
-    native_font_clear, native_font_load, native_font_register, native_font_select, native_font_style,
-    native_line, native_open, native_poll, native_wait, native_round_rect,
-    native_stroke_rect, native_text, native_text_height, native_text_index, native_text_width,
-    native_vector_line, native_vector_path_begin, native_vector_path_point, native_vector_path_stroke,
-    native_width, native_height, native_pixel_width, native_pixel_height,
-    native_pixel_density, native_present_count, native_read_pixel,
-    native_layout_cache_begin, native_layout_cache_patch_begin,
-    native_layout_cache_end, native_cached_frame_begin, native_layout_cache_ready,
-    native_overlay_cache_begin, native_overlay_cache_end, native_overlay_cache_draw,
-    native_platform_handle,
-    native_vulkan_instance, native_vulkan_physical_device, native_vulkan_device,
-    native_vulkan_graphics_queue_family, native_external_vulkan_image_bind,
-    native_external_image_draw, native_external_vulkan_images_clear,
-    native_set_present_mode, native_backend_set_error,
-    native_direct_compositor_bind, native_direct_resources_release,
-    native_direct_frame_acquire, native_direct_frame_finish,
-    native_direct_composition_split
-}
-import vulkan_native:: {
-    direct_context_create, direct_context_available, direct_context_error,
-    direct_context_destroy, direct_context_instance, direct_context_physical_device,
-    direct_adapter_name, direct_window_attach, direct_window_available,
-    direct_window_error, direct_window_destroy, direct_device_create,
-    direct_device_available, direct_device_error, direct_device_destroy,
-    direct_device_handle, direct_device_queue_family, direct_swapchain_create,
-    direct_swapchain_available, direct_swapchain_error, direct_swapchain_destroy,
-    native_frame_slot,
-    direct_ui_create, direct_ui_available,
-    direct_ui_error, direct_ui_destroy
-}
+import refrain::display::{DisplayCommand, DisplayList, RetainedDisplayList}
+import refrain::style::{Style, text_center, text_end}
+import refrain::svg::{SvgDocument, SvgLine}
+import refrain::widget::{ReactiveUi, Widget, WidgetLayout, inherit_widget_styles, layout_widget, widget_button, widget_checkbox, widget_heading, widget_color_channel, widget_color_picker, widget_color_swatch, widget_icon, widget_icon_button, widget_icon_card, widget_image, widget_input, widget_label, widget_link, widget_progress, widget_radio, widget_range_slider, widget_render_surface, widget_rich_text, widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_terminal, widget_textarea}
+import std::time::{perf_counter_ms}
+import ui_native::{native_backend_error, native_backend_name, native_renderer_name, native_renderer_device_name, native_begin, native_create_with_renderer, native_circle, native_clip, native_clipboard_set, native_clipboard_text, native_destroy, native_end, native_event_buttons, native_event_dx, native_event_dy, native_event_key, native_event_modifiers, native_event_text, native_event_timestamp_ns, native_event_wheel_x, native_event_wheel_y, native_event_x, native_event_y, native_fill_rect, native_font_clear, native_font_load, native_font_register, native_font_select, native_font_style, native_line, native_open, native_poll, native_set_cursor, native_set_relative_mouse_mode, native_set_window_minimum_size, native_wait, native_round_rect, native_stroke_rect, native_terminal, native_text, native_styled_text, native_text_wrapped, native_image_rgba, native_text_height, native_text_index, native_text_width, native_vector_line, native_vector_path_begin, native_vector_path_point, native_vector_path_stroke, native_width, native_height, native_pixel_width, native_pixel_height, native_pixel_density, native_present_count, native_read_pixel, native_layout_cache_begin, native_layout_cache_patch_begin, native_layout_cache_end, native_cached_frame_begin, native_layout_cache_ready, native_overlay_cache_begin, native_overlay_cache_end, native_overlay_cache_draw, native_platform_handle, native_vulkan_instance, native_vulkan_physical_device, native_vulkan_device, native_vulkan_graphics_queue_family, native_external_vulkan_image_bind, native_external_image_draw, native_external_vulkan_images_clear, native_set_present_mode, native_backend_set_error, native_direct_compositor_bind, native_direct_resources_release, native_direct_frame_acquire, native_direct_frame_prepare, native_direct_frame_begin_composition, native_direct_frame_finish, native_direct_composition_split}
+import vulkan_native::{direct_context_create, direct_context_available, direct_context_error, direct_context_destroy, direct_context_instance, direct_context_physical_device, direct_adapter_name, direct_window_attach, direct_window_available, direct_window_error, direct_window_destroy, direct_device_create_features, direct_device_available, direct_device_error, direct_device_destroy, direct_device_handle, direct_device_queue_family, direct_device_requested_features, direct_device_enabled_features, direct_swapchain_create, direct_swapchain_available, direct_swapchain_error, direct_swapchain_destroy, native_frame_slot, direct_ui_create, direct_ui_available, direct_ui_error, direct_ui_destroy}
 
 pub fn event_none() -> u32 {
     ret 0_u32
@@ -92,6 +45,21 @@ pub fn event_text_input() -> u32 {
 pub fn event_resize() -> u32 {
     ret 9_u32
 }
+pub fn event_focus_lost() -> u32 {
+    ret 10_u32
+}
+pub fn cursor_default() -> u32 {
+    ret 0_u32
+}
+pub fn cursor_text() -> u32 {
+    ret 1_u32
+}
+pub fn cursor_resize_horizontal() -> u32 {
+    ret 7_u32
+}
+pub fn cursor_resize_vertical() -> u32 {
+    ret 8_u32
+}
 pub fn key_backspace() -> u32 {
     ret 8_u32
 }
@@ -100,6 +68,9 @@ pub fn key_tab() -> u32 {
 }
 pub fn key_enter() -> u32 {
     ret 13_u32
+}
+pub fn key_escape() -> u32 {
+    ret 27_u32
 }
 pub fn key_delete() -> u32 {
     ret 127_u32
@@ -127,17 +98,38 @@ pub struct Event {
     kind: u32
     x: f32
     y: f32
+    dx: f32
+    dy: f32
+    buttons: u32
     key: u32
     modifiers: u32
     wheel_x: f32
     wheel_y: f32
     text: str
+    timestamp_ns: u64
 }
 
 impl for Event {
     pub fn none() -> Event {
         ret Event {
-            event_none(), 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0.0_f32, 0.0_f32, ""
+            event_none(), 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u32, 0.0_f32, 0.0_f32, "", 0_u64
+        }
+    }
+    pub fn key_down(key: u32, modifiers: u32) -> Event {
+        ret Event {
+            event_key_down(), 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, key, modifiers, 0.0_f32, 0.0_f32, "", 0_u64
+        }
+    }
+    pub fn key_up(key: u32, modifiers: u32) -> Event {
+        ret Event {
+            event_key_up(), 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, key, modifiers, 0.0_f32, 0.0_f32, "", 0_u64
+        }
+    }
+    pub fn pointer_move(x: f32, y: f32, dx: f32, dy: f32,
+        buttons: u32,) -> Event {
+        ret Event {
+            event_pointer_move(), x, y, dx, dy, buttons, 0_u32, 0_u32,
+            0.0_f32, 0.0_f32, "", 0_u64
         }
     }
     pub fn kind(self: Self) -> u32 {
@@ -148,6 +140,22 @@ impl for Event {
     }
     pub fn y(self: Self) -> f32 {
         ret self.y
+    }
+    pub fn dx(self: Self) -> f32 {
+        ret self.dx
+    }
+    pub fn dy(self: Self) -> f32 {
+        ret self.dy
+    }
+    pub fn buttons(self: Self) -> u32 {
+        ret self.buttons
+    }
+    pub fn primary_down(self: Self) -> bool {
+        ret(self.buttons & 1_u32) != 0_u32
+    }
+    /// Monotonic SDL event timestamp in nanoseconds. Synthetic events use zero.
+    pub fn timestamp_ns(self: Self) -> u64 {
+        ret self.timestamp_ns
     }
     pub fn key(self: Self) -> u32 {
         ret self.key
@@ -182,6 +190,7 @@ pub struct Window {
     direct_device: usize
     direct_swapchain: usize
     direct_compositor: usize
+    stylesheet: StyleSheet
 }
 
 pub enum RendererKind {
@@ -206,6 +215,20 @@ pub struct RendererInfo {
     software_emulated: bool
 }
 
+/// A backend-independent set of optional Vulkan rendering capabilities.
+/// The values describe features that must be enabled during logical-device
+/// creation; extension presence alone is not sufficient.
+pub struct VulkanFeatures {
+    mask: u32
+}
+
+/// Splits logical-device capabilities into hard requirements and opportunistic
+/// accelerators. Missing optional features never prevent window creation.
+pub struct VulkanFeatureRequest {
+    required: VulkanFeatures
+    optional: VulkanFeatures
+}
+
 /// Opaque Vulkan handles owned by Luma. Embedded renderers may allocate
 /// resources on the exact device and, for direct composition, record through
 /// the borrowed backend device/swapchain. They must not destroy any handle.
@@ -216,6 +239,8 @@ pub struct VulkanInterop {
     graphics_queue_family: u32
     swapchain: usize
     render_device: usize
+    requested_features: VulkanFeatures
+    enabled_features: VulkanFeatures
 }
 
 /// One short-lived frame borrowed from Luma's direct Vulkan swapchain.
@@ -401,12 +426,117 @@ impl for RendererInfo {
     }
 }
 
+impl for VulkanFeatures {
+    fn from_mask(mask: u32) -> Self {
+        ret Self {
+            mask
+        }
+    }
+    pub fn none() -> Self {
+        ret Self {
+            0_u32
+        }
+    }
+    /// Feature set used by GPU-driven renderers. Every member remains
+    /// optional when used through `VulkanFeatureRequest::advanced_rendering`.
+    pub fn advanced_rendering() -> Self {
+        ret Self {
+            1023_u32
+        }
+    }
+    pub fn mask(self: Self) -> u32 {
+        ret self.mask
+    }
+    pub fn contains(self: Self, feature: VulkanFeatures) -> bool {
+        ret(self.mask & feature.mask) == feature.mask
+    }
+    pub fn descriptor_indexing() -> Self {
+        ret Self {
+            1_u32
+        }
+    }
+    pub fn buffer_device_address() -> Self {
+        ret Self {
+            2_u32
+        }
+    }
+    pub fn timeline_semaphore() -> Self {
+        ret Self {
+            4_u32
+        }
+    }
+    pub fn synchronization_2() -> Self {
+        ret Self {
+            8_u32
+        }
+    }
+    pub fn dynamic_rendering() -> Self {
+        ret Self {
+            16_u32
+        }
+    }
+    pub fn mesh_shader() -> Self {
+        ret Self {
+            32_u32
+        }
+    }
+    pub fn ray_query() -> Self {
+        ret Self {
+            64_u32
+        }
+    }
+    pub fn draw_indirect_count() -> Self {
+        ret Self {
+            128_u32
+        }
+    }
+    pub fn shader_int64_atomics() -> Self {
+        ret Self {
+            256_u32
+        }
+    }
+    /// Enables fragment barycentric coordinates for diagnostic overlays when
+    /// the Vulkan adapter exposes them.
+    pub fn fragment_shader_barycentric() -> Self {
+        ret Self {
+            512_u32
+        }
+    }
+}
+
+impl for VulkanFeatureRequest {
+    pub fn none() -> Self {
+        ret Self {
+            VulkanFeatures::none(), VulkanFeatures::none()
+        }
+    }
+    /// Requests the complete GPU-driven profile opportunistically, preserving
+    /// the compatibility renderer on adapters that expose only a subset.
+    pub fn advanced_rendering() -> Self {
+        ret Self {
+            VulkanFeatures::none(), VulkanFeatures::advanced_rendering()
+        }
+    }
+    pub fn new(required: VulkanFeatures, optional: VulkanFeatures) -> Self {
+        ret Self {
+            required, optional
+        }
+    }
+    pub fn required(self: Self) -> VulkanFeatures {
+        ret self.required
+    }
+    pub fn optional(self: Self) -> VulkanFeatures {
+        ret self.optional
+    }
+}
+
 impl for VulkanInterop {
     fn new(instance: usize, physical_device: usize, device: usize,
-        graphics_queue_family: u32, swapchain: usize, render_device: usize,) -> Self {
+        graphics_queue_family: u32, swapchain: usize, render_device: usize,
+        requested_features: VulkanFeatures, enabled_features: VulkanFeatures,) -> Self {
         ret Self {
             instance, physical_device, device, graphics_queue_family,
-            swapchain, render_device
+            swapchain, render_device, requested_features, enabled_features
         }
     }
     pub fn valid(self: Self) -> bool {
@@ -431,6 +561,12 @@ impl for VulkanInterop {
     /// Opaque Luma RHI device owner used only for direct frame recording.
     pub fn render_device(self: Self) -> usize {
         ret self.render_device
+    }
+    pub fn requested_features(self: Self) -> VulkanFeatures {
+        ret self.requested_features
+    }
+    pub fn enabled_features(self: Self) -> VulkanFeatures {
+        ret self.enabled_features
     }
 }
 
@@ -590,7 +726,14 @@ impl for Window {
     }
     pub fn try_create_with_renderer(title: str, width: u32, height: u32,
         renderer: RendererKind,) -> Result[Window, str] {
-        let window = Window::create_with_renderer(title, width, height, renderer)
+        ret Window::try_create_with_renderer_features(title, width, height,
+            renderer, VulkanFeatureRequest::none(),)
+    }
+    pub fn try_create_with_renderer_features(title: str, width: u32, height: u32,
+        renderer: RendererKind, features: VulkanFeatureRequest,) ->
+    Result[Window, str] {
+        let window = Window::create_with_renderer_features(
+            title, width, height, renderer, features,)
         ret if window.available() {
             Result[Window, str]::Ok(window)
         } else {
@@ -605,19 +748,27 @@ impl for Window {
     /// without selecting another renderer.
     pub fn create_with_renderer(title: str, width: u32, height: u32,
         renderer: RendererKind,) -> Window {
+        ret Window::create_with_renderer_features(title, width, height,
+            renderer, VulkanFeatureRequest::none(),)
+    }
+    /// Creates a renderer while negotiating reusable Vulkan capabilities.
+    /// Feature requests apply to the Luma-owned Direct Vulkan backend.
+    pub fn create_with_renderer_features(title: str, width: u32, height: u32,
+        renderer: RendererKind, features: VulkanFeatureRequest,) -> Window {
         match renderer {
             RendererKind::Auto => {
-                ret create_direct_vulkan_window(title, width, height)
+                ret create_direct_vulkan_window(title, width, height, features)
             }
             RendererKind::DirectVulkan => {
-                ret create_direct_vulkan_window(title, width, height)
+                ret create_direct_vulkan_window(title, width, height, features)
             }
             _ => {
             }
         }
         ret Window {
             native_create_with_renderer(title, width, height, renderer.native_value()),
-            width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize
+            width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
+            StyleSheet::default()
         }
     }
     pub fn available(self: Self) -> bool {
@@ -745,16 +896,22 @@ impl for Window {
                 direct_context_physical_device(self.direct_context, 0_usize),
                 direct_device_handle(self.direct_device),
                 direct_device_queue_family(self.direct_device), self.direct_swapchain,
-                self.direct_device,)
+                self.direct_device,
+                VulkanFeatures::from_mask(
+                    direct_device_requested_features(self.direct_device),),
+                VulkanFeatures::from_mask(
+                    direct_device_enabled_features(self.direct_device),),)
         }
         if self.handle == 0_usize || self.renderer_name() != "vulkan" {
             ret VulkanInterop::new(0_usize, 0_usize, 0_usize,
-                4294967295_u32, 0_usize, 0_usize,)
+                4294967295_u32, 0_usize, 0_usize,
+                VulkanFeatures::none(), VulkanFeatures::none(),)
         }
         ret VulkanInterop::new(native_vulkan_instance(self.handle),
             native_vulkan_physical_device(self.handle),
             native_vulkan_device(self.handle),
-            native_vulkan_graphics_queue_family(self.handle), 0_usize, 0_usize,)
+            native_vulkan_graphics_queue_family(self.handle), 0_usize, 0_usize,
+            VulkanFeatures::none(), VulkanFeatures::none(),)
     }
     /// Wraps an offscreen VkImage created on `vulkan_interop().device()`.
     /// No pixel upload occurs. The producer must synchronize its queue and
@@ -783,7 +940,35 @@ impl for Window {
         ret Window {
             self.handle, self.width, self.height, color, self.direct_context,
             self.direct_window, self.direct_device, self.direct_swapchain,
-            self.direct_compositor
+            self.direct_compositor, self.stylesheet
+        }
+    }
+    /// Replaces the application layer while retaining Luma's default.css as
+    /// the lower-priority user-agent layer.
+    pub fn with_stylesheet(self: Self, sheet: StyleSheet) -> Window {
+        ret Window {
+            self.handle, self.width, self.height, self.background, self.direct_context,
+            self.direct_window, self.direct_device, self.direct_swapchain,
+            self.direct_compositor, StyleSheet::default().merge(sheet)
+        }
+    }
+    pub fn stylesheet(self: Self) -> StyleSheet {
+        ret self.stylesheet
+    }
+    /// Resolves the window stylesheet for a declarative tree and explicit
+    /// interaction state. Custom retained event loops use this before
+    /// reconciling or replacing a subtree, just as Luma's standard runtime
+    /// does for a complete application view.
+    pub fn style_view(self: Self, root: Widget, hovered: str, active: str,
+        focused: str,) -> Widget {
+        ret inherit_widget_styles(
+            self.stylesheet.apply(root, hovered, active, focused),)
+    }
+    pub fn reload_stylesheet(self: Self) -> Window {
+        ret Window {
+            self.handle, self.width, self.height, self.background, self.direct_context,
+            self.direct_window, self.direct_device, self.direct_swapchain,
+            self.direct_compositor, self.stylesheet.reload()
         }
     }
     pub fn poll(self: Self) -> Event {
@@ -794,9 +979,30 @@ impl for Window {
         ret Event {
             kind,
             native_event_x(self.handle), native_event_y(self.handle),
+            native_event_dx(self.handle), native_event_dy(self.handle),
+            native_event_buttons(self.handle),
             native_event_key(self.handle), native_event_modifiers(self.handle), native_event_wheel_x(self.handle),
-            native_event_wheel_y(self.handle), native_event_text(self.handle)
+            native_event_wheel_y(self.handle), native_event_text(self.handle),
+            native_event_timestamp_ns(self.handle)
         }
+    }
+    pub fn set_cursor(self: Self, cursor: u32) -> bool {
+        if self.handle == 0_usize {
+            ret false
+        }
+        ret native_set_cursor(self.handle, cursor)
+    }
+    pub fn set_relative_mouse_mode(self: Self, enabled: bool) -> bool {
+        if self.handle == 0_usize {
+            ret false
+        }
+        ret native_set_relative_mouse_mode(self.handle, enabled)
+    }
+    /// Sets the smallest logical client area accepted by the platform window.
+    /// Window managers may choose a larger size to satisfy their own layout.
+    pub fn set_minimum_size(self: Self, width: u32, height: u32) -> bool {
+        ret self.handle != 0_usize && width > 0_u32 && height > 0_u32 &&
+        native_set_window_minimum_size(self.handle, width, height)
     }
     /// Waits until an OS event arrives or the timeout expires, then returns
     /// the next coalesced event. This is the event-driven alternative to
@@ -1041,6 +1247,29 @@ impl for Window {
         }
         ret reactive
     }
+    /// Advances retained CSS transitions for custom event loops and presents
+    /// the smallest resulting paint/layout update.
+    pub fn advance_transitions(self: Self, reactive: mut ReactiveUi,
+        now_ms: u64,) -> ReactiveUi {
+        if reactive.advance_transitions(now_ms) {
+            if !reactive.needs_layout() && !reactive.needs_structure() {
+                ret self.draw_reactive(reactive)
+            }
+            // Layout-cache subregion patching is optimized for committed
+            // state changes. During a transition the same region changes on
+            // consecutive frames; rebuilding the retained cache keeps both
+            // SDL and direct Vulkan backends from presenting a cache while it
+            // is still the active render target.
+            if self.cache_layout(reactive.layout()) {
+                let _presented = self.draw_cached_layout()
+                reactive.clear_paint()
+                ret reactive
+            }
+            let _presented = self.draw_layout(reactive.layout())
+            ret reactive
+        }
+        ret reactive
+    }
     /// Applies one transient CSS state directly to the retained widget index.
     /// The original declarative widget is captured once and restored when the
     /// state clears, so pseudo-only declarations cannot leak into the base
@@ -1054,14 +1283,35 @@ impl for Window {
         match reactive.interaction_base(id) {
             Option::Some(base) => {
                 if !hovered && !active && !focused {
-                    let restored = reactive.restore_widget(id,
-                        base.with_focus(false),)
+                    let replacement = base.with_focus(false)
+                    let layout_changed = match reactive.find_widget(id) {
+                        Some(previous) => {
+                            !previous.style().layout_equivalent(replacement.style())
+                        }
+                        None => false
+                    }
+                    let restored = reactive.transition_widget(id, replacement,
+                        perf_counter_ms(),)
+                    if restored && layout_changed {
+                        reactive.invalidate_layout(id)
+                    }
                     reactive.release_interaction_base(id)
                     ret restored
                 }
                 let styled = base.with_style(sheet.style(base, hovered, active,
                         focused,)).with_focus(focused)
-                ret reactive.patch_widget(id, styled)
+                let layout_changed = match reactive.find_widget(id) {
+                    Some(previous) => {
+                        !previous.style().layout_equivalent(styled.style())
+                    }
+                    None => false
+                }
+                let patched = reactive.transition_widget(id, styled,
+                    perf_counter_ms(),)
+                if patched && layout_changed {
+                    reactive.invalidate_layout(id)
+                }
+                ret patched
             }
             Option::None => {
                 ret false
@@ -1137,7 +1387,7 @@ impl for Window {
         ret self.draw_reactive(reactive)
     }
     pub fn layout(self: Self, root: Widget) -> WidgetLayout {
-        ret layout_widget(inherit_widget_styles(root),
+        ret layout_widget(self.style_view(root, "", "", ""),
             Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),)
     }
     /// Reflows the current retained tree for new window bounds without asking
@@ -1147,7 +1397,7 @@ impl for Window {
             Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),)
     }
     pub fn restyle_layout(self: Self, layout: WidgetLayout, root: Widget) -> WidgetLayout {
-        ret layout.restyle(inherit_widget_styles(root))
+        ret layout.restyle(self.style_view(root, "", "", ""))
     }
     /// Captures render-surface geometry and DPI for one immutable frame
     /// transaction. Producers must render against the returned slot rather
@@ -1172,6 +1422,40 @@ impl for Window {
             layout, cached, surfaces, Vec[SurfaceSubmission]::new(),
             Vec[str]::new(), Vec[WidgetLayout]::new(), false
         }
+    }
+    /// Prepares a frame from geometry captured by an earlier layout
+    /// transaction. Interactive producers should retain their slot and use
+    /// this path until relayout or DPI change invalidates its generation.
+    pub fn prepare_frame_with_surface(self: Self, layout: WidgetLayout,
+        cached: bool, surface: SurfaceSlot,) -> PreparedFrame {
+        let mut surfaces = Vec[SurfaceSlot]::new()
+        surfaces.push(surface)
+        ret PreparedFrame {
+            layout, cached, surfaces, Vec[SurfaceSubmission]::new(),
+            Vec[str]::new(), Vec[WidgetLayout]::new(), false
+        }
+    }
+    /// Scalar form of `prepare_frame_with_surface`, useful for language
+    /// frontends that cannot safely retain an owned layout-node aggregate.
+    pub fn prepare_frame_with_surface_extent(self: Self, layout: WidgetLayout,
+        cached: bool, id: str, pixel_x: u32, pixel_y: u32,
+        pixel_width: u32, pixel_height: u32, density: f32,
+        generation: u64,) -> PreparedFrame {
+        let logical_density = if density <= 0.0_f32 {
+            1.0_f32
+        } else {
+            density
+        }
+        let slot = SurfaceSlot {
+            id,
+            Rect::new((pixel_x as f32) / logical_density,
+                (pixel_y as f32) / logical_density,
+                (pixel_width as f32) / logical_density,
+                (pixel_height as f32) / logical_density,),
+            pixel_x, pixel_y, pixel_width, pixel_height, logical_density,
+            generation, Option[Rect]::None
+        }
+        ret self.prepare_frame_with_surface(layout, cached, slot)
     }
     /// Builds the retained base for a prepared frame. Render surfaces and
     /// transient overlays are excluded automatically.
@@ -1299,6 +1583,48 @@ impl for Window {
         let borrowed = native_direct_frame_acquire(self.handle)
         ret VulkanFrameInterop::new(borrowed, self.direct_swapchain,
             self.pixel_width(), self.pixel_height(),)
+    }
+    /// Begins a direct Vulkan frame from retained UI without copying or
+    /// traversing its owned `WidgetLayout`. This is the camera/render hot path;
+    /// callers rebuild the retained cache only after an actual UI relayout.
+    pub fn begin_cached_vulkan_frame(self: Self,
+        overlay_layouts: Vec[WidgetLayout], cached_overlays: bool,) ->
+    VulkanFrameInterop {
+        let frame = self.prepare_cached_vulkan_frame(overlay_layouts, cached_overlays)
+        if !frame.valid() || !self.begin_vulkan_composition(frame) {
+            ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        ret frame
+    }
+    /// Prepares retained UI and borrows a command buffer before Luma starts
+    /// its render pass. Embedded renderers may record compute work here.
+    pub fn prepare_cached_vulkan_frame(self: Self,
+        overlay_layouts: Vec[WidgetLayout], cached_overlays: bool,) ->
+    VulkanFrameInterop {
+        if self.handle == 0_usize || self.direct_swapchain == 0_usize ||
+        self.direct_compositor == 0_usize ||
+        !native_cached_frame_begin(self.handle, self.background.packed()) {
+            ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if !native_direct_composition_split(self.handle) {
+            ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if cached_overlays {
+            let _overlay = native_overlay_cache_draw(self.handle)
+        } else {
+            for overlay in overlay_layouts {
+                render_layout(self.handle, overlay, Option[Rect]::None)
+            }
+        }
+        let borrowed = native_direct_frame_prepare(self.handle)
+        ret VulkanFrameInterop::new(borrowed, self.direct_swapchain,
+            self.pixel_width(), self.pixel_height(),)
+    }
+    /// Starts Luma's UI composition after all external compute work has been
+    /// recorded into the prepared frame.
+    pub fn begin_vulkan_composition(self: Self, frame: VulkanFrameInterop) -> bool {
+        ret frame.valid() && frame.swapchain() == self.direct_swapchain &&
+        native_direct_frame_begin_composition(self.handle, frame.frame())
     }
     /// Appends Luma's UI pass with color-load semantics, then submits and
     /// presents the borrowed frame exactly once.
@@ -1568,15 +1894,18 @@ fn failed_direct_window(handle: usize, context: usize, window: usize,
         let _handle = native_destroy(handle)
     }
     ret Window {
-        0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize
+        0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
+        StyleSheet::default()
     }
 }
 
-fn create_direct_vulkan_window(title: str, width: u32, height: u32) -> Window {
+fn create_direct_vulkan_window(title: str, width: u32, height: u32,
+    features: VulkanFeatureRequest,) -> Window {
     let handle = native_create_with_renderer(title, width, height, 3_u32)
     if handle == 0_usize {
         ret Window {
-            0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize
+            0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
+            StyleSheet::default()
         }
     }
     let context = direct_context_create()
@@ -1589,7 +1918,8 @@ fn create_direct_vulkan_window(title: str, width: u32, height: u32) -> Window {
         ret failed_direct_window(handle, context, window, 0_usize, 0_usize, 0_usize,
             direct_window_error(window), width, height,)
     }
-    let device = direct_device_create(context, window)
+    let device = direct_device_create_features(context, window,
+        features.required().mask(), features.optional().mask(),)
     if !direct_device_available(device) {
         ret failed_direct_window(handle, context, window, device, 0_usize, 0_usize,
             direct_device_error(device), width, height,)
@@ -1606,7 +1936,8 @@ fn create_direct_vulkan_window(title: str, width: u32, height: u32) -> Window {
             direct_ui_error(compositor), width, height,)
     }
     ret Window {
-        handle, width, height, white(), context, window, device, swapchain, compositor
+        handle, width, height, white(), context, window, device, swapchain, compositor,
+        StyleSheet::default()
     }
 }
 
@@ -1784,11 +2115,11 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
         Option::None => {
         }
     }
-    let opacity = style.opacity() * if widget.disabled() {
-        0.5_f32
-    } else {
-        1.0_f32
-    }
+    // Disabled presentation belongs to the stylesheet. The default preset
+    // already supplies `opacity: 0.48`; applying another renderer-side factor
+    // made disabled controls unintentionally render at roughly 24% opacity
+    // and prevented application styles from restoring accessible contrast.
+    let opacity = style.opacity()
     let clip = if style.layout().overflow_hidden() {
         clipped_bounds(inherited_clip, bounds)
     } else {
@@ -1810,7 +2141,7 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
     if !style.shadow().inset() {
         render_outer_shadow(handle, bounds, style, opacity)
     }
-    if widget.kind() != widget_spacer() {
+    if widget.kind() != widget_spacer() && !widget_renders_intrinsic_box(widget.kind()) {
         if style.linear_gradient().is_enabled() {
             render_linear_gradient(handle, bounds, style, opacity)
         } elif style.radius() > 0.0_f32 {
@@ -1880,10 +2211,27 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
     }
     let kind = widget.kind()
     if kind == widget_label() || kind == widget_button() || kind == widget_heading() {
+        if widget.text_wrap() {
+            native_text_wrapped(handle, bounds.x() + 8.0_f32, bounds.y() + 4.0_f32,
+                widget.text(), foreground.packed(), bounds.width() - 16.0_f32,)
+        } else {
+            let text_y = centered_text_y(handle, bounds, widget.text())
+            let text_x = aligned_text_x(handle, bounds, widget.text(), style.text_align(), 8.0_f32, 8.0_f32)
+            native_text(handle, text_x, text_y, widget.text(), foreground.packed())
+            render_text_decoration(handle, text_x, text_y, widget.text(), style, foreground, opacity)
+        }
+    } elif kind == widget_rich_text() {
         let text_y = centered_text_y(handle, bounds, widget.text())
-        let text_x = aligned_text_x(handle, bounds, widget.text(), style.text_align(), 8.0_f32, 8.0_f32)
-        native_text(handle, text_x, text_y, widget.text(), foreground.packed())
-        render_text_decoration(handle, text_x, text_y, widget.text(), style, foreground, opacity)
+        let text_x = if widget.text_anchor_child() == "" {
+            aligned_text_x(handle, bounds, widget.text(), style.text_align(), 8.0_f32, 8.0_f32)
+        } else {
+            bounds.x() + bounds.width() / 2.0_f32
+        }
+        native_styled_text(handle, text_x, text_y, widget.text(),
+            rich_text_run_payload(widget, opacity),)
+    } elif kind == widget_image() {
+        native_image_rgba(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(),
+            widget.text(),)
     } elif kind == widget_icon() {
         render_svg(handle, bounds, widget.svg(), foreground, 2.0_f32)
     } elif kind == widget_icon_button() {
@@ -1932,7 +2280,8 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
             let selected = widget.text().slice(selection.start(), selection.end() - selection.start())
             native_fill_rect(handle, text_x + native_text_width(handle, before), text_y,
                 native_text_width(handle, selected), native_text_height(handle, selected),
-                Color::rgba(40_u8, 120_u8, 220_u8, 100_u8).packed(),)
+                Color::rgba(style.accent_color().red(), style.accent_color().green(),
+                    style.accent_color().blue(), 100_u8,).packed(),)
         }
         native_text(handle, text_x, text_y, widget.text(), foreground.packed())
         render_text_decoration(handle, text_x, text_y, widget.text(), style, foreground, opacity)
@@ -1945,27 +2294,34 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
             let prefix = widget.text().slice(0_usize, widget.cursor())
             let caret_x = text_x + native_text_width(handle, prefix) + 1.0_f32
             let text_height = native_text_height(handle, widget.text())
-            native_line(handle, caret_x, text_y, caret_x, text_y + text_height, Color::rgb(18_u8, 153_u8,
-                    126_u8,).packed())
+            native_line(handle, caret_x, text_y, caret_x, text_y + text_height,
+                style.accent_color().packed(),)
         }
     } elif kind == widget_textarea() {
         render_textarea(handle, bounds, widget, style, foreground, opacity)
+    } elif kind == widget_terminal() {
+        native_terminal(handle, bounds.x() + 8.0_f32, bounds.y() + 6.0_f32,
+            bounds.width() - 16.0_f32, bounds.height() - 12.0_f32,
+            widget.text(), foreground.packed(), background.packed(),
+            widget.focused(),)
     } elif kind == widget_checkbox() || kind == widget_radio() {
         render_choice(handle, bounds, widget.text(), widget.checked(), kind == widget_radio(), style,
             foreground, opacity,)
     } elif kind == widget_switch() {
         render_switch(handle, bounds, widget.text(), widget.checked(), style, foreground, opacity)
     } elif kind == widget_slider() {
-        render_slider(handle, bounds, widget.value())
+        render_slider(handle, bounds, widget.value(), style, opacity)
+    } elif kind == widget_range_slider() {
+        render_range_slider(handle, bounds, widget, style, opacity)
     } elif kind == widget_color_channel() {
         render_color_channel(handle, bounds, widget)
     } elif kind == widget_progress() {
-        render_progress(handle, bounds, widget.value())
+        render_progress(handle, bounds, widget.value(), style, opacity)
     } elif kind == widget_separator() {
-        native_line(handle, bounds.x(), bounds.y(), bounds.right(), bounds.y(), Color::rgb(203_u8, 211_u8,
-                220_u8,).packed())
+        native_line(handle, bounds.x(), bounds.y(), bounds.right(), bounds.y(),
+            apply_opacity(style.background(), opacity).packed(),)
     } elif kind == widget_link() {
-        let link = Color::rgb(20_u8, 112_u8, 190_u8)
+        let link = foreground
         let text_y = centered_text_y(handle, bounds, widget.text())
         let text_x = aligned_text_x(handle, bounds, widget.text(), style.text_align(), 4.0_f32, 4.0_f32)
         native_text(handle, text_x, text_y, widget.text(), link.packed())
@@ -1987,14 +2343,44 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
         native_line(handle, arrow_x, arrow_y + 4.0_f32, arrow_x + 4.0_f32, arrow_y, foreground.packed())
     } elif kind == widget_color_swatch() {
     }
-    render_children_filtered(handle, layout, clip, excluded)
+    if kind != widget_rich_text() {
+        render_children_filtered(handle, layout, clip, excluded)
+    }
     apply_clip(handle, inherited_clip)
     ret()
+}
+
+fn rich_text_run_payload(widget: Widget, parent_opacity: f32) -> str {
+    let mut payload = ""
+    let mut offset = 0_usize
+    let anchor_child = widget.text_anchor_child()
+    for child in widget.children() {
+        let length = child.text().len()
+        if length > 0_usize {
+            let color = apply_opacity(child.style().foreground(),
+                parent_opacity * child.style().opacity(),)
+            payload = payload + Debug::fmt(offset) + ":" + Debug::fmt(length) + ":" +
+            Debug::fmt(color.packed()) + ":" +
+            if anchor_child != "" && child.id() == anchor_child {
+                "1;"
+            } else {
+                "0;"
+            }
+        }
+        offset += length
+    }
+    ret payload
 }
 
 fn rectangles_intersect(lhs: Rect, rhs: Rect) -> bool {
     ret lhs.x() < rhs.right() && lhs.right() > rhs.x() &&
     lhs.y() < rhs.bottom() && lhs.bottom() > rhs.y()
+}
+
+fn widget_renders_intrinsic_box(kind: usize) -> bool {
+    ret kind == widget_checkbox() || kind == widget_radio() || kind == widget_switch() ||
+    kind == widget_slider() || kind == widget_range_slider() || kind == widget_progress() ||
+    kind == widget_separator()
 }
 
 fn render_linear_gradient(handle: usize, bounds: Rect, style: Style, opacity: f32) ->() {
@@ -2243,12 +2629,39 @@ fn wrapped_text_index(handle: usize, value: str, width: f32, x: f32, y: f32) -> 
     ret length
 }
 
+fn textarea_line_number(value: str, index: usize) -> usize {
+    let mut line = 1_usize
+    let mut cursor = 0_usize
+    let limit = if index > value.char_len() {
+        value.char_len()
+    } else {
+        index
+    }
+    while cursor < limit {
+        if value.slice(cursor, 1_usize) == "\n" {
+            line = line + 1_usize
+        }
+        cursor = cursor + 1_usize
+    }
+    ret line
+}
+
 fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
     foreground: Color, opacity: f32,) ->() {
     let value = widget.text()
     let value_length = value.char_len()
-    let x = bounds.x() + 10.0_f32
-    let width = bounds.width() - 20.0_f32
+    let gutter = if widget.attribute("line-numbers").is_some() {
+        52.0_f32
+    } else {
+        0.0_f32
+    }
+    let scroll_x = style.layout().scroll().x()
+    let x = bounds.x() + 10.0_f32 + gutter - scroll_x
+    let width = if widget.attribute("wrap").is_some() {
+        1000000.0_f32
+    } else {
+        bounds.width() - 20.0_f32 - gutter
+    }
     let height = native_text_height(handle, "Mg")
     let line_height = if height > 0.0_f32 {
         height + 2.0_f32
@@ -2259,6 +2672,17 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
     let mut start = 0_usize
     let mut row = 0_usize
     let mut finished = false
+    let scroll_y = style.layout().scroll().y()
+    while value_length > 0_usize && start < value_length &&
+    ((row + 1_usize) as f32) * line_height <= scroll_y {
+        let skipped = wrapped_line(handle, value, start, width)
+        start = skipped.next
+        row = row + 1_usize
+    }
+    if gutter > 0.0_f32 {
+        native_fill_rect(handle, bounds.x(), bounds.y(), gutter, bounds.height(),
+            Color::rgba(12_u8, 16_u8, 24_u8, 150_u8).packed(),)
+    }
     while !finished {
         let line = if value_length == 0_usize || start >= value_length {
             WrappedLine {
@@ -2267,9 +2691,15 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
         } else {
             wrapped_line(handle, value, start, width)
         }
-        let y = bounds.y() + 10.0_f32 +(row as f32) * line_height
+        let y = bounds.y() + 10.0_f32 +(row as f32) * line_height - scroll_y
         if y > bounds.bottom() {
             break
+        }
+        if y + line_height >= bounds.y() && gutter > 0.0_f32 {
+            let number = Debug::fmt(textarea_line_number(value, line.start))
+            let number_width = native_text_width(handle, number)
+            native_text(handle, bounds.x() + gutter - number_width - 8.0_f32, y,
+                number, Color::rgb(86_u8, 96_u8, 112_u8).packed(),)
         }
         let text = value.slice(line.start, line.end - line.start)
         if widget.focused() && selection.end() > selection.start() {
@@ -2290,7 +2720,14 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
                     native_text_width(handle, selected), height, Color::rgba(40_u8, 120_u8, 220_u8, 100_u8).packed(),)
             }
         }
-        native_text(handle, x, y, text, foreground.packed())
+        match widget.attribute("syntax") {
+            Option::Some(language) => {
+                render_syntax_line(handle, x, y, text, foreground, language)
+            }
+            Option::None => {
+                native_text(handle, x, y, text, foreground.packed())
+            }
+        }
         render_text_decoration(handle, x, y, text, style, foreground, opacity)
         let cursor_on_line = widget.cursor() >= line.start &&
         (widget.cursor() < line.end || line.end == value_length ||(line.hard_break && widget.cursor()
@@ -2306,7 +2743,8 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
             row = row + 1_usize
             let empty_y = bounds.y() + 10.0_f32 +(row as f32) * line_height
             if widget.focused() && widget.cursor() == value_length {
-                native_line(handle, x + 1.0_f32, empty_y, x + 1.0_f32, empty_y + height,
+                native_line(handle, x + 1.0_f32, empty_y - scroll_y, x + 1.0_f32,
+                    empty_y + height - scroll_y,
                     Color::rgb(18_u8, 153_u8, 126_u8).packed(),)
             }
         } else {
@@ -2315,6 +2753,187 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
         }
     }
     ret()
+}
+
+fn syntax_digit(value: str) -> bool {
+    ret "0123456789".contains(value)
+}
+
+fn syntax_uppercase(value: str) -> bool {
+    ret "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(value)
+}
+
+fn syntax_identifier_char(value: str) -> bool {
+    ret "abcdefghijklmnopqrstuvwxyz".contains(value) ||
+    syntax_uppercase(value) || syntax_digit(value) || value == "_"
+}
+
+fn syntax_keyword(value: str) -> bool {
+    ret value == "fn" || value == "let" || value == "mut" ||
+    value == "struct" || value == "enum" || value == "trait" ||
+    value == "impl" || value == "for" || value == "in" ||
+    value == "import" || value == "pub" || value == "ret" ||
+    value == "if" || value == "else" || value == "elif" ||
+    value == "match" || value == "while" || value == "do" ||
+    value == "loop" || value == "break" || value == "continue" ||
+    value == "as" || value == "with" || value == "macro_rules" ||
+    value == "true" || value == "false" || value == "not" ||
+    value == "unsafe" || value == "extern" || value == "ehir"
+}
+
+fn syntax_operator(value: str) -> bool {
+    ret value == "+" || value == "-" || value == "*" || value == "/" ||
+    value == "%" || value == "=" || value == "!" || value == "<" ||
+    value == ">" || value == "&" || value == "|" || value == "^" ||
+    value == "~" || value == "?" || value == "."
+}
+
+fn toml_key_limit(value: str) -> usize {
+    let mut index = 0_usize
+    let mut quoted = false
+    while index < value.char_len() {
+        let current = value.slice(index, 1_usize)
+        if current == "\"" {
+            quoted = !quoted
+        } elif current == "=" && !quoted {
+            ret index
+        }
+        index = index + 1_usize
+    }
+    ret 0_usize
+}
+
+fn render_syntax_line(handle: usize, x: f32, y: f32, value: str,
+    foreground: Color, language: str,) ->() {
+    let length = value.char_len()
+    let key_limit = if language == "toml" {
+        toml_key_limit(value)
+    } else {
+        0_usize
+    }
+    let mut index = if key_limit > 0_usize {
+        key_limit
+    } else {
+        0_usize
+    }
+    if key_limit > 0_usize {
+        let key = value.slice(0_usize, key_limit)
+        let _painted = native_text(handle, x, y, key,
+            Color::rgb(97_u8, 175_u8, 239_u8).packed(),)
+    } else {
+    }
+    while index < length {
+        let current = value.slice(index, 1_usize)
+        let previous = if index > 0_usize {
+            value.slice(index - 1_usize, 1_usize)
+        } else {
+            ""
+        }
+        let mut end = index + 1_usize
+        let color = if language == "markdown" && current == "#" {
+            end = length
+            Color::rgb(97_u8, 175_u8, 239_u8)
+        } elif language == "markdown" &&(current == "*" || current == "_") {
+            Color::rgb(198_u8, 120_u8, 221_u8)
+        } elif language == "markdown" && current == "`" {
+            while end < length && value.slice(end, 1_usize) != "`" {
+                end = end + 1_usize
+            }
+            end = if end < length {
+                end + 1_usize
+            } else {
+                end
+            }
+            Color::rgb(152_u8, 195_u8, 121_u8)
+        } elif language == "toml" && current == "#" {
+            end = length
+            Color::rgb(103_u8, 112_u8, 126_u8)
+        } elif language == "toml" && current == "[" {
+            while end < length && value.slice(end, 1_usize) != "]" {
+                end = end + 1_usize
+            }
+            end = if end < length {
+                end + 1_usize
+            } else {
+                end
+            }
+            Color::rgb(198_u8, 120_u8, 221_u8)
+        } elif language == "encore" && current == "#" {
+            while end < length && syntax_identifier_char(
+                value.slice(end, 1_usize),) {
+                end = end + 1_usize
+            }
+            Color::rgb(86_u8, 182_u8, 194_u8)
+        } elif language == "encore" && current == "/" && end < length &&
+        value.slice(end, 1_usize) == "/" {
+            end = length
+            Color::rgb(103_u8, 112_u8, 126_u8)
+        } elif (language == "encore" || language == "toml") &&
+        current == "\"" {
+            while end < length && value.slice(end, 1_usize) != "\"" {
+                end = end + 1_usize
+            }
+            end = if end < length {
+                end + 1_usize
+            } else {
+                end
+            }
+            Color::rgb(152_u8, 195_u8, 121_u8)
+        } elif (language == "encore" || language == "toml") &&
+        syntax_digit(current) {
+            while end < length {
+                let digit = value.slice(end, 1_usize)
+                if !(syntax_digit(digit) || digit == ".") {
+                    break
+                } else {
+                    end = end + 1_usize
+                }
+            }
+            Color::rgb(209_u8, 154_u8, 102_u8)
+        } elif syntax_identifier_char(current) {
+            while end < length && syntax_identifier_char(
+                value.slice(end, 1_usize),) {
+                end = end + 1_usize
+            }
+            let word = value.slice(index, end - index)
+            if language == "encore" && syntax_keyword(word) {
+                Color::rgb(198_u8, 120_u8, 221_u8)
+            } elif language == "encore" &&(word == "H" || word == "S") {
+                Color::rgb(86_u8, 182_u8, 194_u8)
+            } elif language == "encore" && end < length &&
+            value.slice(end, 1_usize) == "(" {
+                Color::rgb(97_u8, 175_u8, 239_u8)
+            } elif language == "encore" && end + 1_usize < length &&
+            value.slice(end, 2_usize) == "::" {
+                Color::rgb(86_u8, 182_u8, 194_u8)
+            } elif language == "encore" && previous == "." {
+                Color::rgb(86_u8, 182_u8, 194_u8)
+            } elif language == "encore" && syntax_uppercase(current) {
+                Color::rgb(229_u8, 192_u8, 123_u8)
+            } else {
+                foreground
+            }
+        } elif language == "encore" && syntax_operator(current) {
+            Color::rgb(198_u8, 120_u8, 221_u8)
+        } else {
+            foreground
+        }
+        let token = value.slice(index, end - index)
+        let prefix = value.slice(0_usize, index)
+        native_text(handle, x + native_text_width(handle, prefix),
+            y, token, color.packed(),)
+        index = end
+    }
+    ret()
+}
+
+#attr(test)
+fn syntax_classifier_matches_supported_languages() -> bool {
+    ret syntax_keyword("import") && syntax_keyword("struct")
+    && syntax_keyword("extern") && !syntax_keyword("ZodiacIcons")
+    && syntax_identifier_char("i") && syntax_identifier_char("_")
+    && syntax_identifier_char("9") && syntax_uppercase("Z")
+    && toml_key_limit("dependencies = [\"core\"]") == 13_usize
 }
 
 fn shadow_layers(blur: f32) -> usize {
@@ -2490,14 +3109,16 @@ fn render_choice(handle: usize, bounds: Rect, text: str, checked: bool, radio: b
     let size = 18.0_f32
     let x = bounds.x() + 4.0_f32
     let y = bounds.y() +(bounds.height() - size) / 2.0_f32
-    let border = Color::rgb(137_u8, 149_u8, 163_u8)
-    let accent = Color::rgb(18_u8, 153_u8, 126_u8)
+    let border = apply_opacity(style.border_color(), opacity)
+    let accent = apply_opacity(style.accent_color(), opacity)
+    let surface = apply_opacity(style.background(), opacity)
+    let indicator = contrast_color(style.accent_color(), opacity)
     if radio {
         native_circle(handle, x + 9.0_f32, y + 9.0_f32, 9.0_f32,
             if checked {
                 accent.packed()
             } else {
-                Color::rgb(255_u8, 255_u8, 255_u8).packed()
+                surface.packed()
             }
             , true,)
         native_circle(handle, x + 9.0_f32, y + 9.0_f32, 9.0_f32, border.packed(), false)
@@ -2505,7 +3126,7 @@ fn render_choice(handle: usize, bounds: Rect, text: str, checked: bool, radio: b
         native_fill_rect(handle, x, y, size, size, if checked {
                 accent.packed()
             } else {
-                Color::rgb(255_u8, 255_u8, 255_u8).packed()
+                surface.packed()
             }
             ,
         )
@@ -2513,13 +3134,13 @@ fn render_choice(handle: usize, bounds: Rect, text: str, checked: bool, radio: b
     }
     if checked {
         if radio {
-            native_circle(handle, x + 9.0_f32, y + 9.0_f32, 4.0_f32, Color::rgb(255_u8, 255_u8, 255_u8).packed(),
+            native_circle(handle, x + 9.0_f32, y + 9.0_f32, 4.0_f32, indicator.packed(),
                 true,)
         } else {
-            native_line(handle, x + 4.0_f32, y + 9.0_f32, x + 8.0_f32, y + 13.0_f32, Color::rgb(255_u8,
-                    255_u8, 255_u8,).packed())
-            native_line(handle, x + 8.0_f32, y + 13.0_f32, x + 15.0_f32, y + 5.0_f32, Color::rgb(255_u8,
-                    255_u8, 255_u8,).packed())
+            native_line(handle, x + 4.0_f32, y + 9.0_f32, x + 8.0_f32, y + 13.0_f32,
+                indicator.packed(),)
+            native_line(handle, x + 8.0_f32, y + 13.0_f32, x + 15.0_f32, y + 5.0_f32,
+                indicator.packed(),)
         }
     }
     let text_x = x + 28.0_f32
@@ -2535,9 +3156,9 @@ fn render_switch(handle: usize, bounds: Rect, text: str, checked: bool,
     let y = bounds.y() +(bounds.height() - 22.0_f32) / 2.0_f32
     native_fill_rect(handle, x, y, 42.0_f32, 22.0_f32,
         if checked {
-            Color::rgb(18_u8, 153_u8, 126_u8).packed()
+            apply_opacity(style.accent_color(), opacity).packed()
         } else {
-            Color::rgb(174_u8, 184_u8, 195_u8).packed()
+            apply_opacity(style.background(), opacity).packed()
         }
         ,)
     let knob_x = if checked {
@@ -2545,7 +3166,8 @@ fn render_switch(handle: usize, bounds: Rect, text: str, checked: bool,
     } else {
         x + 2.0_f32
     }
-    native_fill_rect(handle, knob_x, y + 2.0_f32, 18.0_f32, 18.0_f32, Color::rgb(255_u8, 255_u8, 255_u8).packed())
+    native_fill_rect(handle, knob_x, y + 2.0_f32, 18.0_f32, 18.0_f32,
+        contrast_color(style.background(), opacity).packed(),)
     let text_x = x + 54.0_f32
     let text_y = centered_text_y(handle, bounds, text)
     native_text(handle, text_x, text_y, text, foreground.packed())
@@ -2553,16 +3175,70 @@ fn render_switch(handle: usize, bounds: Rect, text: str, checked: bool,
     ret()
 }
 
-fn render_slider(handle: usize, bounds: Rect, value: f32) ->() {
+fn render_slider(handle: usize, bounds: Rect, value: f32, style: Style, opacity: f32) ->() {
     let x = bounds.x() + 6.0_f32
     let width = bounds.width() - 12.0_f32
     let y = bounds.y() + bounds.height() / 2.0_f32
-    native_fill_rect(handle, x, y - 2.0_f32, width, 4.0_f32, Color::rgb(211_u8, 218_u8, 226_u8).packed())
-    native_fill_rect(handle, x, y - 2.0_f32, width * value, 4.0_f32, Color::rgb(18_u8, 153_u8, 126_u8).packed())
-    native_fill_rect(handle, x + width * value - 7.0_f32, y - 7.0_f32, 14.0_f32, 14.0_f32, Color::rgb(255_u8,
-            255_u8, 255_u8,).packed())
-    native_stroke_rect(handle, x + width * value - 7.0_f32, y - 7.0_f32, 14.0_f32, 14.0_f32, Color::rgb(18_u8,
-            153_u8, 126_u8,).packed())
+    let track = apply_opacity(style.background(), opacity)
+    let accent = apply_opacity(style.accent_color(), opacity)
+    native_round_rect(handle, x, y - 2.0_f32, width, 4.0_f32, 2.0_f32,
+        track.packed(), true,)
+    native_round_rect(handle, x, y - 2.0_f32, width * value, 4.0_f32, 2.0_f32,
+        accent.packed(), true,)
+    let thumb_x = x + width * value
+    native_circle(handle, thumb_x, y, 7.0_f32,
+        contrast_color(style.accent_color(), opacity).packed(), true,)
+    native_circle(handle, thumb_x, y, 7.0_f32, accent.packed(), false)
+    ret()
+}
+
+fn render_range_slider(handle: usize, bounds: Rect, widget: Widget,
+    style: Style, opacity: f32,) ->() {
+    let start = widget.range_start()
+    let end = widget.range_end()
+    let x = bounds.x() + 9.0_f32
+    let width = bounds.width() - 18.0_f32
+    let y = bounds.y() + bounds.height() / 2.0_f32
+    let lower = if start < end {
+        start
+    } else {
+        end
+    }
+    let upper = if start < end {
+        end
+    } else {
+        start
+    }
+    let track = apply_opacity(style.background(), opacity)
+    let accent = apply_opacity(style.accent_color(), opacity)
+    native_round_rect(handle, x, y - 2.0_f32, width, 4.0_f32, 2.0_f32,
+        track.packed(), true,)
+    native_round_rect(handle, x + width * lower, y - 3.0_f32,
+        width *(upper - lower), 6.0_f32, 3.0_f32, accent.packed(), true,)
+    let ticks = widget.range_ticks()
+    if ticks >= 2_usize {
+        let mut index = 0_usize
+        while index < ticks {
+            let position = index as f32 /(ticks - 1_usize) as f32
+            let selected = position >= lower && position <= upper
+            let tick = if selected {
+                contrast_color(style.accent_color(), opacity)
+            } else {
+                apply_opacity(style.foreground(), opacity * 0.48_f32)
+            }
+            let tick_x = x + width * position
+            native_round_rect(handle, tick_x - 0.75_f32, y - 5.0_f32,
+                1.5_f32, 10.0_f32, 0.75_f32, tick.packed(), true,)
+            index = index + 1_usize
+        }
+    }
+    let lower_x = x + width * lower
+    let upper_x = x + width * upper
+    let thumb_fill = contrast_color(style.accent_color(), opacity)
+    native_circle(handle, lower_x, y, 7.0_f32, thumb_fill.packed(), true)
+    native_circle(handle, lower_x, y, 7.0_f32, accent.packed(), false)
+    native_circle(handle, upper_x, y, 7.0_f32, thumb_fill.packed(), true)
+    native_circle(handle, upper_x, y, 7.0_f32, accent.packed(), false)
     ret()
 }
 
@@ -2619,12 +3295,23 @@ fn render_color_channel(handle: usize, bounds: Rect, widget: Widget) ->() {
     ret()
 }
 
-fn render_progress(handle: usize, bounds: Rect, value: f32) ->() {
-    native_fill_rect(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(), Color::rgb(221_u8,
-            227_u8, 233_u8,).packed())
-    native_fill_rect(handle, bounds.x(), bounds.y(), bounds.width() * value, bounds.height(), Color::rgb(18_u8,
-            153_u8, 126_u8,).packed())
+fn render_progress(handle: usize, bounds: Rect, value: f32, style: Style, opacity: f32) ->() {
+    native_fill_rect(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(),
+        apply_opacity(style.background(), opacity).packed(),)
+    native_fill_rect(handle, bounds.x(), bounds.y(), bounds.width() * value, bounds.height(),
+        apply_opacity(style.accent_color(), opacity).packed(),)
     ret()
+}
+
+fn contrast_color(background: Color, opacity: f32) -> Color {
+    let luminance =(background.red() as u32) * 299_u32 +
+    (background.green() as u32) * 587_u32 +(background.blue() as u32) * 114_u32
+    ret apply_opacity(if luminance > 150000_u32 {
+            Color::rgb(17_u8, 24_u8, 39_u8)
+        } else {
+            Color::rgb(255_u8, 255_u8, 255_u8)
+        }
+        , opacity,)
 }
 
 fn centered_text_y(handle: usize, bounds: Rect, text: str) -> f32 {

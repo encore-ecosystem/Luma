@@ -1,7 +1,7 @@
 //! Minimal event-driven Luma application using retained reactive updates.
 
 import core::fmt::Debug
-import core::io::println
+import std::io::println
 import luma:: {
     FontManager, Insets, InteractionState, Style, Theme, Widget, Window, event_close, event_pointer_down,
     event_pointer_up, event_resize, vertical

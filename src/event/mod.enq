@@ -1,0 +1,232 @@
+//! DOM-style UI events and retained callback lists.
+
+import core::vec::Vec
+
+pub fn ui_event_click() -> u32 {
+    ret 1_u32
+}
+pub fn ui_event_pointer_down() -> u32 {
+    ret 2_u32
+}
+pub fn ui_event_pointer_move() -> u32 {
+    ret 3_u32
+}
+pub fn ui_event_pointer_up() -> u32 {
+    ret 4_u32
+}
+pub fn ui_event_scroll() -> u32 {
+    ret 5_u32
+}
+pub fn ui_event_key_down() -> u32 {
+    ret 6_u32
+}
+pub fn ui_event_key_up() -> u32 {
+    ret 7_u32
+}
+pub fn ui_event_input() -> u32 {
+    ret 8_u32
+}
+pub fn ui_event_change() -> u32 {
+    ret 9_u32
+}
+pub fn ui_event_transition_run() -> u32 {
+    ret 10_u32
+}
+pub fn ui_event_transition_start() -> u32 {
+    ret 11_u32
+}
+pub fn ui_event_transition_cancel() -> u32 {
+    ret 12_u32
+}
+pub fn ui_event_transition_end() -> u32 {
+    ret 13_u32
+}
+
+pub fn ui_phase_capture() -> u32 {
+    ret 1_u32
+}
+pub fn ui_phase_target() -> u32 {
+    ret 2_u32
+}
+pub fn ui_phase_bubble() -> u32 {
+    ret 3_u32
+}
+
+/// Mutable event state shared by every listener in one propagation pass.
+pub struct UiEvent {
+    kind: u32
+    target: str
+    current_target: str
+    phase: u32
+    x: f32
+    y: f32
+    delta_x: f32
+    delta_y: f32
+    key: u32
+    modifiers: u32
+    text: str
+    property_name: str
+    elapsed_time: f32
+    pseudo_element: str
+    propagation_stopped: bool
+    default_prevented: bool
+}
+
+impl for UiEvent {
+    pub fn new(kind: u32, target: str) -> UiEvent < H > {
+        ret UiEvent < H > {
+            kind, target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
+            0.0_f32, 0.0_f32, 0_u32, 0_u32, "", "", 0.0_f32, "", false, false
+        }
+    }
+
+    pub fn pointer(kind: u32, target: str, x: f32, y: f32, delta_x: f32,
+        delta_y: f32,) -> UiEvent < H > {
+        ret UiEvent < H > {
+            kind, target, "", ui_phase_target(), x, y, delta_x, delta_y,
+            0_u32, 0_u32, "", "", 0.0_f32, "", false, false
+        }
+    }
+
+    pub fn keyboard(kind: u32, target: str, key: u32, modifiers: u32) -> UiEvent < H > {
+        ret UiEvent < H > {
+            kind, target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
+            0.0_f32, 0.0_f32, key, modifiers, "", "", 0.0_f32, "", false, false
+        }
+    }
+
+    pub fn input(target: str, text: str) -> UiEvent < H > {
+        ret UiEvent < H > {
+            ui_event_input(), target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
+            0.0_f32, 0.0_f32, 0_u32, 0_u32, text, "", 0.0_f32, "", false, false
+        }
+    }
+
+    pub fn transition(kind: u32, target: str, property_name: str,
+        elapsed_time: f32,) -> UiEvent < H > {
+        ret UiEvent < H > {
+            kind, target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
+            0.0_f32, 0.0_f32, 0_u32, 0_u32, "", property_name,
+            elapsed_time, "", false, false
+        }
+    }
+
+    pub fn kind(self: Self &) -> u32 {
+        ret self.kind
+    }
+    pub fn target(self: Self &) -> str {
+        ret self.target
+    }
+    pub fn current_target(self: Self &) -> str {
+        ret self.current_target
+    }
+    pub fn phase(self: Self &) -> u32 {
+        ret self.phase
+    }
+    pub fn x(self: Self &) -> f32 {
+        ret self.x
+    }
+    pub fn y(self: Self &) -> f32 {
+        ret self.y
+    }
+    pub fn delta_x(self: Self &) -> f32 {
+        ret self.delta_x
+    }
+    pub fn delta_y(self: Self &) -> f32 {
+        ret self.delta_y
+    }
+    pub fn key(self: Self &) -> u32 {
+        ret self.key
+    }
+    pub fn modifiers(self: Self &) -> u32 {
+        ret self.modifiers
+    }
+    pub fn text(self: Self &) -> str {
+        ret self.text
+    }
+    pub fn property_name(self: Self &) -> str {
+        ret self.property_name
+    }
+    /// CSS-compatible elapsed time in seconds, excluding transition delay.
+    pub fn elapsed_time(self: Self &) -> f32 {
+        ret self.elapsed_time
+    }
+    pub fn pseudo_element(self: Self &) -> str {
+        ret self.pseudo_element
+    }
+    pub fn propagation_stopped(self: Self &) -> bool {
+        ret self.propagation_stopped
+    }
+    pub fn default_prevented(self: Self &) -> bool {
+        ret self.default_prevented
+    }
+
+    pub fn stop_propagation(self: Self &) ->() {
+        self.propagation_stopped = true
+        ret()
+    }
+
+    pub fn prevent_default(self: Self &) ->() {
+        self.default_prevented = true
+        ret()
+    }
+
+    pub fn enter(self: Self &, current_target: str, phase: u32) ->() {
+        self.current_target = current_target
+        self.phase = phase
+        ret()
+    }
+}
+
+/// The compiler lowers a pipe closure passed to this trait into an owning
+/// heap environment and an ordinary EHIR dynamic-trait implementation.
+pub trait UiEventHandler {
+    fn handle(self: Self, event: UiEvent < H >) ->()
+}
+
+pub struct UiEventListener {
+    kind: u32
+    capture: bool
+    handler: dyn UiEventHandler
+}
+
+pub struct UiEventHandlers {
+    listeners: Vec[UiEventListener]
+}
+
+impl for UiEventHandlers {
+    pub fn new() -> UiEventHandlers < H > {
+        ret UiEventHandlers < H > {
+            Vec[UiEventListener]::new()
+        }
+    }
+
+    pub fn add(self: Self &, kind: u32, capture: bool, handler: dyn UiEventHandler) ->() {
+        self.listeners.push(UiEventListener {
+                kind, capture, handler
+            }
+            ,
+        )
+        ret()
+    }
+
+    pub fn dispatch(self: Self &, kind: u32, capture: bool, event: UiEvent < H >) ->() {
+        let mut index = 0_usize
+        while index < self.listeners.len() {
+            if event.propagation_stopped() {
+                ret()
+            }
+            match self.listeners.get(index) {
+                Some(listener) => {
+                    if listener.kind == kind && listener.capture == capture {
+                        listener.handler.handle(event)
+                    }
+                }
+                None => {
+                }
+            }
+            index += 1_usize
+        }
+        ret()
+    }
+}

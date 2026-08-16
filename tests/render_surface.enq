@@ -33,6 +33,25 @@ fn main() -> u32 {
                 window.destroy()
                 ret 5_u32
             }
+            // Camera-only frames reuse captured surface geometry instead of
+            // recursively traversing the owned layout tree every update.
+            let mut iteration = 0_u32
+            while iteration < 1000_u32 {
+                let known = window.prepare_frame_with_surface(layout, true, slot)
+                match known.surface("scene") {
+                    Option::Some(reused) => {
+                        if reused.generation() != slot.generation() {
+                            window.destroy()
+                            ret 8_u32
+                        }
+                    }
+                    Option::None => {
+                        window.destroy()
+                        ret 9_u32
+                    }
+                }
+                iteration += 1_u32
+            }
         }
         Option::None => {
             window.destroy()

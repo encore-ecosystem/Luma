@@ -1,4 +1,5 @@
 target/
+artifacts/
 docs/book/
 /*.tar.gz
 *.o

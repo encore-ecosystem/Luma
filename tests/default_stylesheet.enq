@@ -1,0 +1,48 @@
+import luma:: {
+    Button, Color, Main, Style, StyleSheet
+}
+
+fn main() -> u32 {
+    let defaults = StyleSheet::default()
+    let button = Button::new("save", "Save")
+    let normal = defaults.style(button, false, false, false)
+    let hovered = defaults.style(button, true, false, false)
+    let focused = defaults.style(button, false, false, true)
+    if defaults.len() == 0_usize || normal.background().packed() == hovered.background().packed() {
+        ret 1_u32
+    }
+    if focused.outline().width() <= normal.outline().width() {
+        ret 6_u32
+    }
+    if normal.accent_color().blue() != 235_u8 || normal.pointer_cursor() == 0_u32 ||
+    normal.transition().properties() == "none" {
+        ret 7_u32
+    }
+    let hits_before = defaults.cache_hits()
+    let hovered_again = defaults.style(button, true, false, false)
+    if hovered_again.background().packed() != hovered.background().packed() ||
+    defaults.cache_hits() <= hits_before || defaults.cache_misses() < 2_u64 {
+        ret 5_u32
+    }
+
+    let application = StyleSheet::parse("button { background: #112233; } main { gap: 17px; }")
+    let cascade = defaults.merge(application)
+    let app_button = cascade.style(button, false, false, false)
+    if app_button.background().red() != 17_u8 || app_button.background().green() != 34_u8 ||
+    app_button.background().blue() != 51_u8 {
+        ret 2_u32
+    }
+
+    let inline = button.with_style(Style::default().with_background(Color::rgb(9_u8, 8_u8, 7_u8)))
+    let inline_style = cascade.style(inline, true, true, true)
+    if inline_style.background().red() != 9_u8 || inline_style.background().green() != 8_u8 ||
+    inline_style.background().blue() != 7_u8 {
+        ret 3_u32
+    }
+
+    let main = Main::new("content")
+    if cascade.style(main, false, false, false).gap() != 17.0_f32 {
+        ret 4_u32
+    }
+    ret 0_u32
+}

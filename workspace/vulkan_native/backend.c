@@ -66,6 +66,22 @@ enum {
     VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR = 1000001000,
     VK_STRUCTURE_TYPE_PRESENT_INFO_KHR = 1000001001,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 = 1000059000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES = 51,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES = 53,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR = 1000150013,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT = 1000328000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR = 1000348013,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR = 1000203000,
+    VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO = 1000060000,
+    VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO = 1000244001,
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR = 1000150000,
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR = 1000150002,
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR = 1000150004,
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR = 1000150005,
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR = 1000150006,
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR = 1000150017,
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR = 1000150020,
+    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR = 1000150007,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT = 1000275000,
     VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT = 1000275001,
     VK_PHYSICAL_DEVICE_TYPE_OTHER = 0,
@@ -74,6 +90,19 @@ enum {
     VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU = 3,
     VK_PHYSICAL_DEVICE_TYPE_CPU = 4,
     GRAPHENE_MAX_ADAPTERS = 16
+};
+
+enum {
+    GRAPHENE_GPU_FEATURE_DESCRIPTOR_INDEXING = 1u << 0,
+    GRAPHENE_GPU_FEATURE_BUFFER_DEVICE_ADDRESS = 1u << 1,
+    GRAPHENE_GPU_FEATURE_TIMELINE_SEMAPHORE = 1u << 2,
+    GRAPHENE_GPU_FEATURE_SYNCHRONIZATION_2 = 1u << 3,
+    GRAPHENE_GPU_FEATURE_DYNAMIC_RENDERING = 1u << 4,
+    GRAPHENE_GPU_FEATURE_MESH_SHADER = 1u << 5,
+    GRAPHENE_GPU_FEATURE_RAY_QUERY = 1u << 6,
+    GRAPHENE_GPU_FEATURE_DRAW_INDIRECT_COUNT = 1u << 7,
+    GRAPHENE_GPU_FEATURE_SHADER_INT64_ATOMICS = 1u << 8,
+    GRAPHENE_GPU_FEATURE_FRAGMENT_SHADER_BARYCENTRIC = 1u << 9
 };
 
 enum {
@@ -99,6 +128,8 @@ enum {
     VK_SHADER_STAGE_VERTEX_BIT = 1,
     VK_SHADER_STAGE_FRAGMENT_BIT = 16,
     VK_SHADER_STAGE_COMPUTE_BIT = 32,
+    VK_SHADER_STAGE_TASK_BIT_EXT = 64,
+    VK_SHADER_STAGE_MESH_BIT_EXT = 128,
     VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST = 3,
     VK_POLYGON_MODE_FILL = 0,
     VK_CULL_MODE_NONE = 0,
@@ -125,12 +156,14 @@ enum {
     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER = 1,
     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER = 6,
     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER = 7,
+    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR = 1000150000,
     VK_SUBPASS_EXTERNAL = UINT32_MAX,
     VK_SUBPASS_CONTENTS_INLINE = 0
 };
 
 enum { VK_DYNAMIC_STATE_VIEWPORT = 0, VK_DYNAMIC_STATE_SCISSOR = 1 };
-enum { VK_FILTER_LINEAR = 1, VK_SAMPLER_MIPMAP_MODE_LINEAR = 1, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE = 2 };
+enum { VK_FILTER_LINEAR = 1, VK_SAMPLER_MIPMAP_MODE_LINEAR = 1,
+    VK_SAMPLER_ADDRESS_MODE_REPEAT = 0, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE = 2 };
 
 enum {
     VK_IMAGE_LAYOUT_UNDEFINED = 0,
@@ -151,6 +184,7 @@ enum {
     VK_PIPELINE_STAGE_TRANSFER_BIT = 4096,
     VK_PIPELINE_STAGE_HOST_BIT = 16384,
     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT = 65536,
+    VK_ACCESS_INDIRECT_COMMAND_READ_BIT = 1,
     VK_ACCESS_SHADER_READ_BIT = 32,
     VK_ACCESS_INDEX_READ_BIT = 2,
     VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT = 4,
@@ -161,6 +195,23 @@ enum {
     VK_ACCESS_TRANSFER_READ_BIT = 2048,
     VK_ACCESS_TRANSFER_WRITE_BIT = 4096,
     VK_ACCESS_HOST_READ_BIT = 8192,
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT = 1,
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT = 2,
+    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT = 256,
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT = 32,
+    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 0x00020000,
+    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR = 0x00080000,
+    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR = 0x00100000,
+    VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT = 2,
+    VK_FORMAT_R32G32B32_SFLOAT = 106,
+    VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR = 0,
+    VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR = 1,
+    VK_GEOMETRY_TYPE_TRIANGLES_KHR = 0,
+    VK_GEOMETRY_TYPE_INSTANCES_KHR = 2,
+    VK_GEOMETRY_OPAQUE_BIT_KHR = 1,
+    VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR = 4,
+    VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR = 0,
+    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR = 1,
     VK_QUEUE_FAMILY_IGNORED = UINT32_MAX
 };
 
@@ -230,6 +281,226 @@ typedef struct {
     void *pNext;
     uint32_t features[64];
 } VkPhysicalDeviceFeatures2;
+
+typedef struct {
+    uint32_t sType;
+    void *pNext;
+    uint32_t samplerMirrorClampToEdge;
+    uint32_t drawIndirectCount;
+    uint32_t storageBuffer8BitAccess;
+    uint32_t uniformAndStorageBuffer8BitAccess;
+    uint32_t storagePushConstant8;
+    uint32_t shaderBufferInt64Atomics;
+    uint32_t shaderSharedInt64Atomics;
+    uint32_t shaderFloat16;
+    uint32_t shaderInt8;
+    uint32_t descriptorIndexing;
+    uint32_t shaderInputAttachmentArrayDynamicIndexing;
+    uint32_t shaderUniformTexelBufferArrayDynamicIndexing;
+    uint32_t shaderStorageTexelBufferArrayDynamicIndexing;
+    uint32_t shaderUniformBufferArrayNonUniformIndexing;
+    uint32_t shaderSampledImageArrayNonUniformIndexing;
+    uint32_t shaderStorageBufferArrayNonUniformIndexing;
+    uint32_t shaderStorageImageArrayNonUniformIndexing;
+    uint32_t shaderInputAttachmentArrayNonUniformIndexing;
+    uint32_t shaderUniformTexelBufferArrayNonUniformIndexing;
+    uint32_t shaderStorageTexelBufferArrayNonUniformIndexing;
+    uint32_t descriptorBindingUniformBufferUpdateAfterBind;
+    uint32_t descriptorBindingSampledImageUpdateAfterBind;
+    uint32_t descriptorBindingStorageImageUpdateAfterBind;
+    uint32_t descriptorBindingStorageBufferUpdateAfterBind;
+    uint32_t descriptorBindingUniformTexelBufferUpdateAfterBind;
+    uint32_t descriptorBindingStorageTexelBufferUpdateAfterBind;
+    uint32_t descriptorBindingUpdateUnusedWhilePending;
+    uint32_t descriptorBindingPartiallyBound;
+    uint32_t descriptorBindingVariableDescriptorCount;
+    uint32_t runtimeDescriptorArray;
+    uint32_t samplerFilterMinmax;
+    uint32_t scalarBlockLayout;
+    uint32_t imagelessFramebuffer;
+    uint32_t uniformBufferStandardLayout;
+    uint32_t shaderSubgroupExtendedTypes;
+    uint32_t separateDepthStencilLayouts;
+    uint32_t hostQueryReset;
+    uint32_t timelineSemaphore;
+    uint32_t bufferDeviceAddress;
+    uint32_t bufferDeviceAddressCaptureReplay;
+    uint32_t bufferDeviceAddressMultiDevice;
+    uint32_t vulkanMemoryModel;
+    uint32_t vulkanMemoryModelDeviceScope;
+    uint32_t vulkanMemoryModelAvailabilityVisibilityChains;
+    uint32_t shaderOutputViewportIndex;
+    uint32_t shaderOutputLayer;
+    uint32_t subgroupBroadcastDynamicId;
+} VkPhysicalDeviceVulkan12Features;
+
+typedef struct {
+    uint32_t sType;
+    void *pNext;
+    uint32_t robustImageAccess;
+    uint32_t inlineUniformBlock;
+    uint32_t descriptorBindingInlineUniformBlockUpdateAfterBind;
+    uint32_t pipelineCreationCacheControl;
+    uint32_t privateData;
+    uint32_t shaderDemoteToHelperInvocation;
+    uint32_t shaderTerminateInvocation;
+    uint32_t subgroupSizeControl;
+    uint32_t computeFullSubgroups;
+    uint32_t synchronization2;
+    uint32_t textureCompressionASTC_HDR;
+    uint32_t shaderZeroInitializeWorkgroupMemory;
+    uint32_t dynamicRendering;
+    uint32_t shaderIntegerDotProduct;
+    uint32_t maintenance4;
+} VkPhysicalDeviceVulkan13Features;
+
+typedef struct {
+    uint32_t sType;
+    void *pNext;
+    uint32_t accelerationStructure;
+    uint32_t accelerationStructureCaptureReplay;
+    uint32_t accelerationStructureIndirectBuild;
+    uint32_t accelerationStructureHostCommands;
+    uint32_t descriptorBindingAccelerationStructureUpdateAfterBind;
+} VkPhysicalDeviceAccelerationStructureFeaturesKHR;
+
+typedef struct {
+    uint32_t sType;
+    void *pNext;
+    uint32_t rayQuery;
+} VkPhysicalDeviceRayQueryFeaturesKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    uint32_t flags;
+    uint32_t deviceMask;
+} VkMemoryAllocateFlagsInfo;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    void *buffer;
+} VkBufferDeviceAddressInfo;
+
+typedef union {
+    uint64_t deviceAddress;
+    const void *hostAddress;
+} VkDeviceOrHostAddressConstKHR;
+
+typedef union {
+    uint64_t deviceAddress;
+    void *hostAddress;
+} VkDeviceOrHostAddressKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    uint32_t vertexFormat;
+    VkDeviceOrHostAddressConstKHR vertexData;
+    uint64_t vertexStride;
+    uint32_t maxVertex;
+    uint32_t indexType;
+    VkDeviceOrHostAddressConstKHR indexData;
+    VkDeviceOrHostAddressConstKHR transformData;
+} VkAccelerationStructureGeometryTrianglesDataKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    uint32_t arrayOfPointers;
+    VkDeviceOrHostAddressConstKHR data;
+} VkAccelerationStructureGeometryInstancesDataKHR;
+
+typedef union {
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles;
+    uint8_t aabbs[32];
+    VkAccelerationStructureGeometryInstancesDataKHR instances;
+} VkAccelerationStructureGeometryDataKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    uint32_t geometryType;
+    VkAccelerationStructureGeometryDataKHR geometry;
+    uint32_t flags;
+} VkAccelerationStructureGeometryKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    uint32_t type;
+    uint32_t flags;
+    uint32_t mode;
+    void *srcAccelerationStructure;
+    void *dstAccelerationStructure;
+    uint32_t geometryCount;
+    const VkAccelerationStructureGeometryKHR *pGeometries;
+    const VkAccelerationStructureGeometryKHR *const *ppGeometries;
+    VkDeviceOrHostAddressKHR scratchData;
+} VkAccelerationStructureBuildGeometryInfoKHR;
+
+typedef struct {
+    uint32_t sType;
+    void *pNext;
+    uint64_t accelerationStructureSize;
+    uint64_t updateScratchSize;
+    uint64_t buildScratchSize;
+} VkAccelerationStructureBuildSizesInfoKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    uint32_t createFlags;
+    void *buffer;
+    uint64_t offset;
+    uint64_t size;
+    uint32_t type;
+    uint64_t deviceAddress;
+} VkAccelerationStructureCreateInfoKHR;
+
+typedef struct {
+    uint32_t primitiveCount;
+    uint32_t primitiveOffset;
+    uint32_t firstVertex;
+    uint32_t transformOffset;
+} VkAccelerationStructureBuildRangeInfoKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    void *accelerationStructure;
+} VkAccelerationStructureDeviceAddressInfoKHR;
+
+typedef struct {
+    float matrix[3][4];
+    uint32_t custom_index_mask;
+    uint32_t sbt_offset_flags;
+    uint64_t accelerationStructureReference;
+} VkAccelerationStructureInstanceKHR;
+
+typedef struct {
+    uint32_t sType;
+    const void *pNext;
+    uint32_t accelerationStructureCount;
+    void *const *pAccelerationStructures;
+} VkWriteDescriptorSetAccelerationStructureKHR;
+
+typedef struct {
+    uint32_t sType;
+    void *pNext;
+    uint32_t taskShader;
+    uint32_t meshShader;
+    uint32_t multiviewMeshShader;
+    uint32_t primitiveFragmentShadingRateMeshShader;
+    uint32_t meshShaderQueries;
+} VkPhysicalDeviceMeshShaderFeaturesEXT;
+
+typedef struct {
+    uint32_t sType;
+    void *pNext;
+    uint32_t fragmentShaderBarycentric;
+} VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR;
 
 typedef struct {
     uint32_t sType;
@@ -465,6 +736,7 @@ typedef void (*PFN_vkCmdPipelineBarrier)(void *, uint32_t, uint32_t, uint32_t, u
 typedef void (*PFN_vkCmdCopyBufferToImage)(void *, void *, void *, uint32_t, uint32_t, const VkBufferImageCopy *);
 typedef void (*PFN_vkCmdCopyImageToBuffer)(void *, void *, uint32_t, void *, uint32_t, const VkBufferImageCopy *);
 typedef void (*PFN_vkCmdCopyBuffer)(void *, void *, void *, uint32_t, const VkBufferCopy *);
+typedef void (*PFN_vkCmdFillBuffer)(void *, void *, uint64_t, uint64_t, uint32_t);
 typedef VkResult (*PFN_vkCreateFence)(void *, const VkFenceCreateInfo *, const void *, void **);
 typedef void (*PFN_vkDestroyFence)(void *, void *, const void *);
 typedef VkResult (*PFN_vkGetFenceStatus)(void *, void *);
@@ -502,6 +774,11 @@ typedef void (*PFN_vkCmdSetScissor)(void *, uint32_t, uint32_t, const VkRect2D *
 typedef void (*PFN_vkCmdBindVertexBuffers)(void *, uint32_t, uint32_t, void *const *, const uint64_t *);
 typedef void (*PFN_vkCmdBindIndexBuffer)(void *, void *, uint64_t, uint32_t);
 typedef void (*PFN_vkCmdDrawIndexed)(void *, uint32_t, uint32_t, uint32_t, int32_t, uint32_t);
+typedef void (*PFN_vkCmdDrawIndexedIndirectCount)(void *, void *, uint64_t,
+    void *, uint64_t, uint32_t, uint32_t);
+typedef void (*PFN_vkCmdDrawMeshTasksEXT)(void *, uint32_t, uint32_t, uint32_t);
+typedef void (*PFN_vkCmdDrawMeshTasksIndirectEXT)(
+    void *, void *, uint64_t, uint32_t, uint32_t);
 typedef VkResult (*PFN_vkCreateDescriptorSetLayout)(void *, const VkDescriptorSetLayoutCreateInfo *, const void *, void **);
 typedef void (*PFN_vkDestroyDescriptorSetLayout)(void *, void *, const void *);
 typedef VkResult (*PFN_vkCreateDescriptorPool)(void *, const VkDescriptorPoolCreateInfo *, const void *, void **);
@@ -510,6 +787,20 @@ typedef VkResult (*PFN_vkAllocateDescriptorSets)(void *, const VkDescriptorSetAl
 typedef void (*PFN_vkUpdateDescriptorSets)(void *, uint32_t, const VkWriteDescriptorSet *, uint32_t, const void *);
 typedef void (*PFN_vkCmdBindDescriptorSets)(void *, uint32_t, void *, uint32_t, uint32_t, void *const *, uint32_t, const uint32_t *);
 typedef void (*PFN_vkCmdDispatch)(void *, uint32_t, uint32_t, uint32_t);
+typedef uint64_t (*PFN_vkGetBufferDeviceAddress)(void *,
+    const VkBufferDeviceAddressInfo *);
+typedef VkResult (*PFN_vkCreateAccelerationStructureKHR)(void *,
+    const VkAccelerationStructureCreateInfoKHR *, const void *, void **);
+typedef void (*PFN_vkDestroyAccelerationStructureKHR)(void *, void *,
+    const void *);
+typedef void (*PFN_vkGetAccelerationStructureBuildSizesKHR)(void *, uint32_t,
+    const VkAccelerationStructureBuildGeometryInfoKHR *, const uint32_t *,
+    VkAccelerationStructureBuildSizesInfoKHR *);
+typedef void (*PFN_vkCmdBuildAccelerationStructuresKHR)(void *, uint32_t,
+    const VkAccelerationStructureBuildGeometryInfoKHR *,
+    const VkAccelerationStructureBuildRangeInfoKHR *const *);
+typedef uint64_t (*PFN_vkGetAccelerationStructureDeviceAddressKHR)(void *,
+    const VkAccelerationStructureDeviceAddressInfoKHR *);
 typedef VkResult (*PFN_vkCreateSampler)(void *, const VkSamplerCreateInfo *, const void *, void **);
 typedef void (*PFN_vkDestroySampler)(void *, void *, const void *);
 
@@ -617,6 +908,7 @@ typedef struct {
     PFN_vkCmdCopyBufferToImage cmd_copy_buffer_to_image;
     PFN_vkCmdCopyImageToBuffer cmd_copy_image_to_buffer;
     PFN_vkCmdCopyBuffer cmd_copy_buffer;
+    PFN_vkCmdFillBuffer cmd_fill_buffer;
     PFN_vkCmdBindPipeline cmd_bind_pipeline;
     PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets;
     PFN_vkCmdDispatch cmd_dispatch;
@@ -630,6 +922,8 @@ typedef struct {
     bool available;
     bool present;
     bool swapchain_maintenance;
+    uint32_t requested_features;
+    uint32_t enabled_features;
     bool owns_device;
     char error[256];
 } GrapheneVkDevice;
@@ -637,6 +931,8 @@ typedef struct {
 typedef struct {
     GrapheneVkDevice *owner;
     void *command_buffer;
+    void *bound_compute_pipeline;
+    void *bound_compute_group;
     bool recording;
     bool submitted;
     char error[256];
@@ -698,6 +994,7 @@ typedef struct {
 
 typedef struct {
     GrapheneVkDevice *owner;
+    GrapheneVkBindGroupLayout *bind_group_layout;
     void *layout;
     void *pipeline;
     PFN_vkDestroyPipelineLayout destroy_pipeline_layout;
@@ -717,6 +1014,17 @@ typedef struct {
     bool available;
     char error[256];
 } GrapheneVkBuffer;
+
+typedef struct {
+    GrapheneVkDevice *owner;
+    GrapheneVkBuffer *backing;
+    void *acceleration_structure;
+    uint64_t device_address;
+    uint32_t type;
+    PFN_vkDestroyAccelerationStructureKHR destroy_acceleration_structure;
+    bool available;
+    char error[256];
+} GrapheneVkAccelerationStructure;
 
 typedef struct {
     GrapheneVkDevice *owner;
@@ -781,6 +1089,9 @@ typedef struct {
     PFN_vkCmdBindVertexBuffers cmd_bind_vertex_buffers;
     PFN_vkCmdBindIndexBuffer cmd_bind_index_buffer;
     PFN_vkCmdDrawIndexed cmd_draw_indexed;
+    PFN_vkCmdDrawIndexedIndirectCount cmd_draw_indexed_indirect_count;
+    PFN_vkCmdDrawMeshTasksEXT cmd_draw_mesh_tasks;
+    PFN_vkCmdDrawMeshTasksIndirectEXT cmd_draw_mesh_tasks_indirect;
     PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets;
     PFN_vkCreateFramebuffer create_framebuffer;
     void *active_render_pass;

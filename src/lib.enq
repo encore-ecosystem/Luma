@@ -6,11 +6,15 @@ pub import mod::animation:: *
 pub import mod::application:: *
 pub import mod::css:: *
 pub import mod::display:: *
+pub import mod::event:: *
 pub import mod::file_picker:: *
 pub import mod::font:: *
+pub import mod::hotkey:: *
+pub import mod::html:: *
 pub import mod::icon:: *
 pub import mod::interaction:: *
 pub import mod::layout:: *
+pub import mod::reactive:: *
 pub import mod::runtime:: *
 pub import mod::style:: *
 pub import mod::svg:: *

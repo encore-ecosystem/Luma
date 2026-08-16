@@ -1,5 +1,5 @@
-import core::os::env
-import luma::{RendererKind, Widget, Window}
+import std::os::env
+import luma::{RendererKind, Style, Widget, Window}
 
 fn main() -> u32 {
     let window = Window::create_with_renderer(
@@ -19,11 +19,57 @@ fn main() -> u32 {
         let _destroyed = window.destroy()
         ret 2_u32
     }
-    let _ui = window.reactive(
-        Widget::label("Complete Direct Vulkan first frame"),)
+    let mut ui = window.reactive(
+        Widget::label("Complete Direct Vulkan first frame").with_id("status"),)
     if window.presented_frames() != 1_u64 {
         let _destroyed = window.destroy()
         ret 3_u32
+    }
+    if !ui.patch_text("status", "Reactive Direct Vulkan second frame") {
+        let _destroyed = window.destroy()
+        ret 5_u32
+    }
+    ui = window.draw_reactive(ui)
+    if ui.paint_targets().len() != 0_usize ||
+    window.presented_frames() != 2_u64 {
+        let _destroyed = window.destroy()
+        ret 6_u32
+    }
+    // Replacing one damage segment repeatedly must stay bounded instead of
+    // growing the retained stream once per update.
+    let mut patch = 0_u32
+    while patch < 256_u32 {
+        if !ui.patch_text("status", "Reactive Direct Vulkan stress frame") {
+            let _destroyed = window.destroy()
+            ret 7_u32
+        }
+        ui = window.draw_reactive(ui)
+        patch += 1_u32
+    }
+    if window.presented_frames() != 258_u64 {
+        let _destroyed = window.destroy()
+        ret 8_u32
+    }
+    // Replacing a styled text subtree can retire the old glyph atlas while
+    // retained batches from the preceding frame still reference it. Deferred
+    // textures must remain drawable until every retained segment is gone.
+    let mut font_patch = 0_u32
+    while font_patch < 32_u32 {
+        let size = if font_patch % 2_u32 == 0_u32 {
+            13.0_f32
+        } else {
+            21.0_f32
+        }
+        let next = Widget::label("Retained atlas replacement")
+            .with_id("status")
+            .with_style(Style::default().with_font_size(size))
+        let _changes = ui.reconcile(next)
+        ui = window.draw_reactive(ui)
+        font_patch += 1_u32
+    }
+    if window.presented_frames() != 290_u64 {
+        let _destroyed = window.destroy()
+        ret 9_u32
     }
     ret if window.destroy() {
         0_u32

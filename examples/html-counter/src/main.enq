@@ -1,0 +1,86 @@
+//! End-to-end demo for typed HTML builders, file CSS, closures, and Signals.
+
+import core::fmt::Debug
+import core::result::Result
+import luma:: {
+    AppEvent, Application, Body, Button, Heading, Html, HtmlOutput, Label, Main,
+    Signal, StyleSheet, Widget, Window, run_application
+}
+
+struct HtmlCounter {
+    count: Signal[u32] < H >
+    status: Signal[str] < H >
+}
+
+impl for HtmlCounter {
+    fn new() -> Self {
+        ret Self {
+            Signal[u32]::new(0_u32), Signal[str]::new("Ready")
+        }
+    }
+}
+
+impl Application for HtmlCounter {
+    fn view(self: Self) -> Widget {
+        let count = self.count
+        let status = self.status
+        let decrement = Button::new("decrement", "−  Decrement").with_on_click( | event | {
+                let value = count.get()
+                if value > 0_u32 {
+                    count.set(value - 1_u32)
+                }
+                status.set("Decremented through a bubbling click")
+            }
+        )
+        let increment = Button::new("increment", "+  Increment").with_on_click( | event | {
+                count.set(count.get() + 1_u32)
+                status.set("Incremented through a captured Encore closure")
+            }
+        )
+        let reset = Button::new("reset", "Reset").with_on_click( | event | {
+                count.set(0_u32)
+                status.set("Reset to zero")
+            }
+        )
+
+        ret Html::new().with_child(
+            Body::new("body").with_child(
+                Main::new("card").with_classes("card")
+                .with_child(Heading::new("title", "Encore + Luma"))
+                .with_child(Label::new("subtitle", "Typed HTML builders · CSS cascade · retained events"))
+                .with_child(HtmlOutput::new("count", Debug::fmt(count.get())))
+                .with_child(Html::div("actions").with_classes("actions")
+                    .with_child(decrement).with_child(increment).with_child(reset))
+                .with_child(Label::new("status", status.get())),),)
+    }
+
+    fn update(self: Self, event: AppEvent) -> Self {
+        ret self
+    }
+    fn can_close(self: Self) -> bool {
+        ret true
+    }
+    fn background_interval_ms(self: Self) -> u32 {
+        ret 0_u32
+    }
+    fn background_revision(self: Self) -> u64 {
+        ret 0_u64
+    }
+}
+
+fn main() -> u32 {
+    let window = Window::create("Luma HTML + CSS", 760_u32, 520_u32)
+    if !window.available() {
+        ret 1_u32
+    }
+    let styled = match StyleSheet::from_file("app.css") {
+        Result::Ok(sheet) => {
+            window.with_stylesheet(sheet)
+        }
+        Result::Err(_) => {
+            window
+        }
+    }
+    let _final = run_application(styled, HtmlCounter::new())
+    ret 0_u32
+}

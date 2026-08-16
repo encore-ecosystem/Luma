@@ -2,9 +2,7 @@
 
 import core::option::Option
 import core::vec::Vec
-import geometry:: {
-    Rect, Size
-}
+import geometry::{Rect, Size}
 import refrain::style::GridPlacement
 
 pub fn horizontal() -> usize {

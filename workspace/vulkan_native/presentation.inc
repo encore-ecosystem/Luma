@@ -14,6 +14,17 @@ static bool graphene_vk_swapchain_create_render_support(GrapheneVkSwapchain *swa
     swapchain->cmd_bind_vertex_buffers = (PFN_vkCmdBindVertexBuffers)device->get_device_proc(device->device, "vkCmdBindVertexBuffers");
     swapchain->cmd_bind_index_buffer = (PFN_vkCmdBindIndexBuffer)device->get_device_proc(device->device, "vkCmdBindIndexBuffer");
     swapchain->cmd_draw_indexed = (PFN_vkCmdDrawIndexed)device->get_device_proc(device->device, "vkCmdDrawIndexed");
+    swapchain->cmd_draw_indexed_indirect_count = (PFN_vkCmdDrawIndexedIndirectCount)
+        device->get_device_proc(device->device, "vkCmdDrawIndexedIndirectCount");
+    if (swapchain->cmd_draw_indexed_indirect_count == NULL)
+        swapchain->cmd_draw_indexed_indirect_count = (PFN_vkCmdDrawIndexedIndirectCount)
+            device->get_device_proc(device->device, "vkCmdDrawIndexedIndirectCountKHR");
+    swapchain->cmd_draw_mesh_tasks = (PFN_vkCmdDrawMeshTasksEXT)
+        device->get_device_proc(device->device, "vkCmdDrawMeshTasksEXT");
+    swapchain->cmd_draw_mesh_tasks_indirect =
+        (PFN_vkCmdDrawMeshTasksIndirectEXT)
+        device->get_device_proc(device->device,
+            "vkCmdDrawMeshTasksIndirectEXT");
     swapchain->cmd_bind_descriptor_sets = (PFN_vkCmdBindDescriptorSets)device->get_device_proc(device->device, "vkCmdBindDescriptorSets");
     swapchain->create_framebuffer = create_framebuffer;
     if (create_framebuffer == NULL || create_image_view == NULL || swapchain->destroy_image_view == NULL ||
@@ -572,6 +583,139 @@ encore_str graphene_vk_frame_error(size_t handle) {
     return graphene_string(frame == NULL ? "Invalid render frame" : frame->error);
 }
 
+bool graphene_vk_frame_dispatch_compute(size_t frame_handle,
+    size_t pipeline_handle, size_t bind_group_handle,
+    uint32_t x, uint32_t y, uint32_t z) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    GrapheneVkComputePipeline *pipeline =
+        (GrapheneVkComputePipeline *)pipeline_handle;
+    GrapheneVkBindGroup *group = (GrapheneVkBindGroup *)bind_group_handle;
+    if (frame == NULL || !frame->recording || frame->complete ||
+        frame->in_render_pass || pipeline == NULL || !pipeline->available ||
+        group == NULL || !group->available || x == 0 || y == 0 || z == 0 ||
+        pipeline->owner != frame->owner->owner ||
+        group->owner != frame->owner->owner) {
+        if (frame != NULL)
+            strncpy(frame->error, "Unable to record frame compute dispatch",
+                sizeof(frame->error) - 1);
+        return false;
+    }
+    GrapheneVkDevice *device = frame->owner->owner;
+    device->cmd_bind_pipeline(frame->command_buffer,
+        VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+    device->cmd_bind_descriptor_sets(frame->command_buffer,
+        VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->layout,
+        0, 1, &group->set, 0, NULL);
+    device->cmd_dispatch(frame->command_buffer, x, y, z);
+    return true;
+}
+
+bool graphene_vk_frame_compute_barrier(size_t frame_handle) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    if (frame == NULL || !frame->recording || frame->complete ||
+        frame->in_render_pass) return false;
+    VkMemoryBarrier barrier = {
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+            VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
+            VK_ACCESS_HOST_READ_BIT
+    };
+    frame->owner->owner->cmd_pipeline_barrier(frame->command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+        0, 1, &barrier, 0, NULL, 0, NULL);
+    return true;
+}
+
+bool graphene_vk_frame_fill_buffer(size_t frame_handle, size_t buffer_handle,
+    uint64_t offset, uint64_t size, uint32_t value) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)buffer_handle;
+    if (frame == NULL || !frame->recording || frame->complete ||
+        frame->in_render_pass || buffer == NULL || !buffer->available ||
+        buffer->owner != frame->owner->owner ||
+        (buffer->usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) == 0 ||
+        size == 0 || (offset & 3u) != 0 || (size & 3u) != 0 ||
+        offset > buffer->size || size > buffer->size - offset ||
+        buffer->owner->cmd_fill_buffer == NULL) return false;
+    buffer->owner->cmd_fill_buffer(frame->command_buffer, buffer->buffer,
+        offset, size, value);
+    return true;
+}
+
+bool graphene_vk_frame_transfer_storage_barrier(size_t frame_handle) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    if (frame == NULL || !frame->recording || frame->complete ||
+        frame->in_render_pass) return false;
+    VkMemoryBarrier barrier = {
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+    };
+    frame->owner->owner->cmd_pipeline_barrier(frame->command_buffer,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0, 1, &barrier, 0, NULL, 0, NULL);
+    return true;
+}
+
+bool graphene_vk_frame_fragment_storage_barrier(size_t frame_handle) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    if (frame == NULL || !frame->recording || frame->complete ||
+        frame->in_render_pass) return false;
+    VkMemoryBarrier barrier = {
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT
+    };
+    frame->owner->owner->cmd_pipeline_barrier(frame->command_buffer,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0, 1, &barrier, 0, NULL, 0, NULL);
+    return true;
+}
+
+bool graphene_vk_frame_copy_buffer(size_t frame_handle,
+    size_t source_handle, size_t destination_handle,
+    uint64_t source_offset, uint64_t destination_offset, uint64_t size) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    GrapheneVkBuffer *source = (GrapheneVkBuffer *)source_handle;
+    GrapheneVkBuffer *destination = (GrapheneVkBuffer *)destination_handle;
+    if (frame == NULL || !frame->recording || frame->complete ||
+        frame->in_render_pass || source == NULL || destination == NULL ||
+        !source->available || !destination->available ||
+        source->owner != frame->owner->owner ||
+        destination->owner != frame->owner->owner ||
+        (source->usage & 1u) == 0 || (destination->usage & 2u) == 0 ||
+        size == 0 || source_offset > source->size ||
+        size > source->size - source_offset ||
+        destination_offset > destination->size ||
+        size > destination->size - destination_offset) {
+        if (frame != NULL)
+            strncpy(frame->error, "Unable to record frame buffer copy",
+                sizeof(frame->error) - 1);
+        return false;
+    }
+    VkBufferCopy region = {source_offset, destination_offset, size};
+    GrapheneVkDevice *device = frame->owner->owner;
+    device->cmd_copy_buffer(frame->command_buffer,
+        source->buffer, destination->buffer, 1, &region);
+    VkMemoryBarrier barrier = {
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
+            VK_ACCESS_INDEX_READ_BIT
+    };
+    device->cmd_pipeline_barrier(frame->command_buffer,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0, 1, &barrier, 0, NULL, 0, NULL);
+    return true;
+}
+
 bool graphene_vk_frame_begin_render_pass(size_t frame_handle, size_t pipeline_handle,
     float red, float green, float blue, float alpha) {
     GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
@@ -618,11 +762,9 @@ bool graphene_vk_frame_bind_pipeline(size_t frame_handle, size_t pipeline_handle
     frame->owner->cmd_bind_pipeline(frame->command_buffer,
         VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
     frame->pipeline = pipeline;
-    VkViewport viewport = {0.0f, 0.0f, (float)frame->owner->width,
-        (float)frame->owner->height, 0.0f, 1.0f};
-    VkRect2D scissor = {{0, 0}, {frame->owner->width, frame->owner->height}};
-    frame->owner->cmd_set_viewport(frame->command_buffer, 0, 1, &viewport);
-    frame->owner->cmd_set_scissor(frame->command_buffer, 0, 1, &scissor);
+    /* Pipeline changes must preserve the caller's viewport and scissor.
+       External passes set a sub-rect before binding their material pipeline;
+       resetting here expands the Graphene scene over the editor's panels. */
     return true;
 }
 
@@ -651,6 +793,59 @@ bool graphene_vk_frame_draw_indexed(size_t frame_handle, uint32_t index_count,
     if (frame == NULL || !frame->in_render_pass || index_count == 0 || instance_count == 0) return false;
     frame->owner->cmd_draw_indexed(frame->command_buffer, index_count, instance_count,
         first_index, vertex_offset, first_instance);
+    return true;
+}
+
+bool graphene_vk_frame_draw_indexed_indirect_count(size_t frame_handle,
+    size_t commands_handle, uint64_t commands_offset, size_t count_handle,
+    uint64_t count_offset, uint32_t maximum_draw_count, uint32_t stride) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    GrapheneVkBuffer *commands = (GrapheneVkBuffer *)commands_handle;
+    GrapheneVkBuffer *count = (GrapheneVkBuffer *)count_handle;
+    if (frame == NULL || !frame->in_render_pass ||
+        commands == NULL || count == NULL ||
+        !commands->available || !count->available ||
+        commands->owner != frame->owner->owner ||
+        count->owner != frame->owner->owner ||
+        frame->owner->cmd_draw_indexed_indirect_count == NULL ||
+        maximum_draw_count == 0 || stride < 20 ||
+        (commands->usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) == 0 ||
+        (count->usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) == 0 ||
+        commands_offset > commands->size ||
+        count_offset > count->size ||
+        commands->size - commands_offset < 20 ||
+        count->size - count_offset < sizeof(uint32_t)) return false;
+    frame->owner->cmd_draw_indexed_indirect_count(frame->command_buffer,
+        commands->buffer, commands_offset, count->buffer, count_offset,
+        maximum_draw_count, stride);
+    return true;
+}
+
+bool graphene_vk_frame_draw_mesh_tasks(size_t frame_handle,
+    uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) {
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    if (frame == NULL || !frame->in_render_pass ||
+        frame->owner->cmd_draw_mesh_tasks == NULL ||
+        group_count_x == 0 || group_count_y == 0 || group_count_z == 0) return false;
+    frame->owner->cmd_draw_mesh_tasks(frame->command_buffer,
+        group_count_x, group_count_y, group_count_z);
+    return true;
+}
+
+bool graphene_vk_frame_draw_mesh_tasks_indirect(size_t frame_handle,
+    size_t commands_handle, uint64_t offset) {
+    if (frame_handle < 4096u || commands_handle < 4096u) return false;
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    GrapheneVkBuffer *commands = (GrapheneVkBuffer *)commands_handle;
+    if (frame == NULL || !frame->in_render_pass ||
+        frame->owner->cmd_draw_mesh_tasks_indirect == NULL ||
+        commands == NULL || !commands->available ||
+        commands->owner != frame->owner->owner ||
+        (commands->usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) == 0 ||
+        offset > commands->size || commands->size - offset < 12u)
+        return false;
+    frame->owner->cmd_draw_mesh_tasks_indirect(
+        frame->command_buffer, commands->buffer, offset, 1u, 12u);
     return true;
 }
 

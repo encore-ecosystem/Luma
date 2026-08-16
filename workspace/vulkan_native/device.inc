@@ -1,6 +1,7 @@
 /* Luma-owned logical devices, shaders, bindings, samplers and pipelines. */
 static size_t graphene_vk_device_create_internal(size_t context_handle, size_t adapter_index,
-    VkSurfaceKHR surface, void *borrowed_device, uint32_t borrowed_queue_family) {
+    VkSurfaceKHR surface, void *borrowed_device, uint32_t borrowed_queue_family,
+    uint32_t required_features, uint32_t optional_features) {
     GrapheneVkContext *context = (GrapheneVkContext *)context_handle;
     GrapheneVkDevice *result = (GrapheneVkDevice *)calloc(1, sizeof(GrapheneVkDevice));
     if (result == NULL) return 0;
@@ -71,45 +72,243 @@ static size_t graphene_vk_device_create_internal(size_t context_handle, size_t a
     result->queue_flags = families[selected].queueFlags;
     result->present = surface != 0;
     free(families);
-    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
-        NULL, 0
+    PFN_vkEnumerateDeviceExtensionProperties enumerate_extensions =
+        (PFN_vkEnumerateDeviceExtensionProperties)context->get_proc(
+            context->instance, "vkEnumerateDeviceExtensionProperties");
+    PFN_vkGetPhysicalDeviceFeatures2 get_features =
+        (PFN_vkGetPhysicalDeviceFeatures2)context->get_proc(
+            context->instance, "vkGetPhysicalDeviceFeatures2");
+    if (enumerate_extensions == NULL || get_features == NULL) {
+        strncpy(result->error, "Vulkan feature negotiation functions were not found",
+            sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    bool has_maintenance = surface != 0 &&
+        graphene_has_extension(adapter->handle, enumerate_extensions,
+            "VK_EXT_swapchain_maintenance1");
+    bool has_mesh = graphene_has_extension(adapter->handle, enumerate_extensions,
+        "VK_EXT_mesh_shader");
+    bool has_deferred_host = graphene_has_extension(adapter->handle, enumerate_extensions,
+        "VK_KHR_deferred_host_operations");
+    bool has_acceleration = graphene_has_extension(adapter->handle, enumerate_extensions,
+        "VK_KHR_acceleration_structure");
+    bool has_ray_query = graphene_has_extension(adapter->handle, enumerate_extensions,
+        "VK_KHR_ray_query");
+    bool has_fragment_shader_barycentric = graphene_has_extension(adapter->handle,
+        enumerate_extensions, "VK_KHR_fragment_shader_barycentric");
+    if (surface != 0 && !has_maintenance) {
+        strncpy(result->error, "Direct Vulkan requires VK_EXT_swapchain_maintenance1",
+            sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+
+    VkPhysicalDeviceVulkan12Features supported12 = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, NULL
     };
+    VkPhysicalDeviceVulkan13Features supported13 = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, NULL
+    };
+    VkPhysicalDeviceMeshShaderFeaturesEXT supported_mesh = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT, NULL
+    };
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR supported_acceleration = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR, NULL
+    };
+    VkPhysicalDeviceRayQueryFeaturesKHR supported_ray = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR, NULL
+    };
+    VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR supported_barycentric = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR, NULL, 0
+    };
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT supported_maintenance = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT, NULL, 0
+    };
+    VkPhysicalDeviceFeatures2 supported = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &supported12, {0}
+    };
+    void **supported_tail = &supported12.pNext;
+    if (adapter->api_version >= graphene_vk_version(1, 3, 0)) {
+        *supported_tail = &supported13;
+        supported_tail = &supported13.pNext;
+    }
+    if (has_mesh) {
+        *supported_tail = &supported_mesh;
+        supported_tail = &supported_mesh.pNext;
+    }
+    if (has_deferred_host && has_acceleration && has_ray_query) {
+        *supported_tail = &supported_acceleration;
+        supported_tail = &supported_acceleration.pNext;
+        *supported_tail = &supported_ray;
+        supported_tail = &supported_ray.pNext;
+    }
+    if (has_fragment_shader_barycentric) {
+        *supported_tail = &supported_barycentric;
+        supported_tail = &supported_barycentric.pNext;
+    }
     if (surface != 0) {
-        PFN_vkEnumerateDeviceExtensionProperties enumerate_extensions =
-            (PFN_vkEnumerateDeviceExtensionProperties)context->get_proc(
-                context->instance, "vkEnumerateDeviceExtensionProperties");
-        PFN_vkGetPhysicalDeviceFeatures2 get_features =
-            (PFN_vkGetPhysicalDeviceFeatures2)context->get_proc(
-                context->instance, "vkGetPhysicalDeviceFeatures2");
-        if (enumerate_extensions == NULL || get_features == NULL ||
-            !graphene_has_extension(adapter->handle, enumerate_extensions,
-                "VK_EXT_swapchain_maintenance1")) {
-            strncpy(result->error,
-                "Direct Vulkan requires VK_EXT_swapchain_maintenance1",
-                sizeof(result->error) - 1);
-            return (size_t)result;
+        *supported_tail = &supported_maintenance;
+    }
+    get_features(adapter->handle, &supported);
+    if (surface != 0 && supported_maintenance.swapchainMaintenance1 == 0) {
+        strncpy(result->error,
+            "Direct Vulkan requires swapchainMaintenance1 presentation fences",
+            sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+
+    uint32_t supported_features = 0;
+    if (supported12.descriptorIndexing != 0 &&
+        supported12.runtimeDescriptorArray != 0 &&
+        supported12.descriptorBindingPartiallyBound != 0 &&
+        supported12.descriptorBindingVariableDescriptorCount != 0 &&
+        supported12.shaderSampledImageArrayNonUniformIndexing != 0 &&
+        supported12.shaderStorageBufferArrayNonUniformIndexing != 0 &&
+        supported12.shaderStorageImageArrayNonUniformIndexing != 0) {
+        supported_features |= GRAPHENE_GPU_FEATURE_DESCRIPTOR_INDEXING;
+    }
+    if (supported12.bufferDeviceAddress != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_BUFFER_DEVICE_ADDRESS;
+    if (supported12.timelineSemaphore != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_TIMELINE_SEMAPHORE;
+    if (supported12.drawIndirectCount != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_DRAW_INDIRECT_COUNT;
+    if (supported12.shaderBufferInt64Atomics != 0 &&
+        supported12.shaderSharedInt64Atomics != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_SHADER_INT64_ATOMICS;
+    if (adapter->api_version >= graphene_vk_version(1, 3, 0) &&
+        supported13.synchronization2 != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_SYNCHRONIZATION_2;
+    if (adapter->api_version >= graphene_vk_version(1, 3, 0) &&
+        supported13.dynamicRendering != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_DYNAMIC_RENDERING;
+    if (has_mesh && supported_mesh.meshShader != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_MESH_SHADER;
+    if (has_deferred_host && has_acceleration && has_ray_query &&
+        supported_acceleration.accelerationStructure != 0 &&
+        supported_ray.rayQuery != 0 &&
+        (supported_features & GRAPHENE_GPU_FEATURE_BUFFER_DEVICE_ADDRESS) != 0) {
+        supported_features |= GRAPHENE_GPU_FEATURE_RAY_QUERY;
+    }
+    if (has_fragment_shader_barycentric &&
+        supported_barycentric.fragmentShaderBarycentric != 0)
+        supported_features |= GRAPHENE_GPU_FEATURE_FRAGMENT_SHADER_BARYCENTRIC;
+    uint32_t requested_features = required_features | optional_features;
+    uint32_t missing_required = required_features & ~supported_features;
+    if (missing_required != 0) {
+        snprintf(result->error, sizeof(result->error),
+            "Required Vulkan rendering features are unavailable (mask 0x%x)",
+            missing_required);
+        return (size_t)result;
+    }
+    uint32_t enabled_features = requested_features & supported_features;
+    if ((enabled_features & GRAPHENE_GPU_FEATURE_RAY_QUERY) != 0)
+        enabled_features |= GRAPHENE_GPU_FEATURE_BUFFER_DEVICE_ADDRESS;
+    result->requested_features = requested_features;
+    result->enabled_features = borrowed_device == NULL ? enabled_features : 0;
+    result->swapchain_maintenance = surface != 0;
+
+    VkPhysicalDeviceVulkan12Features enabled12 = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, NULL
+    };
+    VkPhysicalDeviceVulkan13Features enabled13 = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, NULL
+    };
+    VkPhysicalDeviceMeshShaderFeaturesEXT enabled_mesh = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT, NULL
+    };
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR enabled_acceleration = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR, NULL
+    };
+    VkPhysicalDeviceRayQueryFeaturesKHR enabled_ray = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR, NULL
+    };
+    VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR enabled_barycentric = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR, NULL, 0
+    };
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT enabled_maintenance = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
+        NULL, surface != 0 ? 1u : 0u
+    };
+    if ((enabled_features & GRAPHENE_GPU_FEATURE_DESCRIPTOR_INDEXING) != 0) {
+        enabled12.descriptorIndexing = 1;
+        enabled12.runtimeDescriptorArray = 1;
+        enabled12.descriptorBindingPartiallyBound = 1;
+        enabled12.descriptorBindingVariableDescriptorCount = 1;
+        enabled12.shaderSampledImageArrayNonUniformIndexing = 1;
+        enabled12.shaderStorageBufferArrayNonUniformIndexing = 1;
+        enabled12.shaderStorageImageArrayNonUniformIndexing = 1;
+    }
+    enabled12.bufferDeviceAddress =
+        (enabled_features & GRAPHENE_GPU_FEATURE_BUFFER_DEVICE_ADDRESS) != 0;
+    enabled12.timelineSemaphore =
+        (enabled_features & GRAPHENE_GPU_FEATURE_TIMELINE_SEMAPHORE) != 0;
+    enabled12.drawIndirectCount =
+        (enabled_features & GRAPHENE_GPU_FEATURE_DRAW_INDIRECT_COUNT) != 0;
+    enabled12.shaderBufferInt64Atomics =
+        (enabled_features & GRAPHENE_GPU_FEATURE_SHADER_INT64_ATOMICS) != 0;
+    enabled12.shaderSharedInt64Atomics =
+        (enabled_features & GRAPHENE_GPU_FEATURE_SHADER_INT64_ATOMICS) != 0;
+    enabled13.synchronization2 =
+        (enabled_features & GRAPHENE_GPU_FEATURE_SYNCHRONIZATION_2) != 0;
+    enabled13.dynamicRendering =
+        (enabled_features & GRAPHENE_GPU_FEATURE_DYNAMIC_RENDERING) != 0;
+    enabled_mesh.meshShader =
+        (enabled_features & GRAPHENE_GPU_FEATURE_MESH_SHADER) != 0;
+    enabled_mesh.taskShader = enabled_mesh.meshShader && supported_mesh.taskShader != 0;
+    enabled_acceleration.accelerationStructure =
+        (enabled_features & GRAPHENE_GPU_FEATURE_RAY_QUERY) != 0;
+    enabled_ray.rayQuery =
+        (enabled_features & GRAPHENE_GPU_FEATURE_RAY_QUERY) != 0;
+    enabled_barycentric.fragmentShaderBarycentric =
+        (enabled_features & GRAPHENE_GPU_FEATURE_FRAGMENT_SHADER_BARYCENTRIC) != 0;
+
+    const void *device_chain = NULL;
+    void **enabled_tail = (void **)&device_chain;
+    if (enabled_features != 0) {
+        *enabled_tail = &enabled12;
+        enabled_tail = &enabled12.pNext;
+        if (adapter->api_version >= graphene_vk_version(1, 3, 0)) {
+            *enabled_tail = &enabled13;
+            enabled_tail = &enabled13.pNext;
         }
-        VkPhysicalDeviceFeatures2 features = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &maintenance, {0}
-        };
-        get_features(adapter->handle, &features);
-        if (maintenance.swapchainMaintenance1 == 0) {
-            strncpy(result->error,
-                "Direct Vulkan requires swapchainMaintenance1 presentation fences",
-                sizeof(result->error) - 1);
-            return (size_t)result;
+        if ((enabled_features & GRAPHENE_GPU_FEATURE_MESH_SHADER) != 0) {
+            *enabled_tail = &enabled_mesh;
+            enabled_tail = &enabled_mesh.pNext;
         }
-        result->swapchain_maintenance = true;
+        if ((enabled_features & GRAPHENE_GPU_FEATURE_RAY_QUERY) != 0) {
+            *enabled_tail = &enabled_acceleration;
+            enabled_tail = &enabled_acceleration.pNext;
+            *enabled_tail = &enabled_ray;
+            enabled_tail = &enabled_ray.pNext;
+        }
+        if ((enabled_features & GRAPHENE_GPU_FEATURE_FRAGMENT_SHADER_BARYCENTRIC) != 0) {
+            *enabled_tail = &enabled_barycentric;
+            enabled_tail = &enabled_barycentric.pNext;
+        }
+    }
+    if (surface != 0) {
+        *enabled_tail = &enabled_maintenance;
     }
     float priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, NULL, 0, selected, 1, &priority};
-    const char *swapchain_extensions[2] = {
-        "VK_KHR_swapchain", "VK_EXT_swapchain_maintenance1"
-    };
+    const char *device_extensions[7];
+    uint32_t device_extension_count = 0;
+    if (surface != 0) {
+        device_extensions[device_extension_count++] = "VK_KHR_swapchain";
+        device_extensions[device_extension_count++] = "VK_EXT_swapchain_maintenance1";
+    }
+    if ((enabled_features & GRAPHENE_GPU_FEATURE_MESH_SHADER) != 0)
+        device_extensions[device_extension_count++] = "VK_EXT_mesh_shader";
+    if ((enabled_features & GRAPHENE_GPU_FEATURE_RAY_QUERY) != 0) {
+        device_extensions[device_extension_count++] = "VK_KHR_deferred_host_operations";
+        device_extensions[device_extension_count++] = "VK_KHR_acceleration_structure";
+        device_extensions[device_extension_count++] = "VK_KHR_ray_query";
+    }
+    if ((enabled_features & GRAPHENE_GPU_FEATURE_FRAGMENT_SHADER_BARYCENTRIC) != 0)
+        device_extensions[device_extension_count++] = "VK_KHR_fragment_shader_barycentric";
     VkDeviceCreateInfo device_info = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        surface == 0 ? NULL : &maintenance, 0, 1, &queue_info, 0, NULL,
-        surface == 0 ? 0 : 2, surface == 0 ? NULL : swapchain_extensions, NULL};
+        device_chain, 0, 1, &queue_info, 0, NULL,
+        device_extension_count, device_extension_count == 0 ? NULL : device_extensions, NULL};
     VkResult status = VK_SUCCESS;
     if (borrowed_device == NULL) {
         status = create_device(adapter->handle, &device_info, NULL, &result->device);
@@ -154,6 +353,7 @@ static size_t graphene_vk_device_create_internal(size_t context_handle, size_t a
     result->cmd_copy_buffer_to_image = (PFN_vkCmdCopyBufferToImage)get_device_proc(result->device, "vkCmdCopyBufferToImage");
     result->cmd_copy_image_to_buffer = (PFN_vkCmdCopyImageToBuffer)get_device_proc(result->device, "vkCmdCopyImageToBuffer");
     result->cmd_copy_buffer = (PFN_vkCmdCopyBuffer)get_device_proc(result->device, "vkCmdCopyBuffer");
+    result->cmd_fill_buffer = (PFN_vkCmdFillBuffer)get_device_proc(result->device, "vkCmdFillBuffer");
     result->cmd_bind_pipeline = (PFN_vkCmdBindPipeline)get_device_proc(result->device, "vkCmdBindPipeline");
     result->cmd_bind_descriptor_sets = (PFN_vkCmdBindDescriptorSets)get_device_proc(result->device, "vkCmdBindDescriptorSets");
     result->cmd_dispatch = (PFN_vkCmdDispatch)get_device_proc(result->device, "vkCmdDispatch");
@@ -170,7 +370,8 @@ static size_t graphene_vk_device_create_internal(size_t context_handle, size_t a
         result->create_image == NULL || result->destroy_image == NULL || result->get_image_requirements == NULL || result->bind_image_memory == NULL ||
         result->create_image_view == NULL || result->destroy_image_view == NULL || result->cmd_pipeline_barrier == NULL ||
         result->cmd_copy_buffer_to_image == NULL || result->cmd_copy_image_to_buffer == NULL ||
-        result->cmd_copy_buffer == NULL || result->cmd_bind_pipeline == NULL ||
+        result->cmd_copy_buffer == NULL || result->cmd_fill_buffer == NULL ||
+        result->cmd_bind_pipeline == NULL ||
         result->cmd_bind_descriptor_sets == NULL || result->cmd_dispatch == NULL ||
         result->create_fence == NULL || result->destroy_fence == NULL || result->get_fence_status == NULL || result->wait_for_fences == NULL) {
         strncpy(result->error, "Required Vulkan command functions were not found", sizeof(result->error) - 1); return (size_t)result;
@@ -187,7 +388,13 @@ static size_t graphene_vk_device_create_internal(size_t context_handle, size_t a
 }
 
 size_t graphene_vk_device_create(size_t context_handle, size_t adapter_index) {
-    return graphene_vk_device_create_internal(context_handle, adapter_index, 0, NULL, 0);
+    return graphene_vk_device_create_internal(context_handle, adapter_index, 0, NULL, 0, 0, 0);
+}
+
+size_t graphene_vk_device_create_features(size_t context_handle, size_t adapter_index,
+    uint32_t required_features, uint32_t optional_features) {
+    return graphene_vk_device_create_internal(context_handle, adapter_index, 0, NULL, 0,
+        required_features, optional_features);
 }
 
 size_t graphene_vk_present_device_create(size_t context_handle, size_t adapter_index, size_t window_handle) {
@@ -197,11 +404,30 @@ size_t graphene_vk_present_device_create(size_t context_handle, size_t adapter_i
         if (result != NULL) strncpy(result->error, "Invalid Graphene presentation window", sizeof(result->error) - 1);
         return (size_t)result;
     }
-    return graphene_vk_device_create_internal(context_handle, adapter_index, window->surface, NULL, 0);
+    return graphene_vk_device_create_internal(context_handle, adapter_index, window->surface,
+        NULL, 0, 0, 0);
+}
+
+size_t graphene_vk_present_device_create_features(size_t context_handle,
+    size_t adapter_index, size_t window_handle, uint32_t required_features,
+    uint32_t optional_features) {
+    GrapheneVkWindow *window = (GrapheneVkWindow *)window_handle;
+    if (window == NULL || window->owner != (GrapheneVkContext *)context_handle ||
+        window->surface == 0) {
+        GrapheneVkDevice *result =
+            (GrapheneVkDevice *)calloc(1, sizeof(GrapheneVkDevice));
+        if (result != NULL)
+            strncpy(result->error, "Invalid Graphene presentation window",
+                sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    return graphene_vk_device_create_internal(context_handle, adapter_index,
+        window->surface, NULL, 0, required_features, optional_features);
 }
 
 size_t graphene_vk_device_borrow(size_t context_handle, size_t device_handle, uint32_t queue_family) {
-    return graphene_vk_device_create_internal(context_handle, 0, 0, (void *)device_handle, queue_family);
+    return graphene_vk_device_create_internal(context_handle, 0, 0,
+        (void *)device_handle, queue_family, 0, 0);
 }
 
 bool graphene_vk_device_destroy(size_t handle) {
@@ -224,16 +450,28 @@ size_t graphene_vk_device_handle(size_t handle) {
 }
 bool graphene_vk_device_graphics(size_t handle) { GrapheneVkDevice *d = (GrapheneVkDevice *)handle; return d != NULL && (d->queue_flags & VK_QUEUE_GRAPHICS_BIT) != 0; }
 bool graphene_vk_device_compute(size_t handle) { GrapheneVkDevice *d = (GrapheneVkDevice *)handle; return d != NULL && (d->queue_flags & VK_QUEUE_COMPUTE_BIT) != 0; }
+uint32_t graphene_vk_device_requested_features(size_t handle) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)handle;
+    return device == NULL ? 0 : device->requested_features;
+}
+uint32_t graphene_vk_device_enabled_features(size_t handle) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)handle;
+    return device == NULL ? 0 : device->enabled_features;
+}
 
-size_t graphene_vk_shader_create(size_t device_handle, const uint32_t *words, size_t word_count, size_t capacity, uint32_t stage) {
-    (void)capacity;
+size_t graphene_vk_shader_create(size_t device_handle,
+    const uint32_t *words, size_t word_count, uint32_t stage) {
     GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
     GrapheneVkShader *shader = (GrapheneVkShader *)calloc(1, sizeof(GrapheneVkShader));
     if (shader == NULL) return 0;
     shader->owner = device;
     shader->stage = stage;
     if (device == NULL || !device->available || words == NULL || word_count == 0 ||
-        (stage != VK_SHADER_STAGE_VERTEX_BIT && stage != VK_SHADER_STAGE_FRAGMENT_BIT && stage != VK_SHADER_STAGE_COMPUTE_BIT)) {
+        (stage != VK_SHADER_STAGE_VERTEX_BIT && stage != VK_SHADER_STAGE_FRAGMENT_BIT &&
+            stage != VK_SHADER_STAGE_COMPUTE_BIT && stage != VK_SHADER_STAGE_TASK_BIT_EXT &&
+            stage != VK_SHADER_STAGE_MESH_BIT_EXT) ||
+        ((stage == VK_SHADER_STAGE_TASK_BIT_EXT || stage == VK_SHADER_STAGE_MESH_BIT_EXT) &&
+            (device->enabled_features & GRAPHENE_GPU_FEATURE_MESH_SHADER) == 0)) {
         strncpy(shader->error, "Invalid SPIR-V shader input", sizeof(shader->error) - 1); return (size_t)shader;
     }
     PFN_vkCreateShaderModule create_shader_module =
@@ -267,10 +505,9 @@ bool graphene_vk_shader_destroy(size_t handle) {
 }
 
 size_t graphene_vk_bind_group_layout_create_entries(size_t device_handle,
-    const uint32_t *bindings, size_t binding_count, size_t binding_capacity,
-    const uint32_t *types, size_t type_count, size_t type_capacity,
-    const uint32_t *stages, size_t stage_count, size_t stage_capacity) {
-    (void)binding_capacity; (void)type_capacity; (void)stage_capacity;
+    const uint32_t *bindings, size_t binding_count,
+    const uint32_t *types, size_t type_count,
+    const uint32_t *stages, size_t stage_count) {
     GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
     GrapheneVkBindGroupLayout *result = (GrapheneVkBindGroupLayout *)calloc(1, sizeof(GrapheneVkBindGroupLayout));
     if (result == NULL) return 0;
@@ -289,8 +526,11 @@ size_t graphene_vk_bind_group_layout_create_entries(size_t device_handle,
     VkDescriptorSetLayoutBinding layout_bindings[16];
     for (size_t i = 0; i < binding_count; ++i) {
         if ((types[i] != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && types[i] != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
-                types[i] != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) ||
-            (stages[i] & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT)) == 0) {
+                types[i] != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+                types[i] != VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR) ||
+            (stages[i] & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
+                VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_TASK_BIT_EXT |
+                VK_SHADER_STAGE_MESH_BIT_EXT)) == 0) {
             strncpy(result->error, "Unsupported bind group layout entry", sizeof(result->error) - 1); return (size_t)result;
         }
         for (size_t previous = 0; previous < i; ++previous) if (bindings[previous] == bindings[i]) {
@@ -310,7 +550,8 @@ size_t graphene_vk_bind_group_layout_create_entries(size_t device_handle,
 
 size_t graphene_vk_bind_group_layout_create(size_t device_handle, uint32_t binding, uint32_t stage) {
     uint32_t type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    return graphene_vk_bind_group_layout_create_entries(device_handle, &binding, 1, 1, &type, 1, 1, &stage, 1, 1);
+    return graphene_vk_bind_group_layout_create_entries(
+        device_handle, &binding, 1, &type, 1, &stage, 1);
 }
 
 bool graphene_vk_bind_group_layout_available(size_t handle) { GrapheneVkBindGroupLayout *l = (GrapheneVkBindGroupLayout *)handle; return l != NULL && l->available; }
@@ -393,6 +634,372 @@ size_t graphene_vk_storage_bind_group_create(size_t device_handle, size_t layout
     result->available = true; return (size_t)result;
 }
 
+size_t graphene_vk_storage_bind_group_create_many(size_t device_handle, size_t layout_handle,
+    const uint32_t *bindings, size_t binding_count,
+    const size_t *buffer_handles, size_t buffer_count,
+    const uint64_t *offsets, size_t offset_count,
+    const uint64_t *ranges, size_t range_count) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    GrapheneVkBindGroupLayout *layout = (GrapheneVkBindGroupLayout *)layout_handle;
+    GrapheneVkBindGroup *result = (GrapheneVkBindGroup *)calloc(1, sizeof(GrapheneVkBindGroup));
+    if (result == NULL) return 0;
+    result->owner = device; result->layout = layout;
+    if (device == NULL || !device->available || layout == NULL || !layout->available ||
+        layout->owner != device || binding_count == 0 || binding_count > 16 ||
+        binding_count != buffer_count || binding_count != offset_count ||
+        binding_count != range_count || layout->binding_count != binding_count ||
+        bindings == NULL || buffer_handles == NULL || offsets == NULL || ranges == NULL) {
+        strncpy(result->error, "Invalid multi-storage bind group resources", sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    GrapheneVkBuffer *buffers[16];
+    for (size_t i = 0; i < binding_count; ++i) {
+        buffers[i] = (GrapheneVkBuffer *)buffer_handles[i];
+        bool layout_binding = false;
+        for (uint32_t j = 0; j < layout->binding_count; ++j)
+            if (layout->bindings[j] == bindings[i] &&
+                layout->types[j] == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) layout_binding = true;
+        if (!layout_binding || buffers[i] == NULL || !buffers[i]->available ||
+            buffers[i]->owner != device || ranges[i] == 0 ||
+            offsets[i] > buffers[i]->size ||
+            ranges[i] > buffers[i]->size - offsets[i]) {
+            strncpy(result->error, "Invalid multi-storage buffer range", sizeof(result->error) - 1);
+            return (size_t)result;
+        }
+    }
+    PFN_vkCreateDescriptorPool create_pool =
+        (PFN_vkCreateDescriptorPool)device->get_device_proc(device->device, "vkCreateDescriptorPool");
+    result->destroy_pool =
+        (PFN_vkDestroyDescriptorPool)device->get_device_proc(device->device, "vkDestroyDescriptorPool");
+    PFN_vkAllocateDescriptorSets allocate_sets =
+        (PFN_vkAllocateDescriptorSets)device->get_device_proc(device->device, "vkAllocateDescriptorSets");
+    PFN_vkUpdateDescriptorSets update_sets =
+        (PFN_vkUpdateDescriptorSets)device->get_device_proc(device->device, "vkUpdateDescriptorSets");
+    if (create_pool == NULL || result->destroy_pool == NULL ||
+        allocate_sets == NULL || update_sets == NULL) {
+        strncpy(result->error, "Vulkan multi-storage descriptor functions were not found",
+            sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    VkDescriptorPoolSize pool_size = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (uint32_t)binding_count};
+    VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        NULL, 0, 1, 1, &pool_size};
+    if (create_pool(device->device, &pool_info, NULL, &result->pool) != VK_SUCCESS)
+        return (size_t)result;
+    VkDescriptorSetAllocateInfo allocate = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        NULL, result->pool, 1, &layout->layout};
+    if (allocate_sets(device->device, &allocate, &result->set) != VK_SUCCESS)
+        return (size_t)result;
+    VkDescriptorBufferInfo infos[16];
+    VkWriteDescriptorSet writes[16];
+    for (size_t i = 0; i < binding_count; ++i) {
+        infos[i] = (VkDescriptorBufferInfo){buffers[i]->buffer, offsets[i], ranges[i]};
+        writes[i] = (VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            NULL, result->set, bindings[i], 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, NULL, &infos[i], NULL};
+    }
+    update_sets(device->device, (uint32_t)binding_count, writes, 0, NULL);
+    result->available = true;
+    return (size_t)result;
+}
+
+size_t graphene_vk_buffer_bind_group_create_many(size_t device_handle,
+    size_t layout_handle,
+    const uint32_t *bindings, size_t binding_count,
+    const size_t *buffer_handles, size_t buffer_count,
+    const uint64_t *offsets, size_t offset_count,
+    const uint64_t *ranges, size_t range_count) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    GrapheneVkBindGroupLayout *layout =
+        (GrapheneVkBindGroupLayout *)layout_handle;
+    GrapheneVkBindGroup *result =
+        (GrapheneVkBindGroup *)calloc(1, sizeof(GrapheneVkBindGroup));
+    if (result == NULL) return 0;
+    result->owner = device;
+    result->layout = layout;
+    if (device == NULL || !device->available || layout == NULL ||
+        !layout->available || layout->owner != device ||
+        binding_count == 0 || binding_count > 16 ||
+        binding_count != buffer_count || binding_count != offset_count ||
+        binding_count != range_count ||
+        layout->binding_count != binding_count || bindings == NULL ||
+        buffer_handles == NULL || offsets == NULL || ranges == NULL) {
+        strncpy(result->error, "Invalid multi-buffer bind group resources",
+            sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    GrapheneVkBuffer *buffers[16];
+    uint32_t descriptor_types[16];
+    uint32_t uniform_count = 0, storage_count = 0;
+    for (size_t i = 0; i < binding_count; ++i) {
+        buffers[i] = (GrapheneVkBuffer *)buffer_handles[i];
+        bool layout_binding = false;
+        for (uint32_t j = 0; j < layout->binding_count; ++j) {
+            if (layout->bindings[j] == bindings[i] &&
+                (layout->types[j] == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+                 layout->types[j] == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)) {
+                descriptor_types[i] = layout->types[j];
+                layout_binding = true;
+                if (layout->types[j] == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                    ++uniform_count;
+                else
+                    ++storage_count;
+                break;
+            }
+        }
+        if (!layout_binding || buffers[i] == NULL || !buffers[i]->available ||
+            buffers[i]->owner != device || ranges[i] == 0 ||
+            offsets[i] > buffers[i]->size ||
+            ranges[i] > buffers[i]->size - offsets[i]) {
+            strncpy(result->error, "Invalid multi-buffer descriptor range",
+                sizeof(result->error) - 1);
+            return (size_t)result;
+        }
+    }
+    PFN_vkCreateDescriptorPool create_pool =
+        (PFN_vkCreateDescriptorPool)device->get_device_proc(
+            device->device, "vkCreateDescriptorPool");
+    result->destroy_pool =
+        (PFN_vkDestroyDescriptorPool)device->get_device_proc(
+            device->device, "vkDestroyDescriptorPool");
+    PFN_vkAllocateDescriptorSets allocate_sets =
+        (PFN_vkAllocateDescriptorSets)device->get_device_proc(
+            device->device, "vkAllocateDescriptorSets");
+    PFN_vkUpdateDescriptorSets update_sets =
+        (PFN_vkUpdateDescriptorSets)device->get_device_proc(
+            device->device, "vkUpdateDescriptorSets");
+    if (create_pool == NULL || result->destroy_pool == NULL ||
+        allocate_sets == NULL || update_sets == NULL) {
+        strncpy(result->error,
+            "Vulkan multi-buffer descriptor functions were not found",
+            sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    VkDescriptorPoolSize pool_sizes[2];
+    uint32_t pool_size_count = 0;
+    if (uniform_count > 0)
+        pool_sizes[pool_size_count++] = (VkDescriptorPoolSize){
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniform_count};
+    if (storage_count > 0)
+        pool_sizes[pool_size_count++] = (VkDescriptorPoolSize){
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storage_count};
+    VkDescriptorPoolCreateInfo pool_info = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        NULL, 0, 1, pool_size_count, pool_sizes};
+    if (create_pool(device->device, &pool_info, NULL, &result->pool) != VK_SUCCESS)
+        return (size_t)result;
+    VkDescriptorSetAllocateInfo allocate = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        NULL, result->pool, 1, &layout->layout};
+    if (allocate_sets(device->device, &allocate, &result->set) != VK_SUCCESS)
+        return (size_t)result;
+    VkDescriptorBufferInfo infos[16];
+    VkWriteDescriptorSet writes[16];
+    for (size_t i = 0; i < binding_count; ++i) {
+        infos[i] = (VkDescriptorBufferInfo){
+            buffers[i]->buffer, offsets[i], ranges[i]};
+        writes[i] = (VkWriteDescriptorSet){
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            NULL, result->set, bindings[i], 0, 1,
+            descriptor_types[i], NULL, &infos[i], NULL};
+    }
+    update_sets(device->device, (uint32_t)binding_count, writes, 0, NULL);
+    result->available = true;
+    return (size_t)result;
+}
+
+size_t graphene_vk_buffer_texture_bind_group_create_many(size_t device_handle,
+    size_t layout_handle, const uint32_t *bindings, size_t binding_count,
+    const size_t *buffer_handles, size_t buffer_count,
+    const uint64_t *offsets, size_t offset_count,
+    const uint64_t *ranges, size_t range_count, uint32_t texture_binding,
+    size_t texture_handle, size_t sampler_handle) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    GrapheneVkBindGroupLayout *layout = (GrapheneVkBindGroupLayout *)layout_handle;
+    GrapheneVkTexture *texture = (GrapheneVkTexture *)texture_handle;
+    GrapheneVkSampler *sampler = (GrapheneVkSampler *)sampler_handle;
+    GrapheneVkBindGroup *result = calloc(1, sizeof(GrapheneVkBindGroup));
+    if (result == NULL) return 0;
+    result->owner = device; result->layout = layout;
+    bool texture_found = false;
+    if (layout != NULL) for (uint32_t i = 0; i < layout->binding_count; ++i)
+        if (layout->bindings[i] == texture_binding &&
+            layout->types[i] == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            texture_found = true;
+    if (device == NULL || !device->available || layout == NULL || !layout->available ||
+        layout->owner != device || !texture_found || binding_count == 0 || binding_count > 15 ||
+        binding_count != buffer_count || binding_count != offset_count ||
+        binding_count != range_count || layout->binding_count != binding_count + 1 ||
+        texture == NULL || !texture->available || texture->owner != device ||
+        texture->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
+        sampler == NULL || !sampler->available || sampler->owner != device) {
+        strncpy(result->error, "Invalid buffer-texture bind group resources", sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    GrapheneVkBuffer *buffers[15];
+    uint32_t descriptor_types[15];
+    uint32_t uniform_count = 0, storage_count = 0;
+    for (size_t i = 0; i < binding_count; ++i) {
+        buffers[i] = (GrapheneVkBuffer *)buffer_handles[i];
+        bool found = false;
+        for (uint32_t j = 0; j < layout->binding_count; ++j)
+            if (layout->bindings[j] == bindings[i] &&
+                (layout->types[j] == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+                 layout->types[j] == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)) {
+                descriptor_types[i] = layout->types[j]; found = true;
+                if (layout->types[j] == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) ++uniform_count;
+                else ++storage_count;
+                break;
+            }
+        if (!found || buffers[i] == NULL || !buffers[i]->available ||
+            buffers[i]->owner != device || ranges[i] == 0 || offsets[i] > buffers[i]->size ||
+            ranges[i] > buffers[i]->size - offsets[i]) {
+            strncpy(result->error, "Invalid buffer-texture descriptor range", sizeof(result->error) - 1);
+            return (size_t)result;
+        }
+    }
+    PFN_vkCreateDescriptorPool create_pool = (PFN_vkCreateDescriptorPool)
+        device->get_device_proc(device->device, "vkCreateDescriptorPool");
+    result->destroy_pool = (PFN_vkDestroyDescriptorPool)
+        device->get_device_proc(device->device, "vkDestroyDescriptorPool");
+    PFN_vkAllocateDescriptorSets allocate_sets = (PFN_vkAllocateDescriptorSets)
+        device->get_device_proc(device->device, "vkAllocateDescriptorSets");
+    PFN_vkUpdateDescriptorSets update_sets = (PFN_vkUpdateDescriptorSets)
+        device->get_device_proc(device->device, "vkUpdateDescriptorSets");
+    if (create_pool == NULL || result->destroy_pool == NULL || allocate_sets == NULL || update_sets == NULL)
+        return (size_t)result;
+    VkDescriptorPoolSize pool_sizes[3]; uint32_t pool_count = 0;
+    if (uniform_count) pool_sizes[pool_count++] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniform_count};
+    if (storage_count) pool_sizes[pool_count++] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storage_count};
+    pool_sizes[pool_count++] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, NULL, 0, 1, pool_count, pool_sizes};
+    if (create_pool(device->device, &pool_info, NULL, &result->pool) != VK_SUCCESS) return (size_t)result;
+    VkDescriptorSetAllocateInfo allocate = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, NULL, result->pool, 1, &layout->layout};
+    if (allocate_sets(device->device, &allocate, &result->set) != VK_SUCCESS) return (size_t)result;
+    VkDescriptorBufferInfo infos[15]; VkWriteDescriptorSet writes[16];
+    for (size_t i = 0; i < binding_count; ++i) {
+        infos[i] = (VkDescriptorBufferInfo){buffers[i]->buffer, offsets[i], ranges[i]};
+        writes[i] = (VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, result->set,
+            bindings[i], 0, 1, descriptor_types[i], NULL, &infos[i], NULL};
+    }
+    VkDescriptorImageInfo image_info = {sampler->sampler, texture->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    writes[binding_count] = (VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, result->set,
+        texture_binding, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &image_info, NULL, NULL};
+    update_sets(device->device, (uint32_t)binding_count + 1, writes, 0, NULL);
+    result->available = true; return (size_t)result;
+}
+
+size_t graphene_vk_ray_query_bind_group_create(size_t device_handle,
+    size_t layout_handle, uint32_t acceleration_binding,
+    size_t acceleration_handle,
+    const uint32_t *bindings, size_t binding_count,
+    const size_t *buffer_handles, size_t buffer_count,
+    const uint64_t *offsets, size_t offset_count,
+    const uint64_t *ranges, size_t range_count) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    GrapheneVkBindGroupLayout *layout =
+        (GrapheneVkBindGroupLayout *)layout_handle;
+    GrapheneVkAccelerationStructure *acceleration =
+        (GrapheneVkAccelerationStructure *)acceleration_handle;
+    GrapheneVkBindGroup *result =
+        (GrapheneVkBindGroup *)calloc(1, sizeof(GrapheneVkBindGroup));
+    if (result == NULL) return 0;
+    result->owner = device;
+    result->layout = layout;
+    bool acceleration_found = false;
+    if (layout != NULL) for (uint32_t i = 0; i < layout->binding_count; ++i)
+        if (layout->bindings[i] == acceleration_binding &&
+            layout->types[i] == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+            acceleration_found = true;
+    if (device == NULL || !device->available || layout == NULL ||
+        !layout->available || layout->owner != device ||
+        acceleration == NULL || !acceleration->available ||
+        acceleration->owner != device ||
+        acceleration->type != VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR ||
+        !acceleration_found || binding_count == 0 || binding_count > 15 ||
+        binding_count != buffer_count || binding_count != offset_count ||
+        binding_count != range_count ||
+        layout->binding_count != binding_count + 1 ||
+        bindings == NULL || buffer_handles == NULL ||
+        offsets == NULL || ranges == NULL) {
+        strncpy(result->error, "Invalid ray-query bind group resources",
+            sizeof(result->error) - 1);
+        return (size_t)result;
+    }
+    GrapheneVkBuffer *buffers[15];
+    for (size_t i = 0; i < binding_count; ++i) {
+        buffers[i] = (GrapheneVkBuffer *)buffer_handles[i];
+        bool storage_found = false;
+        for (uint32_t j = 0; j < layout->binding_count; ++j)
+            if (layout->bindings[j] == bindings[i] &&
+                layout->types[j] == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                storage_found = true;
+        if (!storage_found || buffers[i] == NULL || !buffers[i]->available ||
+            buffers[i]->owner != device || ranges[i] == 0 ||
+            offsets[i] > buffers[i]->size ||
+            ranges[i] > buffers[i]->size - offsets[i]) {
+            strncpy(result->error, "Invalid ray-query storage buffer range",
+                sizeof(result->error) - 1);
+            return (size_t)result;
+        }
+    }
+    PFN_vkCreateDescriptorPool create_pool =
+        (PFN_vkCreateDescriptorPool)device->get_device_proc(
+            device->device, "vkCreateDescriptorPool");
+    result->destroy_pool =
+        (PFN_vkDestroyDescriptorPool)device->get_device_proc(
+            device->device, "vkDestroyDescriptorPool");
+    PFN_vkAllocateDescriptorSets allocate_sets =
+        (PFN_vkAllocateDescriptorSets)device->get_device_proc(
+            device->device, "vkAllocateDescriptorSets");
+    PFN_vkUpdateDescriptorSets update_sets =
+        (PFN_vkUpdateDescriptorSets)device->get_device_proc(
+            device->device, "vkUpdateDescriptorSets");
+    if (create_pool == NULL || result->destroy_pool == NULL ||
+        allocate_sets == NULL || update_sets == NULL)
+        return (size_t)result;
+    VkDescriptorPoolSize pool_sizes[2] = {
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (uint32_t)binding_count}
+    };
+    VkDescriptorPoolCreateInfo pool_info = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        NULL, 0, 1, 2, pool_sizes};
+    if (create_pool(device->device, &pool_info, NULL, &result->pool) != VK_SUCCESS)
+        return (size_t)result;
+    VkDescriptorSetAllocateInfo allocate = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        NULL, result->pool, 1, &layout->layout};
+    if (allocate_sets(device->device, &allocate, &result->set) != VK_SUCCESS)
+        return (size_t)result;
+    void *acceleration_object = acceleration->acceleration_structure;
+    VkWriteDescriptorSetAccelerationStructureKHR acceleration_info = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
+        NULL, 1, &acceleration_object
+    };
+    VkWriteDescriptorSet writes[16];
+    memset(writes, 0, sizeof(writes));
+    writes[0] = (VkWriteDescriptorSet){
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &acceleration_info,
+        result->set, acceleration_binding, 0, 1,
+        VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+        NULL, NULL, NULL};
+    VkDescriptorBufferInfo infos[15];
+    for (size_t i = 0; i < binding_count; ++i) {
+        infos[i] = (VkDescriptorBufferInfo){
+            buffers[i]->buffer, offsets[i], ranges[i]};
+        writes[i + 1] = (VkWriteDescriptorSet){
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL,
+            result->set, bindings[i], 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            NULL, &infos[i], NULL};
+    }
+    update_sets(device->device, (uint32_t)binding_count + 1,
+        writes, 0, NULL);
+    result->available = true;
+    return (size_t)result;
+}
+
 size_t graphene_vk_compute_pipeline_create(size_t device_handle, size_t shader_handle, size_t layout_handle) {
     GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
     GrapheneVkShader *shader = (GrapheneVkShader *)shader_handle;
@@ -400,6 +1007,7 @@ size_t graphene_vk_compute_pipeline_create(size_t device_handle, size_t shader_h
     GrapheneVkComputePipeline *result = (GrapheneVkComputePipeline *)calloc(1, sizeof(GrapheneVkComputePipeline));
     if (result == NULL) return 0;
     result->owner = device;
+    result->bind_group_layout = bind_layout;
     if (device == NULL || !device->available || shader == NULL || !shader->available || shader->owner != device ||
         shader->stage != VK_SHADER_STAGE_COMPUTE_BIT || bind_layout == NULL || !bind_layout->available || bind_layout->owner != device) {
         strncpy(result->error, "Invalid compute pipeline resources", sizeof(result->error) - 1); return (size_t)result;
@@ -513,6 +1121,27 @@ size_t graphene_vk_sampler_create(size_t device_handle) {
     result->available = true; return (size_t)result;
 }
 
+size_t graphene_vk_sampler_create_repeat(size_t device_handle) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    GrapheneVkSampler *result = (GrapheneVkSampler *)calloc(1, sizeof(GrapheneVkSampler));
+    if (result == NULL) return 0;
+    result->owner = device;
+    if (device == NULL || !device->available) {
+        strncpy(result->error, "Invalid sampler device", sizeof(result->error) - 1); return (size_t)result;
+    }
+    PFN_vkCreateSampler create_sampler = (PFN_vkCreateSampler)device->get_device_proc(device->device, "vkCreateSampler");
+    result->destroy_sampler = (PFN_vkDestroySampler)device->get_device_proc(device->device, "vkDestroySampler");
+    if (create_sampler == NULL || result->destroy_sampler == NULL) return (size_t)result;
+    VkSamplerCreateInfo info = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO, NULL, 0,
+        VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        VK_SAMPLER_ADDRESS_MODE_REPEAT, 0.0f, 0, 1.0f, 0, 0, 0.0f, 16.0f, 0, 0};
+    if (create_sampler(device->device, &info, NULL, &result->sampler) != VK_SUCCESS) {
+        strncpy(result->error, "Unable to create repeat sampler", sizeof(result->error) - 1); return (size_t)result;
+    }
+    result->available = true; return (size_t)result;
+}
+
 bool graphene_vk_sampler_available(size_t handle) { GrapheneVkSampler *s = (GrapheneVkSampler *)handle; return s != NULL && s->available; }
 encore_str graphene_vk_sampler_error(size_t handle) { GrapheneVkSampler *s = (GrapheneVkSampler *)handle; return graphene_string(s == NULL ? "Invalid sampler" : s->error); }
 bool graphene_vk_sampler_destroy(size_t handle) {
@@ -521,6 +1150,46 @@ bool graphene_vk_sampler_destroy(size_t handle) {
     if (sampler->sampler != NULL && sampler->owner != NULL && sampler->owner->device != NULL && sampler->destroy_sampler != NULL)
         sampler->destroy_sampler(sampler->owner->device, sampler->sampler, NULL);
     free(sampler); return true;
+}
+
+/*
+ * Descriptor sets are allocated per frame slot by callers. Updating a buffer
+ * binding is safe after that slot's fence has completed and avoids rebuilding
+ * every pipeline-owned bind group when a resize-dependent storage buffer
+ * changes.
+ */
+bool graphene_vk_bind_group_update_buffer(size_t bind_group_handle,
+    uint32_t binding, size_t buffer_handle, uint64_t offset, uint64_t range) {
+    GrapheneVkBindGroup *group = (GrapheneVkBindGroup *)bind_group_handle;
+    GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)buffer_handle;
+    if (group == NULL || !group->available || group->owner == NULL ||
+        group->layout == NULL || !group->layout->available ||
+        buffer == NULL || !buffer->available || buffer->owner != group->owner ||
+        range == 0 || offset > buffer->size || range > buffer->size - offset) {
+        return false;
+    }
+    uint32_t descriptor_type = 0;
+    bool found = false;
+    for (uint32_t i = 0; i < group->layout->binding_count; ++i) {
+        if (group->layout->bindings[i] == binding &&
+            (group->layout->types[i] == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+             group->layout->types[i] == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)) {
+            descriptor_type = group->layout->types[i];
+            found = true;
+            break;
+        }
+    }
+    PFN_vkUpdateDescriptorSets update_sets =
+        (PFN_vkUpdateDescriptorSets)group->owner->get_device_proc(
+            group->owner->device, "vkUpdateDescriptorSets");
+    if (!found || update_sets == NULL) return false;
+    VkDescriptorBufferInfo buffer_info = {buffer->buffer, offset, range};
+    VkWriteDescriptorSet write = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, group->set,
+        binding, 0, 1, descriptor_type, NULL, &buffer_info, NULL
+    };
+    update_sets(group->owner->device, 1, &write, 0, NULL);
+    return true;
 }
 
 size_t graphene_vk_material_bind_group_create(size_t device_handle, size_t layout_handle,
@@ -635,12 +1304,13 @@ size_t graphene_vk_scene_bind_group_create(size_t device_handle, size_t layout_h
 }
 
 size_t graphene_vk_pipeline_create(size_t device_handle, size_t swapchain_handle, size_t vertex_handle, size_t fragment_handle,
-    size_t bind_group_layout_handle, bool depth_test, uint32_t cull_mode, bool alpha_blend,
-    bool load_color,
-    uint32_t vertex_stride, const uint32_t *locations, size_t location_count, size_t location_capacity,
-    const uint32_t *formats, size_t format_count, size_t format_capacity,
-    const uint32_t *offsets, size_t offset_count, size_t offset_capacity) {
-    (void)location_capacity; (void)format_capacity; (void)offset_capacity;
+    size_t bind_group_layout_handle, bool requested_depth_attachment,
+    bool depth_test, bool depth_write, uint32_t cull_mode, bool alpha_blend,
+    bool additive_blend, bool load_color,
+    uint32_t vertex_stride,
+    const uint32_t *locations, size_t location_count,
+    const uint32_t *formats, size_t format_count,
+    const uint32_t *offsets, size_t offset_count) {
     GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
     GrapheneVkSwapchain *swapchain = (GrapheneVkSwapchain *)swapchain_handle;
     GrapheneVkShader *vertex = (GrapheneVkShader *)vertex_handle;
@@ -652,7 +1322,10 @@ size_t graphene_vk_pipeline_create(size_t device_handle, size_t swapchain_handle
     result->depth_test = depth_test;
     if (device == NULL || !device->available || swapchain == NULL || !swapchain->available ||
         swapchain->owner != device || vertex == NULL || fragment == NULL || !vertex->available || !fragment->available ||
-        vertex->owner != device || fragment->owner != device || vertex->stage != VK_SHADER_STAGE_VERTEX_BIT ||
+        vertex->owner != device || fragment->owner != device ||
+        (vertex->stage != VK_SHADER_STAGE_VERTEX_BIT && vertex->stage != VK_SHADER_STAGE_MESH_BIT_EXT) ||
+        (vertex->stage == VK_SHADER_STAGE_MESH_BIT_EXT &&
+            (device->enabled_features & GRAPHENE_GPU_FEATURE_MESH_SHADER) == 0) ||
         fragment->stage != VK_SHADER_STAGE_FRAGMENT_BIT ||
         (bind_group_layout != NULL && (!bind_group_layout->available || bind_group_layout->owner != device)) ||
         location_count != format_count ||
@@ -685,7 +1358,8 @@ size_t graphene_vk_pipeline_create(size_t device_handle, size_t swapchain_handle
             VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL}
     };
-    bool depth_attachment = depth_test || !swapchain->offscreen;
+    bool depth_attachment = requested_depth_attachment || depth_test ||
+        depth_write || !swapchain->offscreen;
     VkAttachmentReference color_reference = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference depth_reference = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription subpass = {0, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, NULL, 1, &color_reference, NULL,
@@ -709,7 +1383,7 @@ size_t graphene_vk_pipeline_create(size_t device_handle, size_t swapchain_handle
         strncpy(result->error, "Unable to create render pipeline layout", sizeof(result->error) - 1); return (size_t)result;
     }
     VkPipelineShaderStageCreateInfo stages[2] = {
-        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex->module, "main", NULL},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, vertex->stage, vertex->module, "main", NULL},
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragment->module, "main", NULL}
     };
     VkVertexInputBindingDescription binding = {0, vertex_stride, 0};
@@ -729,20 +1403,25 @@ size_t graphene_vk_pipeline_create(size_t device_handle, size_t swapchain_handle
         VK_SAMPLE_COUNT_1_BIT, 0, 0.0f, NULL, 0, 0};
     VkPipelineDepthStencilStateCreateInfo depth = {
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, NULL, 0,
-        depth_test ? 1u : 0u, depth_test ? 1u : 0u, VK_COMPARE_OP_LESS,
+        depth_test ? 1u : 0u, depth_write ? 1u : 0u, VK_COMPARE_OP_LESS,
         0, 0, {0}, {0}, 0.0f, 1.0f
     };
-    VkPipelineColorBlendAttachmentState blend_attachment = {alpha_blend ? 1u : 0u,
+    bool blend_enabled = alpha_blend || additive_blend;
+    VkPipelineColorBlendAttachmentState blend_attachment = {blend_enabled ? 1u : 0u,
         alpha_blend ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ONE,
-        alpha_blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
-        VK_BLEND_FACTOR_ONE, alpha_blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ZERO,
+        additive_blend ? VK_BLEND_FACTOR_ONE :
+            (alpha_blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ZERO),
+        VK_BLEND_OP_ADD,
+        VK_BLEND_FACTOR_ONE, additive_blend ? VK_BLEND_FACTOR_ONE :
+            (alpha_blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ZERO),
         VK_BLEND_OP_ADD, VK_COLOR_COMPONENT_RGBA_BITS};
     VkPipelineColorBlendStateCreateInfo blend = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, NULL, 0,
         0, 0, 1, &blend_attachment, {0.0f, 0.0f, 0.0f, 0.0f}};
     uint32_t dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, NULL, 0, 2, dynamic_states};
+    bool mesh_pipeline = vertex->stage == VK_SHADER_STAGE_MESH_BIT_EXT;
     VkGraphicsPipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, NULL, 0,
-        2, stages, &vertex_input, &assembly, NULL, &viewport, &raster, &multisample,
+        2, stages, mesh_pipeline ? NULL : &vertex_input, mesh_pipeline ? NULL : &assembly, NULL, &viewport, &raster, &multisample,
         depth_attachment ? &depth : NULL, &blend, &dynamic,
         result->layout, result->render_pass, 0, NULL, -1};
     VkResult status = create_pipeline(device->device, NULL, 1, &pipeline_info, NULL, &result->pipeline);

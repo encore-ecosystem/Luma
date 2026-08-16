@@ -18,11 +18,18 @@ extern fn luma_window_poll(handle: usize) -> u32
 extern fn luma_window_wait(handle: usize, timeout_ms: u32) -> bool
 extern fn luma_event_x(handle: usize) -> f32
 extern fn luma_event_y(handle: usize) -> f32
+extern fn luma_event_dx(handle: usize) -> f32
+extern fn luma_event_dy(handle: usize) -> f32
+extern fn luma_event_buttons(handle: usize) -> u32
+extern fn luma_event_timestamp_ns(handle: usize) -> u64
 extern fn luma_event_key(handle: usize) -> u32
 extern fn luma_event_modifiers(handle: usize) -> u32
 extern fn luma_event_text(handle: usize) -> str
 extern fn luma_event_wheel_x(handle: usize) -> f32
 extern fn luma_event_wheel_y(handle: usize) -> f32
+extern fn luma_set_cursor(handle: usize, cursor: u32) -> bool
+extern fn luma_set_relative_mouse_mode(handle: usize, enabled: bool) -> bool
+extern fn luma_window_set_minimum_size(handle: usize, width: u32, height: u32) -> bool
 extern fn luma_clipboard_set(value: str) -> bool
 extern fn luma_clipboard_text() -> str
 extern fn luma_frame_begin(handle: usize, color: u32) -> bool
@@ -39,6 +46,11 @@ extern fn luma_circle(handle: usize, cx: f32, cy: f32, radius: f32, color: u32, 
 extern fn luma_round_rect(handle: usize, x: f32, y: f32, width: f32, height: f32, radius: f32, color:
     u32, filled: bool,) -> bool
 extern fn luma_text(handle: usize, x: f32, y: f32, value: str, color: u32) -> bool
+extern fn luma_styled_text(handle: usize, x: f32, y: f32, value: str, runs: str) -> bool
+extern fn luma_image_rgba(handle: usize, x: f32, y: f32, width: f32,
+    height: f32, payload: str,) -> bool
+extern fn luma_terminal(handle: usize, x: f32, y: f32, width: f32, height: f32,
+    value: str, foreground: u32, background: u32, focused: bool,) -> bool
 extern fn luma_text_wrapped(handle: usize, x: f32, y: f32, value: str, color: u32, wrap_width: f32) ->
 bool
 extern fn luma_font_load(handle: usize, path: str, size: f32, weight: u32) -> bool
@@ -51,6 +63,8 @@ extern fn luma_text_height(handle: usize, value: str) -> f32
 extern fn luma_text_index(handle: usize, value: str, max_width: f32) -> usize
 extern fn luma_frame_end(handle: usize) -> bool
 extern fn luma_direct_frame_acquire(handle: usize) -> usize
+extern fn luma_direct_frame_prepare(handle: usize) -> usize
+extern fn luma_direct_frame_begin_composition(handle: usize, frame: usize) -> bool
 extern fn luma_direct_frame_finish(handle: usize, frame: usize) -> bool
 extern fn luma_direct_composition_split(handle: usize) -> bool
 extern fn luma_layout_cache_begin(handle: usize, color: u32) -> bool
@@ -218,6 +232,41 @@ pub fn native_event_y(handle: usize) -> f32 {
         ret luma_event_y(handle)
     }
 }
+pub fn native_event_dx(handle: usize) -> f32 {
+    unsafe {
+        ret luma_event_dx(handle)
+    }
+}
+pub fn native_event_dy(handle: usize) -> f32 {
+    unsafe {
+        ret luma_event_dy(handle)
+    }
+}
+pub fn native_event_buttons(handle: usize) -> u32 {
+    unsafe {
+        ret luma_event_buttons(handle)
+    }
+}
+pub fn native_event_timestamp_ns(handle: usize) -> u64 {
+    unsafe {
+        ret luma_event_timestamp_ns(handle)
+    }
+}
+pub fn native_set_cursor(handle: usize, cursor: u32) -> bool {
+    unsafe {
+        ret luma_set_cursor(handle, cursor)
+    }
+}
+pub fn native_set_relative_mouse_mode(handle: usize, enabled: bool) -> bool {
+    unsafe {
+        ret luma_set_relative_mouse_mode(handle, enabled)
+    }
+}
+pub fn native_set_window_minimum_size(handle: usize, width: u32, height: u32) -> bool {
+    unsafe {
+        ret luma_window_set_minimum_size(handle, width, height)
+    }
+}
 pub fn native_event_key(handle: usize) -> u32 {
     unsafe {
         ret luma_event_key(handle)
@@ -317,6 +366,23 @@ pub fn native_text(handle: usize, x: f32, y: f32, value: str, color: u32) -> boo
         ret luma_text(handle, x, y, value, color)
     }
 }
+pub fn native_styled_text(handle: usize, x: f32, y: f32, value: str, runs: str) -> bool {
+    unsafe {
+        ret luma_styled_text(handle, x, y, value, runs)
+    }
+}
+pub fn native_image_rgba(handle: usize, x: f32, y: f32, width: f32,
+    height: f32, payload: str,) -> bool {
+    unsafe { ret luma_image_rgba(handle, x, y, width, height, payload) }
+}
+pub fn native_terminal(handle: usize, x: f32, y: f32, width: f32,
+    height: f32, value: str, foreground: u32, background: u32,
+    focused: bool,) -> bool {
+    unsafe {
+        ret luma_terminal(handle, x, y, width, height, value,
+            foreground, background, focused,)
+    }
+}
 pub fn native_text_wrapped(handle: usize, x: f32, y: f32, value: str, color: u32, wrap_width: f32) ->
 bool {
     unsafe {
@@ -371,6 +437,16 @@ pub fn native_end(handle: usize) -> bool {
 pub fn native_direct_frame_acquire(handle: usize) -> usize {
     unsafe {
         ret luma_direct_frame_acquire(handle)
+    }
+}
+pub fn native_direct_frame_prepare(handle: usize) -> usize {
+    unsafe {
+        ret luma_direct_frame_prepare(handle)
+    }
+}
+pub fn native_direct_frame_begin_composition(handle: usize, frame: usize) -> bool {
+    unsafe {
+        ret luma_direct_frame_begin_composition(handle, frame)
     }
 }
 pub fn native_direct_composition_split(handle: usize) -> bool {

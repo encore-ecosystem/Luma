@@ -1,13 +1,44 @@
+import core::fmt::Debug
 import core::option::Option
 import core::os
+
+fn generated_css_header(source: str) -> str {
+    let mut bytes = ""
+    let mut index = 0_usize
+    while index < source.len() {
+        if index > 0_usize {
+            bytes = bytes + ","
+        }
+        bytes = bytes + Debug::fmt(source.byte_at(index))
+        index += 1_usize
+    }
+    if bytes != "" {
+        bytes = bytes + ","
+    }
+    ret "/* Generated from assets/default.css by build.enq. */\n" +
+    "static const unsigned char luma_default_css_bytes[] = {" + bytes + "0};\n" +
+    "encore_str luma_default_css_source(void) {\n" +
+    "    return (encore_str){(encore_str_object *)encore_str_from_cstr((const char *)luma_default_css_bytes)};\n"
+    +
+    "}\n"
+}
 
 fn main() -> u32 {
     match os::argv(1_usize) {
         Option[str]::Some(path) => {
+            let css = os::read_file("assets/default.css")
+            if css == "" || os::write_file("assets/default_css.generated.h",
+                generated_css_header(css),) != 0_i32 {
+                ret 1_u32
+            }
             let payload = "{\n  \"native\": {\n    \"libraries\": [{\"name\":\"luma_native\",\"path\":\"runtime.c\"}],\n    \"search_paths\": [],\n    \"frameworks\": [],\n    \"link_args\": []\n  }\n}\n"
-            if os::write_file(path, payload) != 0_i32 { ret 1_u32 }
+            if os::write_file(path, payload) != 0_i32 {
+                ret 1_u32
+            }
             ret 0_u32
         }
-        Option[str]::None => { ret 2_u32 }
+        Option[str]::None => {
+            ret 2_u32
+        }
     }
 }

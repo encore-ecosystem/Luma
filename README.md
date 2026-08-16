@@ -38,6 +38,9 @@ impl Application for Counter {
         }
         ret self
     }
+    fn can_close(self: Self) -> bool { ret true }
+    fn background_interval_ms(self: Self) -> u32 { ret 0_u32 }
+    fn background_revision(self: Self) -> u64 { ret 0_u64 }
 }
 
 fn main() -> u32 {
@@ -48,11 +51,65 @@ fn main() -> u32 {
 }
 ```
 
+Managed applications receive normalized `TextEditIntent` values for committed
+text, deletion, cursor movement, selection, and clipboard shortcuts. The
+application remains the owner of its `TextEditor` or external document model;
+Luma only translates platform events into edit requests.
+
+Pointer placement and drag selection are delivered through the same intent.
+Native close requests are delivered to `update` before `can_close` is queried,
+so applications can protect unsaved state. Unhandled key-down events remain
+available as `AppEvent::is_key` for application commands such as Save.
+Models may return a non-zero `background_interval_ms` while observing a PTY,
+language server, or other external service. Returning zero restores blocking
+native-event waits with no periodic redraws.
+
+Large applications can implement `IncrementalApplication` and return a single
+updated widget from `view_target`. `run_incremental_application` applies that
+widget directly to retained state, while `None` keeps the safe full-view
+fallback for structural changes. Pointer hover/focus dispatch uses the retained
+path index and never calls the application view.
+
+Editors and engines that render into a retained `Widget::render_surface` can
+implement `DirectRenderApplication`. The managed runtime then owns input,
+layout, Vulkan composition, submission and presentation while the application
+records pre-composition compute work and its surface graphics pass directly
+into the borrowed frame. `with_secondary_pointer_lock` provides reusable
+RMB-look semantics; raw surface input preserves key releases, relative motion,
+button state, modifiers and native timestamps.
+
+## Typed HTML, CSS, and closure events
+
+HTML-like builders remain ordinary typed Encore values; Luma never parses an
+HTML string. A stylesheet is stored once on the window, layered over
+`StyleSheet::default()`, and reused by every retained widget:
+
+```enq
+let count = Signal[u32]::new(0_u32)
+let view = Html::new().with_child(
+    Body::new("body").with_child(
+        Html::div("counter").with_child(
+            Button::new("increment", "Increment").with_on_click(|event| {
+                count.set(count.get() + 1_u32)
+            }),),)
+let window = Window::create("Counter", 480_u32, 320_u32)
+    .with_stylesheet(StyleSheet::from_file("app.css").unwrap_or(StyleSheet::parse("")))
+```
+
+Events propagate through capture, target, and bubble phases and support
+`stop_propagation()` and `prevent_default()`. CSS pseudo-classes including
+`:hover`, `:active`, `:focus`, `:disabled`, and `:checked` are resolved through
+a bounded computed-declaration cache. See `examples/html-counter` for a
+complete runnable application.
+
 ## Features
 
 - Standard controls, form widgets, icons, and state-aware hit testing
+- Typed HTML-like builders, owning Encore closure callbacks, and DOM-style
+  capture/target/bubble propagation
 - Flexbox, grid, absolute and relative positioning, scrolling, and clipping
-- CSS declarations, stylesheets, variables, selectors, and pseudo-classes
+- Window-owned CSS files, default user-agent styles, cascade, variables,
+  selectors, pseudo-classes, and retained computed-style caching
 - Color and geometry primitives
 - SVG path parsing and a bundled Lucide icon catalog
 - Bundled Open Sans, Inter, Roboto, and Roboto Mono font families

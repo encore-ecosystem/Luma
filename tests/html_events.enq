@@ -1,0 +1,87 @@
+import core::vec::Vec
+import luma:: {
+    Button, Html, ReactiveUi, Rect, Signal, UiEvent, Widget,
+    dispatch_widget_event, layout_widget, ui_event_click
+}
+
+struct Trace {
+    values: Vec[u32]
+}
+
+impl for Trace {
+    fn push(self: Self &, value: u32) ->() {
+        self.values.push(value) ret()
+    }
+    fn len(self: Self &) -> usize {
+        ret self.values.len()
+    }
+    fn at(self: Self &, index: usize) -> u32 {
+        ret self.values.get(index).unwrap_or(0_u32)
+    }
+}
+
+fn main() -> u32 {
+    let count = Signal[u32]::new(0_u32)
+    let trace = Trace < H > {
+        Vec[u32]::new()
+    }
+    let button = Button::new("increment", "+")
+    .with_on_capture(ui_event_click(), | event | {
+            trace.push(2_u32)
+        }
+        ,
+    )
+    .with_on_click( | event | {
+            trace.push(3_u32)
+            count.set(count.get() + 1_u32)
+        }
+    )
+    let root = Html::new().with_child(
+        Html::div("counter")
+        .with_on_capture(ui_event_click(), | event | {
+                trace.push(1_u32)
+            }
+            ,
+        )
+        .with_on_click( | event | {
+                trace.push(4_u32)
+            }
+        )
+        .with_child(button),)
+    let allowed = dispatch_widget_event(root, "increment", UiEvent::new(ui_event_click(), "increment"))
+    if !allowed || count.get() != 1_u32 {
+        ret 1_u32
+    }
+    if trace.len() != 4_usize || trace.at(0_usize) != 1_u32 || trace.at(1_usize) != 2_u32 ||
+    trace.at(2_usize) != 3_u32 || trace.at(3_usize) != 4_u32 {
+        ret 2_u32
+    }
+
+    let indexed_count = Signal[u32]::new(0_u32)
+    let indexed_trace = Trace < H > { Vec[u32]::new() }
+    let indexed_root = Html::new().with_child(
+        Html::div("indexed")
+        .with_on_capture(ui_event_click(), | event | {
+                indexed_trace.push(1_u32)
+            },)
+        .with_child(Button::new("indexed-button", "+")
+            .with_on_click( | event | {
+                    indexed_trace.push(2_u32)
+                    indexed_count.set(indexed_count.get() + 1_u32)
+                })) ,)
+    let mut indexed_ui = ReactiveUi::new(layout_widget(indexed_root,
+        Rect::new(0.0_f32, 0.0_f32, 320.0_f32, 180.0_f32),))
+    if !indexed_ui.dispatch_event("indexed-button",
+        UiEvent::new(ui_event_click(), "indexed-button")) ||
+    indexed_count.get() != 1_u32 || indexed_trace.len() != 2_usize ||
+    indexed_trace.at(0_usize) != 1_u32 ||
+    indexed_trace.at(1_usize) != 2_u32 {
+        ret 4_u32
+    }
+    let found = root.find("increment").unwrap_or(Widget::spacer(0.0_f32))
+    ret if found.tag() == "button" {
+        0_u32
+    } else {
+        3_u32
+    }
+}

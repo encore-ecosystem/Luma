@@ -1,0 +1,41 @@
+import luma:: {
+    RendererKind, VulkanFeatureRequest, VulkanFeatures, Window
+}
+
+fn main() -> u32 {
+    let profile = VulkanFeatures::advanced_rendering()
+    if profile.mask() != 1023_u32 ||
+    !profile.contains(VulkanFeatures::descriptor_indexing()) ||
+    !profile.contains(VulkanFeatures::buffer_device_address()) ||
+    !profile.contains(VulkanFeatures::timeline_semaphore()) ||
+    !profile.contains(VulkanFeatures::synchronization_2()) ||
+    !profile.contains(VulkanFeatures::dynamic_rendering()) ||
+    !profile.contains(VulkanFeatures::mesh_shader()) ||
+    !profile.contains(VulkanFeatures::ray_query()) ||
+    !profile.contains(VulkanFeatures::draw_indirect_count()) ||
+    !profile.contains(VulkanFeatures::shader_int64_atomics()) ||
+    !profile.contains(VulkanFeatures::fragment_shader_barycentric()) {
+        ret 1_u32
+    }
+
+    let window = Window::create_with_renderer_features(
+        "Luma Vulkan feature negotiation", 96_u32, 64_u32,
+        RendererKind::DirectVulkan, VulkanFeatureRequest::advanced_rendering(),)
+    // Direct Vulkan remains optional on headless test hosts.
+    if !window.available() {
+        ret 0_u32
+    }
+    let interop = window.vulkan_interop()
+    let requested = interop.requested_features()
+    let enabled = interop.enabled_features()
+    if !interop.valid() || requested.mask() != profile.mask() ||
+    (enabled.mask() & requested.mask()) != enabled.mask() {
+        let _destroyed = window.destroy()
+        ret 2_u32
+    }
+    ret if window.destroy() {
+        0_u32
+    } else {
+        3_u32
+    }
+}

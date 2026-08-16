@@ -2,10 +2,7 @@
 
 import core::option::Option
 import core::vec::Vec
-import refrain::widget:: {
-    Widget, WidgetLayout, widget_button, widget_checkbox, widget_color_picker, widget_icon_button, widget_icon_card,
-    widget_input, widget_link, widget_radio, widget_select, widget_slider, widget_switch, widget_textarea
-}
+import refrain::widget::{Widget, WidgetLayout, widget_button, widget_checkbox, widget_color_picker, widget_icon_button, widget_icon_card, widget_input, widget_link, widget_radio, widget_range_slider, widget_select, widget_slider, widget_switch, widget_terminal, widget_textarea}
 
 pub struct InteractionState {
     hovered: str
@@ -304,6 +301,13 @@ impl for InteractionState {
             target, "", self.focused
         }
     }
+    /// Cancels an unfinished pointer gesture when the application loses OS
+    /// focus. Cancellation must never synthesize a click on the old target.
+    pub fn pointer_cancel(self: Self) -> InteractionState {
+        ret InteractionState {
+            "", "", self.focused
+        }
+    }
     pub fn pointer_release_target(self: Self, layout: WidgetLayout, x: f32, y: f32) -> str {
         ret self.release_target(layout.hit(x, y))
     }
@@ -416,10 +420,15 @@ fn focusable(widget: Widget) -> bool {
     {
         ret false
     }
+    if widget.attribute("data-luma-raw-input").is_some() {
+        ret true
+    }
     let kind = widget.kind()
     ret kind == widget_button() || kind == widget_input() || kind == widget_textarea() ||
+    kind == widget_terminal() ||
     kind == widget_checkbox() || kind == widget_radio() || kind == widget_switch() ||
-    kind == widget_select() || kind == widget_slider() || kind == widget_link() || kind == widget_color_picker()
+    kind == widget_select() || kind == widget_slider() || kind == widget_range_slider() ||
+    kind == widget_link() || kind == widget_color_picker()
     || kind == widget_icon_button() || kind == widget_icon_card()
 }
 
@@ -429,7 +438,9 @@ fn actionable(widget: Widget) -> bool {
     }
     let kind = widget.kind()
     ret kind == widget_button() || kind == widget_checkbox() || kind == widget_radio() ||
-    kind == widget_switch() || kind == widget_select() || kind == widget_link() || kind == widget_color_picker()
+    kind == widget_switch() || kind == widget_select() || kind == widget_slider() ||
+    kind == widget_range_slider() ||
+    kind == widget_link() || kind == widget_color_picker()
     || kind == widget_icon_button() || kind == widget_icon_card()
 }
 
@@ -456,4 +467,14 @@ fn find_widget(widget: Widget, id: str) -> Option[Widget] {
         index = index + 1_usize
     }
     ret Option[Widget]::None
+}
+
+#attr(test)
+fn focus_loss_cancels_pointer_without_losing_control_focus() -> bool {
+    let pressed = InteractionState::new().with_focus("speed")
+    .pointer_down_on("speed", Option[Widget]::None)
+    let cancelled = pressed.pointer_cancel()
+    ret cancelled.hovered() == "" && cancelled.active() == "" &&
+    cancelled.focused() == "speed" &&
+    cancelled.release_target("speed") == ""
 }

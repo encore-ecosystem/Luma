@@ -37,8 +37,16 @@ encore_str graphene_vk_encoder_error(size_t handle) {
 bool graphene_vk_encoder_bind_compute_pipeline(size_t encoder_handle, size_t pipeline_handle) {
     GrapheneVkEncoder *encoder = (GrapheneVkEncoder *)encoder_handle;
     GrapheneVkComputePipeline *pipeline = (GrapheneVkComputePipeline *)pipeline_handle;
-    if (encoder == NULL || !encoder->recording || pipeline == NULL || !pipeline->available || pipeline->owner != encoder->owner) return false;
+    if (encoder == NULL || !encoder->recording || encoder->command_buffer == NULL ||
+        encoder->owner == NULL || encoder->owner->cmd_bind_pipeline == NULL ||
+        pipeline == NULL || !pipeline->available || pipeline->pipeline == NULL ||
+        pipeline->owner != encoder->owner) {
+        if (encoder != NULL) strncpy(encoder->error, "Invalid compute pipeline bind", sizeof(encoder->error) - 1);
+        return false;
+    }
     encoder->owner->cmd_bind_pipeline(encoder->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+    encoder->bound_compute_pipeline = pipeline;
+    encoder->bound_compute_group = NULL;
     return true;
 }
 
@@ -46,16 +54,30 @@ bool graphene_vk_encoder_bind_compute_group(size_t encoder_handle, size_t pipeli
     GrapheneVkEncoder *encoder = (GrapheneVkEncoder *)encoder_handle;
     GrapheneVkComputePipeline *pipeline = (GrapheneVkComputePipeline *)pipeline_handle;
     GrapheneVkBindGroup *group = (GrapheneVkBindGroup *)group_handle;
-    if (encoder == NULL || !encoder->recording || pipeline == NULL || !pipeline->available || pipeline->owner != encoder->owner ||
-        group == NULL || !group->available || group->owner != encoder->owner) return false;
+    if (encoder == NULL || !encoder->recording || encoder->command_buffer == NULL ||
+        encoder->owner == NULL || encoder->owner->cmd_bind_descriptor_sets == NULL ||
+        pipeline == NULL || !pipeline->available || pipeline->layout == NULL ||
+        pipeline->owner != encoder->owner || encoder->bound_compute_pipeline != pipeline ||
+        group == NULL || !group->available || group->set == NULL || group->owner != encoder->owner ||
+        group->layout != pipeline->bind_group_layout) {
+        if (encoder != NULL) strncpy(encoder->error, "Invalid or incompatible compute bind group", sizeof(encoder->error) - 1);
+        return false;
+    }
     encoder->owner->cmd_bind_descriptor_sets(encoder->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
         pipeline->layout, 0, 1, &group->set, 0, NULL);
+    encoder->bound_compute_group = group;
     return true;
 }
 
 bool graphene_vk_encoder_dispatch(size_t handle, uint32_t x, uint32_t y, uint32_t z) {
     GrapheneVkEncoder *encoder = (GrapheneVkEncoder *)handle;
-    if (encoder == NULL || !encoder->recording || x == 0 || y == 0 || z == 0) return false;
+    if (encoder == NULL || !encoder->recording || encoder->command_buffer == NULL ||
+        encoder->owner == NULL || encoder->owner->cmd_dispatch == NULL ||
+        encoder->bound_compute_pipeline == NULL || encoder->bound_compute_group == NULL ||
+        x == 0 || y == 0 || z == 0) {
+        if (encoder != NULL) strncpy(encoder->error, "Compute dispatch requires a valid pipeline and compatible bind group", sizeof(encoder->error) - 1);
+        return false;
+    }
     encoder->owner->cmd_dispatch(encoder->command_buffer, x, y, z); return true;
 }
 
@@ -81,9 +103,11 @@ bool graphene_vk_encoder_transfer_geometry_barrier(size_t handle) {
     GrapheneVkEncoder *encoder = (GrapheneVkEncoder *)handle;
     if (encoder == NULL || !encoder->recording) return false;
     VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_TRANSFER_WRITE_BIT,
-        VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT};
+        VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
+            VK_ACCESS_SHADER_READ_BIT};
     encoder->owner->cmd_pipeline_barrier(encoder->command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0, 1, &barrier, 0, NULL, 0, NULL);
     return true;
 }
 
@@ -231,7 +255,16 @@ size_t graphene_vk_buffer_create(size_t device_handle, uint64_t size, uint32_t u
     if (memory_type == UINT32_MAX) {
         strncpy(buffer->error, "No compatible Vulkan memory type", sizeof(buffer->error) - 1); return (size_t)buffer;
     }
-    VkMemoryAllocateInfo allocate_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, requirements.size, memory_type};
+    VkMemoryAllocateFlagsInfo address_flags = {
+        VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, NULL,
+        VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, 0
+    };
+    VkMemoryAllocateInfo allocate_info = {
+        VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0
+            ? &address_flags : NULL,
+        requirements.size, memory_type
+    };
     if (device->allocate_memory(device->device, &allocate_info, NULL, &buffer->memory) != VK_SUCCESS) {
         strncpy(buffer->error, "Unable to allocate Vulkan buffer memory", sizeof(buffer->error) - 1); return (size_t)buffer;
     }
@@ -271,8 +304,7 @@ bool graphene_vk_buffer_write_f32(size_t handle, uint64_t offset, float value) {
 }
 
 bool graphene_vk_buffer_write_u32s(size_t handle, uint64_t offset,
-    const uint32_t *values, size_t count, size_t capacity) {
-    (void)capacity;
+    const uint32_t *values, size_t count) {
     GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
     uint64_t bytes = (uint64_t)count * sizeof(uint32_t);
     if (buffer == NULL || !buffer->available || !buffer->host_visible ||
@@ -283,8 +315,7 @@ bool graphene_vk_buffer_write_u32s(size_t handle, uint64_t offset,
 }
 
 bool graphene_vk_buffer_write_f32s(size_t handle, uint64_t offset,
-    const float *values, size_t count, size_t capacity) {
-    (void)capacity;
+    const float *values, size_t count) {
     GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
     uint64_t bytes = (uint64_t)count * sizeof(float);
     if (buffer == NULL || !buffer->available || !buffer->host_visible ||
@@ -303,6 +334,16 @@ uint32_t graphene_vk_buffer_read_u32(size_t handle, uint64_t offset) {
     return value;
 }
 
+float graphene_vk_buffer_read_f32(size_t handle, uint64_t offset) {
+    GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
+    if (buffer == NULL || !buffer->available || !buffer->host_visible ||
+        offset > buffer->size || sizeof(float) > buffer->size - offset ||
+        buffer->mapped == NULL) return 0.0f;
+    float value = 0.0f;
+    memcpy(&value, (uint8_t *)buffer->mapped + offset, sizeof(value));
+    return value;
+}
+
 bool graphene_vk_buffer_destroy(size_t handle) {
     GrapheneVkBuffer *buffer = (GrapheneVkBuffer *)handle;
     if (buffer == NULL) return false;
@@ -313,6 +354,272 @@ bool graphene_vk_buffer_destroy(size_t handle) {
         if (buffer->memory != NULL) buffer->owner->free_memory(buffer->owner->device, buffer->memory, NULL);
     }
     free(buffer);
+    return true;
+}
+
+static uint64_t graphene_vk_buffer_device_address(
+    GrapheneVkDevice *device, GrapheneVkBuffer *buffer) {
+    if (device == NULL || buffer == NULL || !buffer->available ||
+        buffer->owner != device ||
+        (buffer->usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) == 0)
+        return 0;
+    PFN_vkGetBufferDeviceAddress get_address =
+        (PFN_vkGetBufferDeviceAddress)device->get_device_proc(
+            device->device, "vkGetBufferDeviceAddress");
+    if (get_address == NULL)
+        get_address = (PFN_vkGetBufferDeviceAddress)device->get_device_proc(
+            device->device, "vkGetBufferDeviceAddressKHR");
+    if (get_address == NULL) return 0;
+    VkBufferDeviceAddressInfo info = {
+        VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, NULL, buffer->buffer};
+    return get_address(device->device, &info);
+}
+
+static GrapheneVkAccelerationStructure *graphene_vk_build_acceleration_structure(
+    GrapheneVkDevice *device, uint32_t type,
+    VkAccelerationStructureGeometryKHR *geometry, uint32_t primitive_count) {
+    GrapheneVkAccelerationStructure *result =
+        (GrapheneVkAccelerationStructure *)calloc(
+            1, sizeof(GrapheneVkAccelerationStructure));
+    if (result == NULL) return NULL;
+    result->owner = device;
+    result->type = type;
+    if (device == NULL || !device->available || primitive_count == 0 ||
+        (device->enabled_features & GRAPHENE_GPU_FEATURE_RAY_QUERY) == 0) {
+        strncpy(result->error, "Ray-query acceleration structures are unavailable",
+            sizeof(result->error) - 1);
+        return result;
+    }
+    PFN_vkCreateAccelerationStructureKHR create_as =
+        (PFN_vkCreateAccelerationStructureKHR)device->get_device_proc(
+            device->device, "vkCreateAccelerationStructureKHR");
+    result->destroy_acceleration_structure =
+        (PFN_vkDestroyAccelerationStructureKHR)device->get_device_proc(
+            device->device, "vkDestroyAccelerationStructureKHR");
+    PFN_vkGetAccelerationStructureBuildSizesKHR get_sizes =
+        (PFN_vkGetAccelerationStructureBuildSizesKHR)device->get_device_proc(
+            device->device, "vkGetAccelerationStructureBuildSizesKHR");
+    PFN_vkCmdBuildAccelerationStructuresKHR cmd_build =
+        (PFN_vkCmdBuildAccelerationStructuresKHR)device->get_device_proc(
+            device->device, "vkCmdBuildAccelerationStructuresKHR");
+    PFN_vkGetAccelerationStructureDeviceAddressKHR get_as_address =
+        (PFN_vkGetAccelerationStructureDeviceAddressKHR)device->get_device_proc(
+            device->device, "vkGetAccelerationStructureDeviceAddressKHR");
+    if (create_as == NULL || result->destroy_acceleration_structure == NULL ||
+        get_sizes == NULL || cmd_build == NULL || get_as_address == NULL) {
+        strncpy(result->error, "Vulkan acceleration-structure functions were not found",
+            sizeof(result->error) - 1);
+        return result;
+    }
+    VkAccelerationStructureBuildGeometryInfoKHR build = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+        NULL, type, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+        VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
+        NULL, NULL, 1, geometry, NULL, {.deviceAddress = 0}
+    };
+    VkAccelerationStructureBuildSizesInfoKHR sizes = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR,
+        NULL, 0, 0, 0
+    };
+    get_sizes(device->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+        &build, &primitive_count, &sizes);
+    if (sizes.accelerationStructureSize == 0 || sizes.buildScratchSize == 0) {
+        strncpy(result->error, "Vulkan returned empty acceleration-structure sizes",
+            sizeof(result->error) - 1);
+        return result;
+    }
+    result->backing = (GrapheneVkBuffer *)graphene_vk_buffer_create(
+        (size_t)device, sizes.accelerationStructureSize,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        false);
+    if (result->backing == NULL || !result->backing->available) {
+        strncpy(result->error, "Unable to allocate acceleration-structure storage",
+            sizeof(result->error) - 1);
+        return result;
+    }
+    VkAccelerationStructureCreateInfoKHR create = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+        NULL, 0, result->backing->buffer, 0,
+        sizes.accelerationStructureSize, type, 0
+    };
+    if (create_as(device->device, &create, NULL,
+            &result->acceleration_structure) != VK_SUCCESS) {
+        strncpy(result->error, "Unable to create Vulkan acceleration structure",
+            sizeof(result->error) - 1);
+        return result;
+    }
+    GrapheneVkBuffer *scratch = (GrapheneVkBuffer *)graphene_vk_buffer_create(
+        (size_t)device, sizes.buildScratchSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        false);
+    if (scratch == NULL || !scratch->available) {
+        if (scratch != NULL) graphene_vk_buffer_destroy((size_t)scratch);
+        strncpy(result->error, "Unable to allocate acceleration-structure scratch memory",
+            sizeof(result->error) - 1);
+        return result;
+    }
+    build.dstAccelerationStructure = result->acceleration_structure;
+    build.scratchData.deviceAddress =
+        graphene_vk_buffer_device_address(device, scratch);
+    GrapheneVkEncoder *encoder =
+        (GrapheneVkEncoder *)graphene_vk_encoder_create((size_t)device);
+    VkAccelerationStructureBuildRangeInfoKHR range = {
+        primitive_count, 0, 0, 0};
+    const VkAccelerationStructureBuildRangeInfoKHR *range_pointer = &range;
+    bool built = encoder != NULL && encoder->recording &&
+        build.scratchData.deviceAddress != 0;
+    if (built) {
+        cmd_build(encoder->command_buffer, 1, &build, &range_pointer);
+        built = graphene_vk_encoder_submit_wait((size_t)encoder);
+    }
+    if (encoder != NULL) graphene_vk_encoder_destroy((size_t)encoder);
+    graphene_vk_buffer_destroy((size_t)scratch);
+    if (!built) {
+        strncpy(result->error, "Acceleration-structure GPU build failed",
+            sizeof(result->error) - 1);
+        return result;
+    }
+    VkAccelerationStructureDeviceAddressInfoKHR address_info = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
+        NULL, result->acceleration_structure
+    };
+    result->device_address =
+        get_as_address(device->device, &address_info);
+    result->available = result->device_address != 0;
+    if (!result->available)
+        strncpy(result->error, "Acceleration structure has no device address",
+            sizeof(result->error) - 1);
+    return result;
+}
+
+size_t graphene_vk_blas_create_triangles(size_t device_handle,
+    size_t vertex_handle, uint64_t vertex_stride, uint32_t vertex_count,
+    size_t index_handle, uint32_t index_count) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    GrapheneVkBuffer *vertices = (GrapheneVkBuffer *)vertex_handle;
+    GrapheneVkBuffer *indices = (GrapheneVkBuffer *)index_handle;
+    uint64_t vertex_address =
+        graphene_vk_buffer_device_address(device, vertices);
+    uint64_t index_address =
+        graphene_vk_buffer_device_address(device, indices);
+    if (device == NULL || vertices == NULL || indices == NULL ||
+        vertex_address == 0 || index_address == 0 || vertex_stride < 12 ||
+        vertex_count < 3 || index_count < 3 || index_count % 3 != 0)
+        return (size_t)graphene_vk_build_acceleration_structure(
+            device, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+            NULL, 0);
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR,
+        NULL, VK_FORMAT_R32G32B32_SFLOAT,
+        {.deviceAddress = vertex_address}, vertex_stride,
+        vertex_count - 1, VK_INDEX_TYPE_UINT32,
+        {.deviceAddress = index_address}, {.deviceAddress = 0}
+    };
+    VkAccelerationStructureGeometryKHR geometry;
+    memset(&geometry, 0, sizeof(geometry));
+    geometry.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.geometry.triangles = triangles;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    return (size_t)graphene_vk_build_acceleration_structure(
+        device, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+        &geometry, index_count / 3);
+}
+
+size_t graphene_vk_tlas_create_instances(size_t device_handle,
+    const size_t *blas_handles, size_t blas_count,
+    const float *transforms, size_t transform_count) {
+    GrapheneVkDevice *device = (GrapheneVkDevice *)device_handle;
+    if (device == NULL || blas_handles == NULL || transforms == NULL ||
+        blas_count == 0 || transform_count != blas_count * 16)
+        return (size_t)graphene_vk_build_acceleration_structure(
+            device, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, NULL, 0);
+    GrapheneVkBuffer *instances =
+        (GrapheneVkBuffer *)graphene_vk_buffer_create(
+            device_handle,
+            blas_count * sizeof(VkAccelerationStructureInstanceKHR),
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            true);
+    if (instances == NULL || !instances->available || instances->mapped == NULL) {
+        if (instances != NULL) graphene_vk_buffer_destroy((size_t)instances);
+        return (size_t)graphene_vk_build_acceleration_structure(
+            device, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, NULL, 0);
+    }
+    VkAccelerationStructureInstanceKHR *destination =
+        (VkAccelerationStructureInstanceKHR *)instances->mapped;
+    for (size_t i = 0; i < blas_count; ++i) {
+        GrapheneVkAccelerationStructure *blas =
+            (GrapheneVkAccelerationStructure *)blas_handles[i];
+        if (blas == NULL || !blas->available ||
+            blas->owner != device ||
+            blas->type != VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR) {
+            graphene_vk_buffer_destroy((size_t)instances);
+            return (size_t)graphene_vk_build_acceleration_structure(
+                device, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, NULL, 0);
+        }
+        const float *matrix = transforms + i * 16;
+        destination[i] = (VkAccelerationStructureInstanceKHR){
+            .matrix = {
+                {matrix[0], matrix[4], matrix[8], matrix[12]},
+                {matrix[1], matrix[5], matrix[9], matrix[13]},
+                {matrix[2], matrix[6], matrix[10], matrix[14]}
+            },
+            .custom_index_mask = ((uint32_t)i & 0x00ffffffu) | 0xff000000u,
+            .sbt_offset_flags = 0,
+            .accelerationStructureReference = blas->device_address
+        };
+    }
+    uint64_t instance_address =
+        graphene_vk_buffer_device_address(device, instances);
+    VkAccelerationStructureGeometryInstancesDataKHR instance_data = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
+        NULL, 0, {.deviceAddress = instance_address}
+    };
+    VkAccelerationStructureGeometryKHR geometry;
+    memset(&geometry, 0, sizeof(geometry));
+    geometry.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    geometry.geometry.instances = instance_data;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    GrapheneVkAccelerationStructure *result =
+        graphene_vk_build_acceleration_structure(
+            device, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+            &geometry, (uint32_t)blas_count);
+    graphene_vk_buffer_destroy((size_t)instances);
+    return (size_t)result;
+}
+
+bool graphene_vk_acceleration_structure_available(size_t handle) {
+    GrapheneVkAccelerationStructure *structure =
+        (GrapheneVkAccelerationStructure *)handle;
+    return structure != NULL && structure->available;
+}
+
+encore_str graphene_vk_acceleration_structure_error(size_t handle) {
+    GrapheneVkAccelerationStructure *structure =
+        (GrapheneVkAccelerationStructure *)handle;
+    return graphene_string(structure == NULL
+        ? "Invalid acceleration structure" : structure->error);
+}
+
+bool graphene_vk_acceleration_structure_destroy(size_t handle) {
+    GrapheneVkAccelerationStructure *structure =
+        (GrapheneVkAccelerationStructure *)handle;
+    if (structure == NULL) return false;
+    if (structure->acceleration_structure != NULL &&
+        structure->owner != NULL && structure->owner->device != NULL &&
+        structure->destroy_acceleration_structure != NULL)
+        structure->destroy_acceleration_structure(
+            structure->owner->device,
+            structure->acceleration_structure, NULL);
+    if (structure->backing != NULL)
+        graphene_vk_buffer_destroy((size_t)structure->backing);
+    free(structure);
     return true;
 }
 

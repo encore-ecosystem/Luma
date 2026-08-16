@@ -1,0 +1,58 @@
+import luma::{
+    Event, Shortcut, ShortcutRegistry,
+}
+
+fn main() -> u32 {
+    let mut registry = ShortcutRegistry::new()
+    registry.bind(Shortcut::new("save", 115_u32, 192_u32))
+    registry.bind(Shortcut::new("save", 1073741901_u32, 192_u32))
+    registry.bind(Shortcut::new("once", 121_u32, 0_u32))
+    registry.bind(Shortcut::new("repeatable", 120_u32, 0_u32).with_repeat(true))
+
+    registry.begin_frame()
+    registry.handle(Event::key_down(119_u32, 0_u32))
+    registry.handle(Event::key_down(119_u32, 0_u32))
+    if !registry.is_down(119_u32) || !registry.was_pressed(119_u32) {
+        ret 1_u32
+    }
+    registry.begin_frame()
+    registry.handle(Event::key_down(119_u32, 0_u32))
+    if registry.was_pressed(119_u32) {
+        ret 2_u32
+    }
+    registry.handle(Event::key_up(119_u32, 0_u32))
+    if registry.is_down(119_u32) || !registry.was_released(119_u32) {
+        ret 3_u32
+    }
+
+    registry.begin_frame()
+    registry.handle(Event::key_down(115_u32, 192_u32))
+    if !registry.action_triggered("save") || !registry.action_down("save") {
+        ret 4_u32
+    }
+    registry.begin_frame()
+    registry.handle(Event::key_down(120_u32, 0_u32))
+    registry.handle(Event::key_down(120_u32, 0_u32))
+    if !registry.action_triggered("repeatable") {
+        ret 5_u32
+    }
+    registry.begin_frame()
+    registry.handle(Event::key_down(121_u32, 0_u32))
+    if !registry.action_triggered("once") {
+        ret 6_u32
+    }
+    registry.begin_frame()
+    registry.handle(Event::key_down(121_u32, 0_u32))
+    if registry.action_triggered("once") {
+        ret 7_u32
+    }
+
+    registry.clear()
+    if registry.is_down(115_u32) || registry.action_down("save") {
+        ret 8_u32
+    }
+    if !registry.unbind("save") || registry.unbind("save") || registry.unbind("missing") {
+        ret 9_u32
+    }
+    ret 0_u32
+}

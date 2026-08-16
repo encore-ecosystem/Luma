@@ -1,8 +1,6 @@
 //! Typed visual, layout, typography, shadow, gradient, and theme styles.
 
-import color:: {
-    Color, black, transparent, white
-}
+import color::{Color, black, transparent, white}
 import geometry::Insets
 
 pub fn text_start() -> usize {
@@ -1031,6 +1029,77 @@ pub struct LinearGradient {
     enabled: bool
 }
 
+/// CSS transition declarations retained with a computed style. The raw lists
+/// are parsed only when a property actually changes, keeping ordinary style
+/// resolution allocation-free.
+pub struct TransitionStyle {
+    properties: str
+    durations: str
+    delays: str
+    easings: str
+}
+
+impl for TransitionStyle {
+    pub fn none() -> Self {
+        ret Self {
+            "none", "0ms", "0ms", "ease"
+        }
+    }
+    pub fn new(properties: str, durations: str, delays: str, easings: str) -> Self {
+        ret Self {
+            properties, durations, delays, easings
+        }
+    }
+    pub fn with_properties(self: Self, value: str) -> Self {
+        ret Self {
+            value, self.durations, self.delays, self.easings
+        }
+    }
+    pub fn with_durations(self: Self, value: str) -> Self {
+        ret Self {
+            self.properties, value, self.delays, self.easings
+        }
+    }
+    pub fn with_delays(self: Self, value: str) -> Self {
+        ret Self {
+            self.properties, self.durations, value, self.easings
+        }
+    }
+    pub fn with_easings(self: Self, value: str) -> Self {
+        ret Self {
+            self.properties, self.durations, self.delays, value
+        }
+    }
+    pub fn properties(self: Self) -> str {
+        ret self.properties
+    }
+    pub fn durations(self: Self) -> str {
+        ret self.durations
+    }
+    pub fn delays(self: Self) -> str {
+        ret self.delays
+    }
+    pub fn easings(self: Self) -> str {
+        ret self.easings
+    }
+}
+
+struct InteractionStyle {
+    accent: Color
+    accent_set: bool
+    cursor: u32
+    cursor_set: bool
+    transition: TransitionStyle
+}
+
+impl for InteractionStyle {
+    fn default() -> Self {
+        ret Self {
+            Color::rgb(37_u8, 99_u8, 235_u8), false, 0_u32, false, TransitionStyle::none()
+        }
+    }
+}
+
 impl for LinearGradient {
     pub fn none() -> Self {
         ret Self {
@@ -1088,6 +1157,7 @@ pub struct Style {
     shadow: ShadowStyle
     decoration: TextDecorationStyle
     gradient: LinearGradient
+    interaction: InteractionStyle
 }
 
 impl for Style {
@@ -1096,7 +1166,7 @@ impl for Style {
             transparent(), black(), transparent(), 0.0_f32, 0.0_f32,
             Insets::all(0.0_f32), 0.0_f32, "", 14.0_f32, 400_u32, text_start(), 1.0_f32, LayoutStyle::default(),
             false, false, false, false, false, true, true, false, false, OutlineStyle::none(), ShadowStyle::none(),
-            TextDecorationStyle::none(), LinearGradient::none()
+            TextDecorationStyle::none(), LinearGradient::none(), InteractionStyle::default()
         }
     }
 
@@ -1105,7 +1175,7 @@ impl for Style {
             white(), black(), Color::rgb(210_u8, 216_u8, 224_u8),
             1.0_f32, 4.0_f32, Insets::all(12.0_f32), 8.0_f32, "", 14.0_f32, 400_u32, text_start(), 1.0_f32,
             LayoutStyle::default(), false, false, false, false, false, true, true, false, false, OutlineStyle::none(),
-            ShadowStyle::none(), TextDecorationStyle::none(), LinearGradient::none()
+            ShadowStyle::none(), TextDecorationStyle::none(), LinearGradient::none(), InteractionStyle::default()
         }
     }
 
@@ -1116,7 +1186,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, LinearGradient::none()
+            self.shadow, self.decoration, LinearGradient::none(), self.interaction
         }
     }
     pub fn with_linear_gradient(self: Self, value: LinearGradient) -> Style {
@@ -1126,7 +1196,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, value
+            self.shadow, self.decoration, value, self.interaction
         }
     }
     pub fn with_foreground(self: Self, value: Color) -> Style {
@@ -1136,7 +1206,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             true, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_border(self: Self, width: f32, color: Color) -> Style {
@@ -1146,7 +1216,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_radius(self: Self, value: f32) -> Style {
@@ -1156,7 +1226,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_padding(self: Self, value: Insets) -> Style {
@@ -1166,7 +1236,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_gap(self: Self, value: f32) -> Style {
@@ -1176,7 +1246,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_font_family(self: Self, value: str) -> Style {
@@ -1186,7 +1256,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, true, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_font_size(self: Self, value: f32) -> Style {
@@ -1196,7 +1266,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, true, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_font_weight(self: Self, value: u32) -> Style {
@@ -1206,7 +1276,7 @@ impl for Style {
             value, self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, true, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_text_align(self: Self, value: usize) -> Style {
@@ -1216,7 +1286,7 @@ impl for Style {
             self.font_weight, value, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, true,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_opacity(self: Self, value: f32) -> Style {
@@ -1233,7 +1303,7 @@ impl for Style {
             self.font_weight, self.text_align, opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
         }
     }
     pub fn with_visibility(self: Self, value: bool) -> Style {
@@ -1243,7 +1313,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
             value, self.pointer_events, true, self.pointer_events_set, self.outline, self.shadow, self.decoration,
-            self.gradient
+            self.gradient, self.interaction
         }
     }
     pub fn with_pointer_events(self: Self, value: bool) -> Style {
@@ -1253,7 +1323,7 @@ impl for Style {
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, value, self.visibility_set, true, self.outline, self.shadow, self.decoration,
-            self.gradient
+            self.gradient, self.interaction
         }
     }
     pub fn with_outline(self: Self, width: f32, color: Color, offset: f32) -> Style {
@@ -1263,7 +1333,8 @@ impl for Style {
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set,
-            OutlineStyle::new(width, color, offset), self.shadow, self.decoration, self.gradient
+            OutlineStyle::new(width, color, offset), self.shadow, self.decoration, self.gradient,
+            self.interaction
         }
     }
     pub fn with_shadow(self: Self, x: f32, y: f32, blur: f32, spread: f32, color: Color, inset: bool)
@@ -1274,7 +1345,8 @@ impl for Style {
             self.text_align, self.opacity, self.layout, self.foreground_set, self.font_family_set,
             self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set,
-            self.outline, ShadowStyle::new(x, y, blur, spread, color, inset), self.decoration, self.gradient
+            self.outline, ShadowStyle::new(x, y, blur, spread, color, inset), self.decoration, self.gradient,
+            self.interaction
         }
     }
     pub fn with_text_decoration(self: Self, underline: bool, overline: bool, line_through: bool,
@@ -1287,8 +1359,29 @@ impl for Style {
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set,
             self.outline, self.shadow,
             TextDecorationStyle::new(underline, overline, line_through, color, color_set, thickness),
-            self.gradient
+            self.gradient, self.interaction
         }
+    }
+    pub fn with_accent_color(self: Self, value: Color) -> Style {
+        ret self.with_interaction(InteractionStyle {
+                value, true, self.interaction.cursor, self.interaction.cursor_set,
+                self.interaction.transition
+            }
+            ,)
+    }
+    pub fn with_pointer_cursor(self: Self, value: u32) -> Style {
+        ret self.with_interaction(InteractionStyle {
+                self.interaction.accent, self.interaction.accent_set, value, true,
+                self.interaction.transition
+            }
+            ,)
+    }
+    pub fn with_transition(self: Self, value: TransitionStyle) -> Style {
+        ret self.with_interaction(InteractionStyle {
+                self.interaction.accent, self.interaction.accent_set,
+                self.interaction.cursor, self.interaction.cursor_set, value
+            }
+            ,)
     }
     pub fn with_margin(self: Self, value: Insets) -> Style {
         ret self.with_layout(self.layout.with_margin(value))
@@ -1450,7 +1543,17 @@ impl for Style {
             self.opacity, value,
             self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
-            self.shadow, self.decoration, self.gradient
+            self.shadow, self.decoration, self.gradient, self.interaction
+        }
+    }
+    fn with_interaction(self: Self, value: InteractionStyle) -> Style {
+        ret Style {
+            self.background, self.foreground, self.border_color, self.border_width, self.radius,
+            self.padding, self.gap, self.font_family, self.font_size, self.font_weight, self.text_align,
+            self.opacity, self.layout,
+            self.foreground_set, self.font_family_set, self.font_size_set, self.font_weight_set,
+            self.text_align_set, self.visible, self.pointer_events, self.visibility_set,
+            self.pointer_events_set, self.outline, self.shadow, self.decoration, self.gradient, value
         }
     }
     pub fn inherit_text(self: Self, parent: Style) -> Style {
@@ -1502,7 +1605,24 @@ impl for Style {
             }
             ,
             self.visibility_set, self.pointer_events_set, self.outline, self.shadow, self.decoration,
-            self.gradient
+            self.gradient,
+            InteractionStyle {
+                if self.interaction.accent_set {
+                    self.interaction.accent
+                } else {
+                    parent.interaction.accent
+                }
+                ,
+                self.interaction.accent_set || parent.interaction.accent_set,
+                if self.interaction.cursor_set {
+                    self.interaction.cursor
+                } else {
+                    parent.interaction.cursor
+                }
+                ,
+                self.interaction.cursor_set || parent.interaction.cursor_set,
+                self.interaction.transition
+            }
         }
     }
     pub fn background(self: Self) -> Color {
@@ -1559,6 +1679,15 @@ impl for Style {
     pub fn linear_gradient(self: Self) -> LinearGradient {
         ret self.gradient
     }
+    pub fn accent_color(self: Self) -> Color {
+        ret self.interaction.accent
+    }
+    pub fn pointer_cursor(self: Self) -> u32 {
+        ret self.interaction.cursor
+    }
+    pub fn transition(self: Self) -> TransitionStyle {
+        ret self.interaction.transition
+    }
     pub fn layout(self: Self) -> LayoutStyle {
         ret self.layout
     }
@@ -1591,8 +1720,18 @@ impl for Style {
         outline_equal(self.outline, other.outline) &&
         shadow_equal(self.shadow, other.shadow) &&
         decoration_equal(self.decoration, other.decoration) &&
-        gradient_equal(self.gradient, other.gradient)
+        gradient_equal(self.gradient, other.gradient) &&
+        self.interaction.accent.packed() == other.interaction.accent.packed() &&
+        self.interaction.accent_set == other.interaction.accent_set &&
+        self.interaction.cursor == other.interaction.cursor &&
+        self.interaction.cursor_set == other.interaction.cursor_set &&
+        transition_style_equal(self.interaction.transition, other.interaction.transition)
     }
+}
+
+fn transition_style_equal(lhs: TransitionStyle, rhs: TransitionStyle) -> bool {
+    ret lhs.properties() == rhs.properties() && lhs.durations() == rhs.durations() &&
+    lhs.delays() == rhs.delays() && lhs.easings() == rhs.easings()
 }
 
 fn insets_equal(lhs: Insets, rhs: Insets) -> bool {

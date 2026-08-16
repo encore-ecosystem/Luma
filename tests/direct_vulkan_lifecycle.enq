@@ -1,7 +1,7 @@
 import luma:: {
     Color, PresentMode, Rect, RendererKind, Widget, Window
 }
-import core::os::env
+import std::os::env
 
 fn main() -> u32 {
     let window = Window::create_with_renderer(

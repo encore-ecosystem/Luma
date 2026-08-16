@@ -2,7 +2,7 @@
 
 import color::Color
 import geometry::Insets
-import refrain::style::Style
+import refrain::style::{LayoutStyle, Style}
 
 pub struct ButtonAnimation {
     hover: f32
@@ -133,7 +133,7 @@ fn approach(current: f32, target: f32, step: f32) -> f32 {
     ret current
 }
 
-fn apply_easing(value: f32, easing: usize) -> f32 {
+pub fn apply_easing(value: f32, easing: usize) -> f32 {
     if easing == easing_linear() {
         ret value
     }
@@ -252,5 +252,70 @@ pub fn interpolate_style(from: Style, to: Style, amount: f32) -> Style {
         }
     )
     .with_opacity(mix_f32(from.opacity(), to.opacity(), progress))
-    .with_layout(from.layout())
+    .with_accent_color(interpolate_color(from.accent_color(), to.accent_color(), progress))
+    .with_pointer_cursor(if progress < 0.5_f32 {
+            from.pointer_cursor()
+        } else {
+            to.pointer_cursor()
+        }
+    )
+    .with_transition(to.transition())
+    .with_layout(interpolate_layout_style(from.layout(), to.layout(), progress))
+}
+
+pub fn interpolate_layout_style(from: LayoutStyle, to: LayoutStyle, amount: f32) -> LayoutStyle {
+    let progress = transition_progress(amount)
+    let base = if progress < 0.5_f32 {
+        from
+    } else {
+        to
+    }
+    let a = from.margin()
+    let b = to.margin()
+    let af = from.flex()
+    let bf = to.flex()
+    let ap = from.position()
+    let bp = to.position()
+    let ar = from.relative()
+    let br = to.relative()
+    let mut result = base
+    .with_margin(Insets::only(
+            mix_f32(a.top(), b.top(), progress), mix_f32(a.right(), b.right(), progress),
+            mix_f32(a.bottom(), b.bottom(), progress), mix_f32(a.left(), b.left(), progress),))
+    .with_width(mix_optional(from.width(), to.width(), progress))
+    .with_height(mix_optional(from.height(), to.height(), progress))
+    .with_min_width(mix_f32(from.min_width(), to.min_width(), progress))
+    .with_min_height(mix_f32(from.min_height(), to.min_height(), progress))
+    .with_max_width(mix_f32(from.max_width(), to.max_width(), progress))
+    .with_max_height(mix_f32(from.max_height(), to.max_height(), progress))
+    .with_flex_basis(mix_optional(af.basis(), bf.basis(), progress))
+    .with_flex_grow(mix_optional(af.grow(), bf.grow(), progress))
+    .with_flex_shrink(mix_optional(af.shrink(), bf.shrink(), progress))
+    .with_row_gap(mix_optional(af.row_gap(), bf.row_gap(), progress))
+    .with_column_gap(mix_optional(af.column_gap(), bf.column_gap(), progress))
+    .with_width_percent(mix_optional(ar.width(), br.width(), progress))
+    .with_height_percent(mix_optional(ar.height(), br.height(), progress))
+    if ap.top_set() && bp.top_set() {
+        result = result.with_top(mix_f32(ap.top(), bp.top(), progress))
+    }
+    if ap.right_set() && bp.right_set() {
+        result = result.with_right(mix_f32(ap.right(), bp.right(), progress))
+    }
+    if ap.bottom_set() && bp.bottom_set() {
+        result = result.with_bottom(mix_f32(ap.bottom(), bp.bottom(), progress))
+    }
+    if ap.left_set() && bp.left_set() {
+        result = result.with_left(mix_f32(ap.left(), bp.left(), progress))
+    }
+    ret result
+}
+
+fn mix_optional(from: f32, to: f32, progress: f32) -> f32 {
+    ret if from >= 0.0_f32 && to >= 0.0_f32 {
+        mix_f32(from, to, progress)
+    } elif progress < 0.5_f32 {
+        from
+    } else {
+        to
+    }
 }

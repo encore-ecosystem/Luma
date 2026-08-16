@@ -2,18 +2,14 @@
 
 import color::Color
 import core::option::Option
-import core::os:: {
-    file_exists, home_dir, mkdir, read_dir
-}
 import core::vec::Vec
 import geometry::Insets
 import refrain::interaction::TextEditor
-import refrain::layout:: {
-    horizontal, vertical
-}
+import refrain::layout::{horizontal, vertical}
 import refrain::style::Style
 import refrain::svg::SvgDocument
 import refrain::widget::Widget
+import std::os::{file_exists, home_dir, mkdir, read_dir}
 import ui_native::native_path_is_directory
 
 pub struct FilePickerEntry {

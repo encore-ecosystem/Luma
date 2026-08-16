@@ -1,0 +1,7 @@
+[project]
+name = "luma_direct_surface"
+version = "0.1.0"
+description = "Managed zero-copy render-surface example"
+dependencies = [
+    "path@../..[fonts]",
+]

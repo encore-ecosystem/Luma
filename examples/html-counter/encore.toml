@@ -1,0 +1,7 @@
+[project]
+name = "luma_html_counter"
+version = "0.1.0"
+description = "Typed HTML, CSS, closure events, and Signal demo"
+dependencies = [
+    "path@../..",
+]

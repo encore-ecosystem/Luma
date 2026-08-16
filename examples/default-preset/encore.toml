@@ -1,0 +1,7 @@
+[project]
+name = "luma_default_preset"
+version = "0.1.0"
+description = "Visual and interaction validation for Luma's default stylesheet"
+dependencies = [
+    "path@../..[fonts]",
+]

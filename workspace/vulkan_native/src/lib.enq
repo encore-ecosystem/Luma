@@ -20,8 +20,13 @@ extern fn graphene_vk_adapter_ray_query(handle: usize, index: usize) -> bool
 extern fn graphene_vk_adapter_ray_pipeline(handle: usize, index: usize) -> bool
 extern fn graphene_vk_adapter_mesh_shader(handle: usize, index: usize) -> bool
 extern fn graphene_vk_device_create(handle: usize, adapter_index: usize) -> usize
+extern fn graphene_vk_device_create_features(handle: usize, adapter_index: usize,
+    required_features: u32, optional_features: u32,) -> usize
 extern fn graphene_vk_device_borrow(handle: usize, device: usize, queue_family: u32) -> usize
 extern fn graphene_vk_present_device_create(handle: usize, adapter_index: usize, window: usize) -> usize
+extern fn graphene_vk_present_device_create_features(handle: usize,
+    adapter_index: usize, window: usize, required_features: u32,
+    optional_features: u32,) -> usize
 extern fn graphene_vk_device_destroy(handle: usize) -> bool
 extern fn graphene_vk_device_available(handle: usize) -> bool
 extern fn graphene_vk_device_error(handle: usize) -> str
@@ -29,14 +34,19 @@ extern fn graphene_vk_device_queue_family(handle: usize) -> u32
 extern fn graphene_vk_device_handle(handle: usize) -> usize
 extern fn graphene_vk_device_graphics(handle: usize) -> bool
 extern fn graphene_vk_device_compute(handle: usize) -> bool
-extern fn graphene_vk_shader_create(device: usize, words: Vec[u32], stage: u32) -> usize
+extern fn graphene_vk_device_requested_features(handle: usize) -> u32
+extern fn graphene_vk_device_enabled_features(handle: usize) -> u32
+extern fn graphene_vk_shader_create(
+    device: usize, words: u32*, word_count: usize, stage: u32,) -> usize
 extern fn graphene_vk_shader_available(handle: usize) -> bool
 extern fn graphene_vk_shader_error(handle: usize) -> str
 extern fn graphene_vk_shader_stage(handle: usize) -> u32
 extern fn graphene_vk_shader_destroy(handle: usize) -> bool
 extern fn graphene_vk_bind_group_layout_create(device: usize, binding: u32, stage: u32) -> usize
-extern fn graphene_vk_bind_group_layout_create_entries(device: usize, bindings: Vec[u32], types: Vec[u32],
-    stages: Vec[u32],) -> usize
+extern fn graphene_vk_bind_group_layout_create_entries(device: usize,
+    bindings: u32*, binding_count: usize,
+    types: u32*, type_count: usize,
+    stages: u32*, stage_count: usize,) -> usize
 extern fn graphene_vk_bind_group_layout_available(handle: usize) -> bool
 extern fn graphene_vk_bind_group_layout_error(handle: usize) -> str
 extern fn graphene_vk_bind_group_layout_destroy(handle: usize) -> bool
@@ -44,23 +54,55 @@ extern fn graphene_vk_bind_group_create(device: usize, layout: usize, buffer: us
     u64,) -> usize
 extern fn graphene_vk_storage_bind_group_create(device: usize, layout: usize, buffer: usize, offset:
     u64, range: u64,) -> usize
+extern fn graphene_vk_storage_bind_group_create_many(device: usize, layout: usize,
+    bindings: u32*, binding_count: usize,
+    buffers: usize*, buffer_count: usize,
+    offsets: u64*, offset_count: usize,
+    ranges: u64*, range_count: usize,) -> usize
+extern fn graphene_vk_buffer_bind_group_create_many(device: usize, layout: usize,
+    bindings: u32*, binding_count: usize,
+    buffers: usize*, buffer_count: usize,
+    offsets: u64*, offset_count: usize,
+    ranges: u64*, range_count: usize,) -> usize
+extern fn graphene_vk_buffer_texture_bind_group_create_many(device: usize, layout: usize,
+    bindings: u32*, binding_count: usize,
+    buffers: usize*, buffer_count: usize,
+    offsets: u64*, offset_count: usize,
+    ranges: u64*, range_count: usize,
+    texture_binding: u32, texture: usize, sampler: usize,) -> usize
+extern fn graphene_vk_ray_query_bind_group_create(device: usize, layout: usize,
+    acceleration_binding: u32, acceleration: usize,
+    bindings: u32*, binding_count: usize,
+    buffers: usize*, buffer_count: usize,
+    offsets: u64*, offset_count: usize,
+    ranges: u64*, range_count: usize,) -> usize
 extern fn graphene_vk_bind_group_available(handle: usize) -> bool
 extern fn graphene_vk_bind_group_error(handle: usize) -> str
 extern fn graphene_vk_bind_group_destroy(handle: usize) -> bool
+extern fn graphene_vk_bind_group_update_buffer(
+    handle: usize, binding: u32, buffer: usize,
+    offset: u64, range: u64,) -> bool
 extern fn graphene_vk_sampler_create(device: usize) -> usize
+extern fn graphene_vk_sampler_create_repeat(device: usize) -> usize
 extern fn graphene_vk_sampler_available(handle: usize) -> bool
 extern fn graphene_vk_sampler_error(handle: usize) -> str
 extern fn graphene_vk_sampler_destroy(handle: usize) -> bool
 extern fn graphene_vk_material_bind_group_create(device: usize, layout: usize, uniform_binding: u32,
     buffer: usize, offset: u64, range: u64, texture_binding: u32, texture: usize, sampler: usize,) ->
-        usize
+usize
 extern fn graphene_vk_scene_bind_group_create(device: usize, layout: usize,
     uniform_binding: u32, uniform_buffer: usize, uniform_range: u64,
     storage_binding: u32, storage_buffer: usize, storage_range: u64,) -> usize
 extern fn graphene_vk_pipeline_create(device: usize, swapchain: usize, vertex: usize, fragment: usize,
-    bind_group_layout: usize, depth_test: bool, cull_mode: u32, alpha_blend: bool,
+    bind_group_layout: usize, depth_attachment: bool,
+    depth_test: bool, depth_write: bool,
+    cull_mode: u32, alpha_blend: bool,
+    additive_blend: bool,
     load_color: bool,
-    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32], offsets: Vec[u32],) -> usize
+    vertex_stride: u32,
+    locations: u32*, location_count: usize,
+    formats: u32*, format_count: usize,
+    offsets: u32*, offset_count: usize,) -> usize
 extern fn graphene_vk_pipeline_available(handle: usize) -> bool
 extern fn graphene_vk_pipeline_error(handle: usize) -> str
 extern fn graphene_vk_pipeline_destroy(handle: usize) -> bool
@@ -94,10 +136,22 @@ extern fn graphene_vk_buffer_size(handle: usize) -> u64
 extern fn graphene_vk_buffer_host_visible(handle: usize) -> bool
 extern fn graphene_vk_buffer_write_u32(handle: usize, offset: u64, value: u32) -> bool
 extern fn graphene_vk_buffer_write_f32(handle: usize, offset: u64, value: f32) -> bool
-extern fn graphene_vk_buffer_write_u32s(handle: usize, offset: u64, values: Vec[u32]) -> bool
-extern fn graphene_vk_buffer_write_f32s(handle: usize, offset: u64, values: Vec[f32]) -> bool
+extern fn graphene_vk_buffer_write_u32s(
+    handle: usize, offset: u64, values: u32*, count: usize,) -> bool
+extern fn graphene_vk_buffer_write_f32s(
+    handle: usize, offset: u64, values: f32*, count: usize,) -> bool
 extern fn graphene_vk_buffer_read_u32(handle: usize, offset: u64) -> u32
+extern fn graphene_vk_buffer_read_f32(handle: usize, offset: u64) -> f32
 extern fn graphene_vk_buffer_destroy(handle: usize) -> bool
+extern fn graphene_vk_blas_create_triangles(device: usize,
+    vertices: usize, vertex_stride: u64, vertex_count: u32,
+    indices: usize, index_count: u32,) -> usize
+extern fn graphene_vk_tlas_create_instances(device: usize,
+    blas: usize*, blas_count: usize,
+    transforms: f32*, transform_count: usize,) -> usize
+extern fn graphene_vk_acceleration_structure_available(handle: usize) -> bool
+extern fn graphene_vk_acceleration_structure_error(handle: usize) -> str
+extern fn graphene_vk_acceleration_structure_destroy(handle: usize) -> bool
 extern fn graphene_vk_texture_create(device: usize, width: u32, height: u32, mip_levels: u32, format:
     u32, usage: u32,) -> usize
 extern fn graphene_vk_texture_available(handle: usize) -> bool
@@ -155,12 +209,30 @@ extern fn graphene_vk_frame_slot(handle: usize) -> u32
 extern fn graphene_vk_frame_error(handle: usize) -> str
 extern fn graphene_vk_frame_begin_render_pass(handle: usize, pipeline: usize,
     red: f32, green: f32, blue: f32, alpha: f32,) -> bool
+extern fn graphene_vk_frame_dispatch_compute(handle: usize, pipeline: usize,
+    group: usize, x: u32, y: u32, z: u32,) -> bool
+extern fn graphene_vk_frame_compute_barrier(handle: usize) -> bool
+extern fn graphene_vk_frame_fill_buffer(
+    handle: usize, buffer: usize, offset: u64, size: u64,
+    value: u32,) -> bool
+extern fn graphene_vk_frame_transfer_storage_barrier(handle: usize) -> bool
+extern fn graphene_vk_frame_fragment_storage_barrier(handle: usize) -> bool
+extern fn graphene_vk_frame_copy_buffer(handle: usize, source: usize,
+    destination: usize, source_offset: u64, destination_offset: u64,
+    size: u64,) -> bool
 extern fn graphene_vk_frame_bind_group(handle: usize, bind_group: usize) -> bool
 extern fn graphene_vk_frame_bind_pipeline(handle: usize, pipeline: usize) -> bool
 extern fn graphene_vk_frame_bind_vertex_buffer(handle: usize, buffer: usize) -> bool
 extern fn graphene_vk_frame_bind_index_buffer(handle: usize, buffer: usize) -> bool
 extern fn graphene_vk_frame_draw_indexed(handle: usize, index_count: u32, instance_count: u32,
     first_index: u32, vertex_offset: i32, first_instance: u32,) -> bool
+extern fn graphene_vk_frame_draw_indexed_indirect_count(handle: usize,
+    commands: usize, commands_offset: u64, count: usize, count_offset: u64,
+    maximum_draw_count: u32, stride: u32,) -> bool
+extern fn graphene_vk_frame_draw_mesh_tasks(handle: usize,
+    group_count_x: u32, group_count_y: u32, group_count_z: u32,) -> bool
+extern fn graphene_vk_frame_draw_mesh_tasks_indirect(handle: usize,
+    commands: usize, offset: u64,) -> bool
 extern fn graphene_vk_frame_end_render_pass(handle: usize) -> bool
 extern fn graphene_vk_frame_set_viewport(handle: usize, x: u32, y: u32, width: u32, height: u32) -> bool
 extern fn graphene_vk_frame_upload_ui(handle: usize, pixels: usize, width: u32, height: u32, pitch: u32,
@@ -272,6 +344,13 @@ pub fn native_device_create(handle: usize, adapter_index: usize) -> usize {
         ret graphene_vk_device_create(handle, adapter_index)
     }
 }
+pub fn native_device_create_features(handle: usize, adapter_index: usize,
+    required_features: u32, optional_features: u32,) -> usize {
+    unsafe {
+        ret graphene_vk_device_create_features(handle, adapter_index,
+            required_features, optional_features,)
+    }
+}
 pub fn native_device_borrow(handle: usize, device: usize, queue_family: u32) -> usize {
     unsafe {
         ret graphene_vk_device_borrow(handle, device, queue_family)
@@ -280,6 +359,14 @@ pub fn native_device_borrow(handle: usize, device: usize, queue_family: u32) -> 
 pub fn native_present_device_create(handle: usize, adapter_index: usize, window: usize) -> usize {
     unsafe {
         ret graphene_vk_present_device_create(handle, adapter_index, window)
+    }
+}
+pub fn native_present_device_create_features(handle: usize,
+    adapter_index: usize, window: usize, required_features: u32,
+    optional_features: u32,) -> usize {
+    unsafe {
+        ret graphene_vk_present_device_create_features(handle, adapter_index,
+            window, required_features, optional_features,)
     }
 }
 pub fn native_device_destroy(handle: usize) -> bool {
@@ -317,9 +404,19 @@ pub fn native_device_compute(handle: usize) -> bool {
         ret graphene_vk_device_compute(handle)
     }
 }
+pub fn native_device_requested_features(handle: usize) -> u32 {
+    unsafe {
+        ret graphene_vk_device_requested_features(handle)
+    }
+}
+pub fn native_device_enabled_features(handle: usize) -> u32 {
+    unsafe {
+        ret graphene_vk_device_enabled_features(handle)
+    }
+}
 pub fn native_shader_create(device: usize, words: Vec[u32], stage: u32) -> usize {
     unsafe {
-        ret graphene_vk_shader_create(device, words, stage)
+        ret graphene_vk_shader_create(device, words.as_ptr(), words.len(), stage)
     }
 }
 pub fn native_shader_available(handle: usize) -> bool {
@@ -350,7 +447,11 @@ pub fn native_bind_group_layout_create(device: usize, binding: u32, stage: u32) 
 pub fn native_bind_group_layout_create_entries(device: usize, bindings: Vec[u32], types: Vec[u32], stages:
     Vec[u32],) -> usize {
     unsafe {
-        ret graphene_vk_bind_group_layout_create_entries(device, bindings, types, stages)
+        ret graphene_vk_bind_group_layout_create_entries(
+            device,
+            bindings.as_ptr(), bindings.len(),
+            types.as_ptr(), types.len(),
+            stages.as_ptr(), stages.len(),)
     }
 }
 pub fn native_bind_group_layout_available(handle: usize) -> bool {
@@ -380,6 +481,54 @@ pub fn native_storage_bind_group_create(device: usize, layout: usize, buffer: us
         ret graphene_vk_storage_bind_group_create(device, layout, buffer, offset, range)
     }
 }
+pub fn native_storage_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],) -> usize {
+    unsafe {
+        ret graphene_vk_storage_bind_group_create_many(
+            device, layout,
+            bindings.as_ptr(), bindings.len(),
+            buffers.as_ptr(), buffers.len(),
+            offsets.as_ptr(), offsets.len(),
+            ranges.as_ptr(), ranges.len(),)
+    }
+}
+pub fn native_buffer_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],) -> usize {
+    unsafe {
+        ret graphene_vk_buffer_bind_group_create_many(
+            device, layout,
+            bindings.as_ptr(), bindings.len(),
+            buffers.as_ptr(), buffers.len(),
+            offsets.as_ptr(), offsets.len(),
+            ranges.as_ptr(), ranges.len(),)
+    }
+}
+pub fn native_buffer_texture_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],
+    texture_binding: u32, texture: usize, sampler: usize,) -> usize {
+    unsafe {
+        ret graphene_vk_buffer_texture_bind_group_create_many(
+            device, layout,
+            bindings.as_ptr(), bindings.len(),
+            buffers.as_ptr(), buffers.len(),
+            offsets.as_ptr(), offsets.len(),
+            ranges.as_ptr(), ranges.len(),
+            texture_binding, texture, sampler,)
+    }
+}
+pub fn native_ray_query_bind_group_create(device: usize, layout: usize,
+    acceleration_binding: u32, acceleration: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64],
+    ranges: Vec[u64],) -> usize {
+    unsafe {
+        ret graphene_vk_ray_query_bind_group_create(
+            device, layout, acceleration_binding, acceleration,
+            bindings.as_ptr(), bindings.len(),
+            buffers.as_ptr(), buffers.len(),
+            offsets.as_ptr(), offsets.len(),
+            ranges.as_ptr(), ranges.len(),)
+    }
+}
 pub fn native_scene_bind_group_create(device: usize, layout: usize,
     uniform_binding: u32, uniform_buffer: usize, uniform_range: u64,
     storage_binding: u32, storage_buffer: usize, storage_range: u64,) -> usize {
@@ -403,10 +552,21 @@ pub fn native_bind_group_destroy(handle: usize) -> bool {
         ret graphene_vk_bind_group_destroy(handle)
     }
 }
+pub fn native_bind_group_update_buffer(
+    handle: usize, binding: u32, buffer: usize,
+    offset: u64, range: u64,) -> bool {
+    unsafe {
+        ret graphene_vk_bind_group_update_buffer(
+            handle, binding, buffer, offset, range,)
+    }
+}
 pub fn native_sampler_create(device: usize) -> usize {
     unsafe {
         ret graphene_vk_sampler_create(device)
     }
+}
+pub fn native_sampler_create_repeat(device: usize) -> usize {
+    unsafe { ret graphene_vk_sampler_create_repeat(device) }
 }
 pub fn native_sampler_available(handle: usize) -> bool {
     unsafe {
@@ -436,7 +596,49 @@ pub fn native_pipeline_create(device: usize, swapchain: usize, vertex: usize, fr
     vertex_stride: u32, locations: Vec[u32], formats: Vec[u32], offsets: Vec[u32],) -> usize {
     unsafe {
         ret graphene_vk_pipeline_create(device, swapchain, vertex, fragment, bind_group_layout,
-            depth_test, cull_mode, alpha_blend, false, vertex_stride, locations, formats, offsets,)
+            depth_test, depth_test, depth_test,
+            cull_mode, alpha_blend, false, false,
+            vertex_stride,
+            locations.as_ptr(), locations.len(),
+            formats.as_ptr(), formats.len(),
+            offsets.as_ptr(), offsets.len(),)
+    }
+}
+pub fn native_pipeline_create_depth_state(
+    device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_attachment: bool,
+    depth_test: bool, depth_write: bool,
+    cull_mode: u32, alpha_blend: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32],
+    offsets: Vec[u32],) -> usize {
+    unsafe {
+        ret graphene_vk_pipeline_create(
+            device, swapchain, vertex, fragment, bind_group_layout,
+            depth_attachment, depth_test, depth_write,
+            cull_mode, alpha_blend, false, false,
+            vertex_stride,
+            locations.as_ptr(), locations.len(),
+            formats.as_ptr(), formats.len(),
+            offsets.as_ptr(), offsets.len(),)
+    }
+}
+pub fn native_pipeline_create_configured(
+    device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_attachment: bool,
+    depth_test: bool, depth_write: bool,
+    cull_mode: u32, alpha_blend: bool, additive_blend: bool,
+    load_color: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32],
+    offsets: Vec[u32],) -> usize {
+    unsafe {
+        ret graphene_vk_pipeline_create(
+            device, swapchain, vertex, fragment, bind_group_layout,
+            depth_attachment, depth_test, depth_write,
+            cull_mode, alpha_blend, additive_blend, load_color,
+            vertex_stride,
+            locations.as_ptr(), locations.len(),
+            formats.as_ptr(), formats.len(),
+            offsets.as_ptr(), offsets.len(),)
     }
 }
 pub fn native_pipeline_available(handle: usize) -> bool {
@@ -603,12 +805,14 @@ pub fn native_buffer_write_f32(handle: usize, offset: u64, value: f32) -> bool {
 }
 pub fn native_buffer_write_u32s(handle: usize, offset: u64, values: Vec[u32]) -> bool {
     unsafe {
-        ret graphene_vk_buffer_write_u32s(handle, offset, values)
+        ret graphene_vk_buffer_write_u32s(
+            handle, offset, values.as_ptr(), values.len(),)
     }
 }
 pub fn native_buffer_write_f32s(handle: usize, offset: u64, values: Vec[f32]) -> bool {
     unsafe {
-        ret graphene_vk_buffer_write_f32s(handle, offset, values)
+        ret graphene_vk_buffer_write_f32s(
+            handle, offset, values.as_ptr(), values.len(),)
     }
 }
 pub fn native_buffer_read_u32(handle: usize, offset: u64) -> u32 {
@@ -616,9 +820,45 @@ pub fn native_buffer_read_u32(handle: usize, offset: u64) -> u32 {
         ret graphene_vk_buffer_read_u32(handle, offset)
     }
 }
+pub fn native_buffer_read_f32(handle: usize, offset: u64) -> f32 {
+    unsafe {
+        ret graphene_vk_buffer_read_f32(handle, offset)
+    }
+}
 pub fn native_buffer_destroy(handle: usize) -> bool {
     unsafe {
         ret graphene_vk_buffer_destroy(handle)
+    }
+}
+pub fn native_blas_create_triangles(device: usize,
+    vertices: usize, vertex_stride: u64, vertex_count: u32,
+    indices: usize, index_count: u32,) -> usize {
+    unsafe {
+        ret graphene_vk_blas_create_triangles(device, vertices,
+            vertex_stride, vertex_count, indices, index_count,)
+    }
+}
+pub fn native_tlas_create_instances(device: usize,
+    blas: Vec[usize], transforms: Vec[f32],) -> usize {
+    unsafe {
+        ret graphene_vk_tlas_create_instances(
+            device, blas.as_ptr(), blas.len(),
+            transforms.as_ptr(), transforms.len(),)
+    }
+}
+pub fn native_acceleration_structure_available(handle: usize) -> bool {
+    unsafe {
+        ret graphene_vk_acceleration_structure_available(handle)
+    }
+}
+pub fn native_acceleration_structure_error(handle: usize) -> str {
+    unsafe {
+        ret graphene_vk_acceleration_structure_error(handle)
+    }
+}
+pub fn native_acceleration_structure_destroy(handle: usize) -> bool {
+    unsafe {
+        ret graphene_vk_acceleration_structure_destroy(handle)
     }
 }
 pub fn native_texture_create(device: usize, width: u32, height: u32, mip_levels: u32, format: u32, usage:
@@ -874,6 +1114,43 @@ pub fn native_frame_begin_render_pass(handle: usize, pipeline: usize,
         ret graphene_vk_frame_begin_render_pass(handle, pipeline, red, green, blue, alpha)
     }
 }
+pub fn native_frame_dispatch_compute(handle: usize, pipeline: usize,
+    group: usize, x: u32, y: u32, z: u32,) -> bool {
+    unsafe {
+        ret graphene_vk_frame_dispatch_compute(handle, pipeline, group, x, y, z)
+    }
+}
+pub fn native_frame_compute_barrier(handle: usize) -> bool {
+    unsafe {
+        ret graphene_vk_frame_compute_barrier(handle)
+    }
+}
+pub fn native_frame_fill_buffer(
+    handle: usize, buffer: usize, offset: u64, size: u64,
+    value: u32,) -> bool {
+    unsafe {
+        ret graphene_vk_frame_fill_buffer(
+            handle, buffer, offset, size, value,)
+    }
+}
+pub fn native_frame_transfer_storage_barrier(handle: usize) -> bool {
+    unsafe {
+        ret graphene_vk_frame_transfer_storage_barrier(handle)
+    }
+}
+pub fn native_frame_fragment_storage_barrier(handle: usize) -> bool {
+    unsafe {
+        ret graphene_vk_frame_fragment_storage_barrier(handle)
+    }
+}
+pub fn native_frame_copy_buffer(handle: usize, source: usize,
+    destination: usize, source_offset: u64, destination_offset: u64,
+    size: u64,) -> bool {
+    unsafe {
+        ret graphene_vk_frame_copy_buffer(handle, source, destination,
+            source_offset, destination_offset, size,)
+    }
+}
 pub fn native_frame_bind_group(handle: usize, bind_group: usize) -> bool {
     unsafe {
         ret graphene_vk_frame_bind_group(handle, bind_group)
@@ -899,6 +1176,29 @@ pub fn native_frame_draw_indexed(handle: usize, index_count: u32, instance_count
     unsafe {
         ret graphene_vk_frame_draw_indexed(handle, index_count, instance_count, first_index, vertex_offset,
             first_instance,)
+    }
+}
+pub fn native_frame_draw_indexed_indirect_count(handle: usize,
+    commands: usize, commands_offset: u64, count: usize, count_offset: u64,
+    maximum_draw_count: u32, stride: u32,) -> bool {
+    unsafe {
+        ret graphene_vk_frame_draw_indexed_indirect_count(handle,
+            commands, commands_offset, count, count_offset,
+            maximum_draw_count, stride,)
+    }
+}
+pub fn native_frame_draw_mesh_tasks(handle: usize,
+    group_count_x: u32, group_count_y: u32, group_count_z: u32,) -> bool {
+    unsafe {
+        ret graphene_vk_frame_draw_mesh_tasks(handle,
+            group_count_x, group_count_y, group_count_z,)
+    }
+}
+pub fn native_frame_draw_mesh_tasks_indirect(handle: usize,
+    commands: usize, offset: u64,) -> bool {
+    unsafe {
+        ret graphene_vk_frame_draw_mesh_tasks_indirect(
+            handle, commands, offset,)
     }
 }
 pub fn native_frame_end_render_pass(handle: usize) -> bool {
@@ -979,6 +1279,11 @@ pub fn direct_window_destroy(handle: usize) -> bool {
 pub fn direct_device_create(context: usize, window: usize) -> usize {
     ret native_present_device_create(context, 0_usize, window)
 }
+pub fn direct_device_create_features(context: usize, window: usize,
+    required_features: u32, optional_features: u32,) -> usize {
+    ret native_present_device_create_features(context, 0_usize, window,
+        required_features, optional_features,)
+}
 pub fn direct_device_available(handle: usize) -> bool {
     ret native_device_available(handle)
 }
@@ -993,6 +1298,12 @@ pub fn direct_device_handle(handle: usize) -> usize {
 }
 pub fn direct_device_queue_family(handle: usize) -> u32 {
     ret native_device_queue_family(handle)
+}
+pub fn direct_device_requested_features(handle: usize) -> u32 {
+    ret native_device_requested_features(handle)
+}
+pub fn direct_device_enabled_features(handle: usize) -> u32 {
+    ret native_device_enabled_features(handle)
 }
 pub fn direct_swapchain_create(device: usize, window: usize) -> usize {
     ret native_swapchain_create(device, window)

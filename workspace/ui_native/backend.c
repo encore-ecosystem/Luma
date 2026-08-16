@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,9 +22,12 @@
 
 typedef struct { size_t ref_count; size_t len; char data[]; } encore_str_object;
 typedef struct { encore_str_object *object; } encore_str;
+
 extern void *encore_str_from_cstr(const char *value);
 extern bool luma_vk_ui_begin(size_t handle, uint32_t clear_color);
 extern bool luma_vk_ui_cache_begin(size_t handle, uint32_t clear_color);
+extern bool luma_vk_ui_cache_patch_begin(size_t handle, uint32_t clear_color,
+    float x, float y, float width, float height);
 extern bool luma_vk_ui_cache_end(size_t handle);
 extern bool luma_vk_ui_cached_begin(size_t handle, uint32_t clear_color);
 extern bool luma_vk_ui_cache_ready(size_t handle);
@@ -36,6 +40,8 @@ extern bool luma_vk_ui_clip(size_t handle, bool enabled, int32_t x, int32_t y,
     uint32_t width, uint32_t height);
 extern bool luma_vk_ui_end(size_t handle);
 extern size_t luma_vk_ui_frame_acquire(size_t handle);
+extern size_t luma_vk_ui_frame_prepare(size_t handle);
+extern bool luma_vk_ui_frame_begin_composition(size_t handle, size_t frame);
 extern bool luma_vk_ui_frame_finish(size_t handle, size_t frame);
 extern bool luma_vk_ui_composition_split(size_t handle);
 extern size_t luma_vk_ui_texture_create(size_t handle, const void *pixels,
@@ -56,6 +62,7 @@ extern size_t luma_vk_ui_external_texture_create(size_t handle, uint64_t image,
 typedef struct UiSdlWindow UiSdlWindow;
 typedef struct UiSdlRenderer UiSdlRenderer;
 typedef struct UiSdlTexture UiSdlTexture;
+typedef struct UiSdlCursor UiSdlCursor;
 typedef uint32_t UiSdlPropertiesID;
 typedef struct UiSdlSurface {
     uint32_t flags;
@@ -74,12 +81,43 @@ typedef struct { int x, y, w, h; } UiSdlRect;
 typedef struct { uint8_t r, g, b, a; } UiSdlColor;
 typedef struct { float r, g, b, a; } UiSdlFColor;
 typedef struct { UiSdlFPoint position; UiSdlFColor color; UiSdlFPoint tex_coord; } UiSdlVertex;
+typedef struct UiTtfTextEngine UiTtfTextEngine;
+typedef struct UiTtfText {
+    char *text;
+    int num_lines;
+    int refcount;
+    void *internal;
+} UiTtfText;
+typedef struct {
+    uint32_t flags;
+    int offset;
+    int length;
+    int line_index;
+    int cluster_index;
+    UiSdlRect rect;
+} UiTtfSubString;
 
 bool luma_vector_line(size_t handle, float x0, float y0, float x1, float y1,
     float width, uint32_t color);
 
+static uint64_t ui_hash_bytes(const unsigned char *bytes, size_t length) {
+    uint64_t hash = 1469598103934665603ull;
+    for (size_t i = 0; i < length; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ull;
+    }
+    return hash == 0 ? 1 : hash;
+}
+
+typedef struct {
+    uint32_t type;
+    uint32_t reserved;
+    uint64_t timestamp;
+} UiSdlCommonEvent;
+
 typedef union {
     uint32_t type;
+    UiSdlCommonEvent common;
     uint8_t padding[128];
 } UiSdlEvent;
 
@@ -113,6 +151,9 @@ typedef struct {
     int atlas_y;
     uint32_t atlas_generation;
     bool owns_texture;
+    uint64_t style_hash;
+    size_t style_length;
+    int anchor_center_x;
 } UiTextCacheEntry;
 
 typedef struct {
@@ -123,6 +164,15 @@ typedef struct {
     int row_height;
     uint32_t generation;
 } UiTextAtlasPage;
+
+typedef struct {
+    UiSdlTexture *texture;
+    uint64_t hash;
+    size_t payload_length;
+    uint32_t width;
+    uint32_t height;
+    uint64_t used_at;
+} UiRasterCacheEntry;
 
 typedef struct {
     uint32_t type;
@@ -202,6 +252,7 @@ enum {
     UI_SDL_EVENT_WINDOW_EXPOSED = 0x204,
     UI_SDL_EVENT_WINDOW_RESIZED = 0x206,
     UI_SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED = 0x207,
+    UI_SDL_EVENT_WINDOW_FOCUS_LOST = 0x20F,
     UI_SDL_EVENT_KEY_DOWN = 0x300,
     UI_SDL_EVENT_KEY_UP = 0x301,
     UI_SDL_EVENT_TEXT_INPUT = 0x303,
@@ -221,7 +272,8 @@ enum {
     UI_EVENT_POINTER_MOVE = 6,
     UI_EVENT_SCROLL = 7,
     UI_EVENT_TEXT_INPUT = 8,
-    UI_EVENT_RESIZE = 9
+    UI_EVENT_RESIZE = 9,
+    UI_EVENT_FOCUS_LOST = 10
 };
 
 typedef struct {
@@ -246,6 +298,7 @@ typedef struct {
     bool (*SetWindowOpacity)(UiSdlWindow *, float);
     bool (*SyncWindow)(UiSdlWindow *);
     bool (*GetWindowSize)(UiSdlWindow *, int *, int *);
+    bool (*SetWindowMinimumSize)(UiSdlWindow *, int, int);
     float (*GetWindowPixelDensity)(UiSdlWindow *);
     uint32_t (*GetDisplayForWindow)(UiSdlWindow *);
     float (*GetDisplayContentScale)(uint32_t);
@@ -254,8 +307,12 @@ typedef struct {
     void (*DestroyWindow)(UiSdlWindow *);
     bool (*PollEvent)(UiSdlEvent *);
     bool (*WaitEventTimeout)(UiSdlEvent *, int);
+    bool (*SetWindowRelativeMouseMode)(UiSdlWindow *, bool);
     bool (*StartTextInput)(UiSdlWindow *);
     bool (*StopTextInput)(UiSdlWindow *);
+    UiSdlCursor *(*CreateSystemCursor)(uint32_t);
+    bool (*SetCursor)(UiSdlCursor *);
+    void (*DestroyCursor)(UiSdlCursor *);
     bool (*SetClipboardText)(const char *);
     char *(*GetClipboardText)(void);
     void (*Free)(void *);
@@ -278,6 +335,7 @@ typedef struct {
     bool (*RenderTexture)(UiSdlRenderer *, UiSdlTexture *, const UiSdlFRect *, const UiSdlFRect *);
     UiSdlSurface *(*RenderReadPixels)(UiSdlRenderer *, const UiSdlRect *);
     bool (*ReadSurfacePixel)(UiSdlSurface *, int, int, uint8_t *, uint8_t *, uint8_t *, uint8_t *);
+    bool (*WriteSurfacePixel)(UiSdlSurface *, int, int, uint8_t, uint8_t, uint8_t, uint8_t);
     void (*DestroyTexture)(UiSdlTexture *);
     void (*DestroySurface)(UiSdlSurface *);
     bool (*RenderPresent)(UiSdlRenderer *);
@@ -300,6 +358,12 @@ typedef struct {
     bool (*MeasureString)(UiTtfFont *, const char *, size_t, int, int *, size_t *);
     UiSdlSurface *(*RenderTextBlended)(UiTtfFont *, const char *, size_t, UiSdlColor);
     UiSdlSurface *(*RenderTextBlendedWrapped)(UiTtfFont *, const char *, size_t, UiSdlColor, int);
+    UiTtfTextEngine *(*CreateSurfaceTextEngine)(void);
+    void (*DestroySurfaceTextEngine)(UiTtfTextEngine *);
+    UiTtfText *(*CreateText)(UiTtfTextEngine *, UiTtfFont *, const char *, size_t);
+    void (*DestroyText)(UiTtfText *);
+    bool (*GetTextSize)(UiTtfText *, int *, int *);
+    UiTtfSubString **(*GetTextSubStringsForRange)(UiTtfText *, int, int, int *);
 } UiTtfApi;
 
 typedef struct {
@@ -317,14 +381,20 @@ typedef struct {
     uint32_t event_kind;
     float event_x;
     float event_y;
+    float event_dx;
+    float event_dy;
     float wheel_x;
     float wheel_y;
     uint32_t event_key;
     uint32_t event_modifiers;
+    uint32_t event_buttons;
+    uint64_t event_timestamp_ns;
     char event_text[32];
     uint32_t width;
     uint32_t height;
     float pixel_density;
+    UiSdlCursor *cursor;
+    uint32_t cursor_kind;
     UiTtfFont *font;
     float font_size;
     uint32_t font_weight;
@@ -341,6 +411,9 @@ typedef struct {
     UiTextAtlasPage text_atlas[4];
     size_t text_atlas_count;
     uint32_t text_atlas_generation;
+    UiRasterCacheEntry raster_cache[32];
+    size_t raster_cache_count;
+    uint64_t raster_cache_tick;
     UiSdlFPoint vector_path[4096];
     size_t vector_path_count;
     UiSdlVertex *vector_vertices;
@@ -368,6 +441,7 @@ typedef struct {
 
 static UiSdlApi g_sdl;
 static UiTtfApi g_ttf;
+static UiTtfTextEngine *g_ttf_surface_engine;
 static char g_error[256];
 static size_t g_window_count;
 static UiWindow *g_windows[64];
@@ -527,6 +601,7 @@ static bool ui_load_sdl(void) {
     UI_LOAD(SetWindowOpacity, "SDL_SetWindowOpacity");
     UI_LOAD(SyncWindow, "SDL_SyncWindow");
     UI_LOAD(GetWindowSize, "SDL_GetWindowSize");
+    UI_LOAD(SetWindowMinimumSize, "SDL_SetWindowMinimumSize");
     UI_LOAD(GetWindowPixelDensity, "SDL_GetWindowPixelDensity");
     UI_LOAD(GetDisplayForWindow, "SDL_GetDisplayForWindow");
     UI_LOAD(GetDisplayContentScale, "SDL_GetDisplayContentScale");
@@ -535,8 +610,15 @@ static bool ui_load_sdl(void) {
     UI_LOAD(DestroyWindow, "SDL_DestroyWindow");
     UI_LOAD(PollEvent, "SDL_PollEvent");
     UI_LOAD(WaitEventTimeout, "SDL_WaitEventTimeout");
+    /* Relative mouse mode was added to SDL3's window API. Keep it optional
+       so the renderer remains usable with older SDL3 runtimes. */
+    *(void **)(&g_sdl.SetWindowRelativeMouseMode) =
+        ui_symbol(g_sdl.library, "SDL_SetWindowRelativeMouseMode");
     UI_LOAD(StartTextInput, "SDL_StartTextInput");
     UI_LOAD(StopTextInput, "SDL_StopTextInput");
+    UI_LOAD(CreateSystemCursor, "SDL_CreateSystemCursor");
+    UI_LOAD(SetCursor, "SDL_SetCursor");
+    UI_LOAD(DestroyCursor, "SDL_DestroyCursor");
     UI_LOAD(SetClipboardText, "SDL_SetClipboardText");
     UI_LOAD(GetClipboardText, "SDL_GetClipboardText");
     UI_LOAD(Free, "SDL_free");
@@ -559,6 +641,7 @@ static bool ui_load_sdl(void) {
     UI_LOAD(RenderTexture, "SDL_RenderTexture");
     UI_LOAD(RenderReadPixels, "SDL_RenderReadPixels");
     UI_LOAD(ReadSurfacePixel, "SDL_ReadSurfacePixel");
+    UI_LOAD(WriteSurfacePixel, "SDL_WriteSurfacePixel");
     UI_LOAD(DestroyTexture, "SDL_DestroyTexture");
     UI_LOAD(DestroySurface, "SDL_DestroySurface");
     UI_LOAD(RenderPresent, "SDL_RenderPresent");
@@ -598,8 +681,20 @@ static bool ui_load_ttf(void) {
     UI_TTF_LOAD(MeasureString, "TTF_MeasureString");
     UI_TTF_LOAD(RenderTextBlended, "TTF_RenderText_Blended");
     UI_TTF_LOAD(RenderTextBlendedWrapped, "TTF_RenderText_Blended_Wrapped");
+    UI_TTF_LOAD(CreateSurfaceTextEngine, "TTF_CreateSurfaceTextEngine");
+    UI_TTF_LOAD(DestroySurfaceTextEngine, "TTF_DestroySurfaceTextEngine");
+    UI_TTF_LOAD(CreateText, "TTF_CreateText");
+    UI_TTF_LOAD(DestroyText, "TTF_DestroyText");
+    UI_TTF_LOAD(GetTextSize, "TTF_GetTextSize");
+    UI_TTF_LOAD(GetTextSubStringsForRange, "TTF_GetTextSubStringsForRange");
     if (!g_ttf.Init()) {
         ui_set_error(g_sdl.GetError());
+        return false;
+    }
+    g_ttf_surface_engine = g_ttf.CreateSurfaceTextEngine();
+    if (g_ttf_surface_engine == NULL) {
+        ui_set_error(g_sdl.GetError());
+        g_ttf.Quit();
         return false;
     }
     g_ttf.ready = true;
@@ -668,6 +763,15 @@ static void ui_clear_text_cache(UiWindow *state) {
     state->text_atlas_count = 0;
     ++state->text_atlas_generation;
     if (state->text_atlas_generation == 0) state->text_atlas_generation = 1;
+}
+
+static void ui_clear_raster_cache(UiWindow *state) {
+    if (state == NULL) return;
+    for (size_t i = 0; i < state->raster_cache_count; ++i)
+        ui_destroy_text_texture(state, state->raster_cache[i].texture);
+    memset(state->raster_cache, 0, sizeof(state->raster_cache));
+    state->raster_cache_count = 0;
+    state->raster_cache_tick = 0;
 }
 
 static void ui_clear_external_textures(UiWindow *state) {
@@ -903,7 +1007,9 @@ bool luma_window_destroy(size_t handle) {
     if (state == NULL) return false;
     ui_unregister_window(state);
     if (state->window != NULL && state->text_input_started) g_sdl.StopTextInput(state->window);
+    if (state->cursor != NULL && g_sdl.DestroyCursor != NULL) g_sdl.DestroyCursor(state->cursor);
     ui_clear_fonts(state);
+    ui_clear_raster_cache(state);
     if (state->readback_surface != NULL) g_sdl.DestroySurface(state->readback_surface);
     if (state->layout_texture != NULL) g_sdl.DestroyTexture(state->layout_texture);
     if (state->overlay_texture != NULL) g_sdl.DestroyTexture(state->overlay_texture);
@@ -914,7 +1020,12 @@ bool luma_window_destroy(size_t handle) {
     free(state->vector_indices);
     free(state);
     if (g_window_count == 0) {
-        if (g_ttf.ready) { g_ttf.Quit(); g_ttf.ready = false; g_ttf.attempted = false; }
+        if (g_ttf.ready) {
+            if (g_ttf_surface_engine != NULL)
+                g_ttf.DestroySurfaceTextEngine(g_ttf_surface_engine);
+            g_ttf_surface_engine = NULL;
+            g_ttf.Quit(); g_ttf.ready = false; g_ttf.attempted = false;
+        }
         if (g_sdl.ready) { g_sdl.Quit(); g_sdl.ready = false; g_sdl.attempted = false; }
     }
     return true;
@@ -938,9 +1049,13 @@ uint32_t luma_window_poll(size_t handle) {
     state->event_kind = UI_EVENT_NONE;
     state->event_key = 0;
     state->event_modifiers = 0;
+    state->event_buttons = 0;
+    state->event_timestamp_ns = 0;
     state->event_text[0] = '\0';
     state->wheel_x = 0.0f;
     state->wheel_y = 0.0f;
+    state->event_dx = 0.0f;
+    state->event_dy = 0.0f;
     UiSdlEvent event;
     bool had_motion = false;
     bool had_resize = false;
@@ -949,12 +1064,34 @@ uint32_t luma_window_poll(size_t handle) {
             event = state->pending_event;
             state->has_pending_event = false;
         }
+        /* Collapse one uninterrupted run of pointer motion to its freshest
+           absolute coordinate. Preserve the first following event so a fast
+           drag is observed as MOVE(latest) and then BUTTON_UP, never as a
+           backlog of stale motion or a release that skips the final move. */
+        if (had_motion && event.type != UI_SDL_EVENT_MOUSE_MOTION) {
+            state->pending_event = event;
+            state->has_pending_event = true;
+            break;
+        }
+        state->event_timestamp_ns = event.common.timestamp;
         if (event.type == UI_SDL_EVENT_QUIT || event.type == UI_SDL_EVENT_WINDOW_CLOSE) {
+            /* Mark the native window closed at the source.  Returning a close
+               event while leaving `open` true makes a managed event loop look
+               like it closed itself: the next wait/poll observes a stale
+               handle and tears the editor down without a reliable state
+               transition. */
+            state->open = false;
             state->event_kind = UI_EVENT_CLOSE;
             return state->event_kind;
+        } else if (event.type == UI_SDL_EVENT_WINDOW_FOCUS_LOST) {
+            state->event_kind = UI_EVENT_FOCUS_LOST;
+            return state->event_kind;
         } else if (event.type == UI_SDL_EVENT_WINDOW_EXPOSED) {
-            state->event_kind = UI_EVENT_RESIZE;
-            had_resize = true;
+            // An exposed notification does not change layout geometry. Some
+            // X11 compositors can emit it repeatedly while a native surface
+            // is being mapped; treating every one as a resize causes a hot
+            // relayout loop. The retained frame is already valid, so drain
+            // the notification without invalidating the UI.
         } else if (event.type == UI_SDL_EVENT_WINDOW_RESIZED) {
             UiSdlWindowEvent *window = (UiSdlWindowEvent *)&event;
             if (window->data1 > 0 && window->data2 > 0) {
@@ -1000,9 +1137,16 @@ uint32_t luma_window_poll(size_t handle) {
             state->event_kind = UI_EVENT_POINTER_MOVE;
             state->event_x = motion->x;
             state->event_y = motion->y;
+            state->event_dx += motion->xrel;
+            state->event_dy += motion->yrel;
+            state->event_buttons = motion->state;
             had_motion = true;
         } else if (event.type == UI_SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == UI_SDL_EVENT_MOUSE_BUTTON_UP) {
-            if (had_resize) {
+            /* Preserve event order for a drag completed faster than the
+               retained UI can drain SDL's queue. Returning BUTTON_UP here
+               used to discard every coalesced motion in this poll, making a
+               slider appear to teleport only when the button was released. */
+            if (had_resize || had_motion) {
                 state->pending_event = event;
                 state->has_pending_event = true;
                 break;
@@ -1042,15 +1186,48 @@ bool luma_window_wait(size_t handle, uint32_t timeout_ms) {
     if (state->has_pending_event) return true;
     int timeout = timeout_ms == UINT32_MAX ? -1 :
         (int)(timeout_ms > 60000u ? 60000u : timeout_ms);
-    if (!g_sdl.WaitEventTimeout(&state->pending_event, timeout)) return false;
+    bool ready = g_sdl.WaitEventTimeout(&state->pending_event, timeout);
+    if (!ready) return false;
     state->has_pending_event = true;
     return true;
 }
 
 float luma_event_x(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0.0f : s->event_x; }
 float luma_event_y(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0.0f : s->event_y; }
+float luma_event_dx(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0.0f : s->event_dx; }
+float luma_event_dy(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0.0f : s->event_dy; }
+bool luma_set_relative_mouse_mode(size_t handle, bool enabled) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || state->window == NULL || g_sdl.SetWindowRelativeMouseMode == NULL) return false;
+    return g_sdl.SetWindowRelativeMouseMode(state->window, enabled);
+}
+bool luma_window_set_minimum_size(size_t handle, uint32_t width, uint32_t height) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || state->window == NULL || width == 0 || height == 0) return false;
+    return g_sdl.SetWindowMinimumSize(state->window, (int)width, (int)height);
+}
+bool luma_set_cursor(size_t handle, uint32_t cursor) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || state->window == NULL || g_sdl.CreateSystemCursor == NULL ||
+        g_sdl.SetCursor == NULL) return false;
+    if (state->cursor_kind == cursor && state->cursor != NULL) return true;
+    UiSdlCursor *next = g_sdl.CreateSystemCursor(cursor);
+    if (next == NULL || !g_sdl.SetCursor(next)) {
+        if (next != NULL && g_sdl.DestroyCursor != NULL) g_sdl.DestroyCursor(next);
+        return false;
+    }
+    if (state->cursor != NULL && g_sdl.DestroyCursor != NULL) g_sdl.DestroyCursor(state->cursor);
+    state->cursor = next;
+    state->cursor_kind = cursor;
+    return true;
+}
 uint32_t luma_event_key(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0 : s->event_key; }
 uint32_t luma_event_modifiers(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0 : s->event_modifiers; }
+uint32_t luma_event_buttons(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0 : s->event_buttons; }
+uint64_t luma_event_timestamp_ns(size_t handle) {
+    UiWindow *s = ui_window(handle);
+    return s == NULL ? 0 : s->event_timestamp_ns;
+}
 encore_str luma_event_text(size_t handle) { UiWindow *s = ui_window(handle); return ui_string(s == NULL ? "" : s->event_text); }
 uint32_t luma_window_width(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0 : s->width; }
 uint32_t luma_window_height(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0 : s->height; }
@@ -1183,6 +1360,16 @@ bool luma_layout_cache_begin(size_t handle, uint32_t color) {
         state->layout_texture = g_sdl.CreateTexture(state->renderer, 0x16362004u, 2, (int)width, (int)height);
         state->layout_width = width;
         state->layout_height = height;
+        /* Retained layouts contain transparent child backgrounds and rounded
+         * edges. Blend those into the cached base while painting it; without
+         * this, SDL's default NONE mode replaces already-painted pixels with
+         * zero-alpha source pixels and partial repaints expose the compositor.
+         */
+        if (state->layout_texture != NULL &&
+            !g_sdl.SetTextureBlendMode(state->layout_texture, 1u)) {
+            g_sdl.DestroyTexture(state->layout_texture);
+            state->layout_texture = NULL;
+        }
     }
     if (state->layout_texture == NULL || !g_sdl.SetRenderTarget(state->renderer, state->layout_texture)) {
         ui_set_error(g_sdl.GetError()); return false;
@@ -1252,6 +1439,10 @@ bool luma_overlay_cache_draw(size_t handle) {
 bool luma_layout_cache_patch_begin(size_t handle, uint32_t color,
         float x, float y, float width, float height) {
     UiWindow *state = ui_window(handle);
+    if (state != NULL && state->renderer_kind == 3u)
+        return state->direct_compositor != 0 &&
+            luma_vk_ui_cache_patch_begin(state->direct_compositor,
+                color, x, y, width, height);
     if (state == NULL || !state->open || state->renderer == NULL ||
             state->layout_texture == NULL || width <= 0.0f || height <= 0.0f) return false;
     if (!g_sdl.SetRenderTarget(state->renderer, state->layout_texture)) {
@@ -1516,6 +1707,10 @@ bool luma_vector_path_stroke(size_t handle, float width, uint32_t color, bool cl
     UiWindow *state = ui_window(handle);
     if (state == NULL || !state->open || state->vector_path_count < 2 || width <= 0.0f) return false;
     size_t count = state->vector_path_count;
+    if (count > 4096) {
+        state->vector_path_count = 0;
+        return false;
+    }
     if (closed && count > 2) {
         UiSdlFPoint first = state->vector_path[0], last = state->vector_path[count - 1];
         if ((first.x-last.x)*(first.x-last.x) + (first.y-last.y)*(first.y-last.y) < 0.000001f) count--;
@@ -1861,19 +2056,148 @@ static UiSdlTexture *ui_text_atlas_upload(UiWindow *state,
     return page->texture;
 }
 
+typedef struct {
+    size_t offset;
+    size_t length;
+    uint32_t color;
+    bool anchor;
+} UiStyledTextRun;
+
+static bool ui_parse_decimal(const char *value, size_t length, size_t *cursor,
+        uint64_t *out, char terminator) {
+    uint64_t parsed = 0;
+    bool any = false;
+    while (*cursor < length && value[*cursor] >= '0' && value[*cursor] <= '9') {
+        uint64_t digit = (uint64_t)(value[*cursor] - '0');
+        if (parsed > (UINT64_MAX - digit) / 10u) return false;
+        parsed = parsed * 10u + digit;
+        ++*cursor;
+        any = true;
+    }
+    if (!any || *cursor >= length || value[*cursor] != terminator) return false;
+    ++*cursor;
+    *out = parsed;
+    return true;
+}
+
+static size_t ui_parse_styled_text_runs(const char *value, size_t length,
+        UiStyledTextRun *runs, size_t capacity) {
+    size_t count = 0, cursor = 0;
+    while (cursor < length && count < capacity) {
+        uint64_t offset = 0, run_length = 0, color = 0, anchor = 0;
+        if (!ui_parse_decimal(value, length, &cursor, &offset, ':') ||
+            !ui_parse_decimal(value, length, &cursor, &run_length, ':') ||
+            !ui_parse_decimal(value, length, &cursor, &color, ':') ||
+            !ui_parse_decimal(value, length, &cursor, &anchor, ';')) return 0;
+        if (offset > SIZE_MAX || run_length > SIZE_MAX || color > UINT32_MAX ||
+                anchor > 1u) return 0;
+        runs[count++] = (UiStyledTextRun){
+            (size_t)offset, (size_t)run_length, (uint32_t)color, anchor == 1u
+        };
+    }
+    return cursor == length ? count : 0;
+}
+
+static UiSdlSurface *ui_styled_text_surface(UiWindow *state, const char *text,
+        size_t length, const char *styles, size_t style_length,
+        int *width, int *height, int *anchor_center_x) {
+    *anchor_center_x = -1;
+    UiStyledTextRun runs[64];
+    size_t run_count = ui_parse_styled_text_runs(styles, style_length,
+        runs, sizeof(runs) / sizeof(runs[0]));
+    if (run_count == 0) return NULL;
+    uint32_t base_color = runs[0].color;
+    UiSdlColor foreground = {
+        (uint8_t)(base_color >> 24), (uint8_t)(base_color >> 16),
+        (uint8_t)(base_color >> 8), (uint8_t)base_color
+    };
+    UiSdlSurface *surface = g_ttf.RenderTextBlended(
+        state->font, text, length, foreground);
+    if (surface == NULL || !g_ttf.GetStringSize(
+            state->font, text, length, width, height)) {
+        if (surface != NULL) g_sdl.DestroySurface(surface);
+        return NULL;
+    }
+    UiTtfText *layout = g_ttf.CreateText(
+        g_ttf_surface_engine, state->font, text, length);
+    int layout_width = 0, layout_height = 0;
+    if (layout == NULL || !g_ttf.GetTextSize(layout, &layout_width, &layout_height)) {
+        if (layout != NULL) g_ttf.DestroyText(layout);
+        g_sdl.DestroySurface(surface);
+        return NULL;
+    }
+    for (size_t run_index = 0; run_index < run_count; ++run_index) {
+        UiStyledTextRun run = runs[run_index];
+        if (run.length == 0 || run.offset >= length) continue;
+        size_t bounded_length = run.length;
+        if (bounded_length > length - run.offset) bounded_length = length - run.offset;
+        UiSdlSurface *colored = NULL;
+        if (run.color != base_color) {
+            UiSdlColor run_color = {
+                (uint8_t)(run.color >> 24), (uint8_t)(run.color >> 16),
+                (uint8_t)(run.color >> 8), (uint8_t)run.color
+            };
+            colored = g_ttf.RenderTextBlended(state->font, text, length, run_color);
+        }
+        if (colored == NULL && !run.anchor) continue;
+        int substring_count = 0;
+        UiTtfSubString **substrings = g_ttf.GetTextSubStringsForRange(
+            layout, (int)run.offset, (int)bounded_length, &substring_count);
+        int anchor_left = INT_MAX, anchor_right = INT_MIN;
+        for (int substring_index = 0; substrings != NULL &&
+                substring_index < substring_count; ++substring_index) {
+            UiTtfSubString *substring = substrings[substring_index];
+            if (substring == NULL) continue;
+            if (run.anchor) {
+                if (substring->rect.x < anchor_left) anchor_left = substring->rect.x;
+                if (substring->rect.x + substring->rect.w > anchor_right)
+                    anchor_right = substring->rect.x + substring->rect.w;
+            }
+            if (colored == NULL) continue;
+            int left = substring->rect.x < 0 ? 0 : substring->rect.x;
+            int top = substring->rect.y < 0 ? 0 : substring->rect.y;
+            int right = substring->rect.x + substring->rect.w;
+            int bottom = substring->rect.y + substring->rect.h;
+            if (right > surface->width) right = surface->width;
+            if (bottom > surface->height) bottom = surface->height;
+            for (int pixel_y = top; pixel_y < bottom; ++pixel_y) {
+                for (int pixel_x = left; pixel_x < right; ++pixel_x) {
+                    uint8_t r = 0, g = 0, b = 0, a = 0;
+                    if (g_sdl.ReadSurfacePixel(colored, pixel_x, pixel_y,
+                            &r, &g, &b, &a) && a > 0)
+                        g_sdl.WriteSurfacePixel(surface, pixel_x, pixel_y,
+                            r, g, b, a);
+                }
+            }
+        }
+        if (run.anchor && anchor_left != INT_MAX && anchor_right > anchor_left)
+            *anchor_center_x = anchor_left + (anchor_right - anchor_left) / 2;
+        if (substrings != NULL) g_sdl.Free(substrings);
+        if (colored != NULL) g_sdl.DestroySurface(colored);
+    }
+    g_ttf.DestroyText(layout);
+    return surface;
+}
+
 static UiSdlTexture *ui_text_texture(UiWindow *state, const char *text, size_t length, uint32_t color,
-        int wrap_width, int *width, int *height, bool *transient,
-        int *atlas_x, int *atlas_y, uint32_t *atlas_generation) {
+        int wrap_width, const char *styles, size_t style_length,
+        int *width, int *height, bool *transient,
+        int *atlas_x, int *atlas_y, uint32_t *atlas_generation,
+        int *anchor_center_x) {
     *transient = false;
     *atlas_x = 0;
     *atlas_y = 0;
     *atlas_generation = 0;
+    *anchor_center_x = -1;
+    uint64_t style_hash = style_length == 0 ? 0 :
+        ui_hash_bytes((const unsigned char *)styles, style_length);
     ++state->text_cache_tick;
     for (size_t i = 0; i < state->text_cache_count; ++i) {
         UiTextCacheEntry *entry = &state->text_cache[i];
         if (entry->face == state->current_face && entry->font_size == state->font_size &&
                 entry->font_weight == state->font_weight && entry->color == color &&
-                entry->wrap_width == wrap_width && entry->text_length == length &&
+                entry->wrap_width == wrap_width && entry->style_hash == style_hash &&
+                entry->style_length == style_length && entry->text_length == length &&
                 (length == 0 || memcmp(entry->text, text, length) == 0)) {
             entry->used_at = state->text_cache_tick;
             *width = entry->width;
@@ -1881,6 +2205,7 @@ static UiSdlTexture *ui_text_texture(UiWindow *state, const char *text, size_t l
             *atlas_x = entry->atlas_x;
             *atlas_y = entry->atlas_y;
             *atlas_generation = entry->atlas_generation;
+            *anchor_center_x = entry->anchor_center_x;
             return entry->texture;
         }
     }
@@ -1888,12 +2213,16 @@ static UiSdlTexture *ui_text_texture(UiWindow *state, const char *text, size_t l
         (uint8_t)(color >> 24), (uint8_t)(color >> 16),
         (uint8_t)(color >> 8), (uint8_t)color
     };
-    UiSdlSurface *surface = wrap_width > 0
-        ? g_ttf.RenderTextBlendedWrapped(state->font, text, length, foreground, wrap_width)
-        : g_ttf.RenderTextBlended(state->font, text, length, foreground);
-    bool measured = wrap_width > 0
+    UiSdlSurface *surface = style_length > 0
+        ? ui_styled_text_surface(state, text, length, styles, style_length,
+            width, height, anchor_center_x)
+        : (wrap_width > 0
+            ? g_ttf.RenderTextBlendedWrapped(state->font, text, length,
+                foreground, wrap_width)
+            : g_ttf.RenderTextBlended(state->font, text, length, foreground));
+    bool measured = style_length > 0 ? surface != NULL : (wrap_width > 0
         ? g_ttf.GetStringSizeWrapped(state->font, text, length, wrap_width, width, height)
-        : g_ttf.GetStringSize(state->font, text, length, width, height);
+        : g_ttf.GetStringSize(state->font, text, length, width, height));
     if (surface == NULL || !measured) {
         if (surface != NULL) g_sdl.DestroySurface(surface);
         ui_set_error(g_sdl.GetError());
@@ -1938,9 +2267,85 @@ static UiSdlTexture *ui_text_texture(UiWindow *state, const char *text, size_t l
     state->text_cache[slot] = (UiTextCacheEntry){texture, owned_text, length, state->current_face,
         state->font_size, state->font_weight, color, wrap_width, *width, *height,
         bytes, state->text_cache_tick, *atlas_x, *atlas_y,
-        *atlas_generation, owns_texture};
+        *atlas_generation, owns_texture, style_hash, style_length,
+        *anchor_center_x};
     state->text_cache_bytes += bytes;
     return texture;
+}
+
+bool luma_image_rgba(size_t handle, float x, float y, float width,
+        float height, encore_str payload) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || !state->open || payload.object == NULL ||
+        payload.object->len < 8u || width <= 0.0f || height <= 0.0f) return false;
+    const unsigned char *bytes = (const unsigned char *)payload.object->data;
+    uint32_t pixel_width = 0, pixel_height = 0;
+    memcpy(&pixel_width, bytes, sizeof(uint32_t));
+    memcpy(&pixel_height, bytes + sizeof(uint32_t), sizeof(uint32_t));
+    if (pixel_width == 0 || pixel_height == 0 || pixel_width > 8192u ||
+        pixel_height > 8192u || (size_t)pixel_width > SIZE_MAX / pixel_height / 4u)
+        return false;
+    size_t pixel_bytes = (size_t)pixel_width * pixel_height * 4u;
+    if (payload.object->len != pixel_bytes + 8u) return false;
+    uint64_t hash = ui_hash_bytes(bytes, payload.object->len);
+    UiSdlTexture *texture = NULL;
+    size_t selected = state->raster_cache_count;
+    for (size_t i = 0; i < state->raster_cache_count; ++i) {
+        UiRasterCacheEntry *entry = &state->raster_cache[i];
+        if (entry->hash == hash && entry->payload_length == payload.object->len &&
+            entry->width == pixel_width && entry->height == pixel_height) {
+            selected = i;
+            texture = entry->texture;
+            break;
+        }
+    }
+    if (texture == NULL) {
+        if (state->renderer_kind == 3u) {
+            texture = (UiSdlTexture *)(uintptr_t)luma_vk_ui_texture_create(
+                state->direct_compositor, bytes + 8u, pixel_width, pixel_height,
+                pixel_width * 4u, 44u);
+        } else {
+            /* SDL_PIXELFORMAT_RGBA32 on little-endian targets. */
+            UiSdlSurface *surface = g_sdl.CreateSurface((int)pixel_width,
+                (int)pixel_height, 0x16762004u);
+            if (surface != NULL && surface->pixels != NULL) {
+                for (uint32_t row = 0; row < pixel_height; ++row)
+                    memcpy((unsigned char *)surface->pixels + (size_t)row * surface->pitch,
+                        bytes + 8u + (size_t)row * pixel_width * 4u,
+                        (size_t)pixel_width * 4u);
+                texture = g_sdl.CreateTextureFromSurface(state->renderer, surface);
+                g_sdl.DestroySurface(surface);
+            } else if (surface != NULL) {
+                g_sdl.DestroySurface(surface);
+            }
+        }
+        if (texture == NULL) return false;
+        if (state->raster_cache_count < 32u) {
+            selected = state->raster_cache_count++;
+        } else {
+            selected = 0;
+            for (size_t i = 1; i < state->raster_cache_count; ++i) {
+                if (state->raster_cache[i].used_at < state->raster_cache[selected].used_at)
+                    selected = i;
+            }
+            ui_destroy_text_texture(state, state->raster_cache[selected].texture);
+        }
+        state->raster_cache[selected] = (UiRasterCacheEntry){texture, hash,
+            payload.object->len, pixel_width, pixel_height, 0};
+    }
+    state->raster_cache[selected].used_at = ++state->raster_cache_tick;
+    float scale_x = width / (float)pixel_width;
+    float scale_y = height / (float)pixel_height;
+    float scale = scale_x < scale_y ? scale_x : scale_y;
+    float draw_width = (float)pixel_width * scale;
+    float draw_height = (float)pixel_height * scale;
+    float draw_x = x + (width - draw_width) * 0.5f;
+    float draw_y = y + (height - draw_height) * 0.5f;
+    if (state->renderer_kind == 3u)
+        return luma_vk_ui_texture_draw(state->direct_compositor,
+            (size_t)(uintptr_t)texture, draw_x, draw_y, draw_width, draw_height);
+    UiSdlFRect destination = {draw_x, draw_y, draw_width, draw_height};
+    return g_sdl.RenderTexture(state->renderer, texture, NULL, &destination);
 }
 
 bool luma_text(size_t handle, float x, float y, encore_str value, uint32_t color) {
@@ -1962,12 +2367,66 @@ bool luma_text(size_t handle, float x, float y, encore_str value, uint32_t color
     int atlas_x = 0;
     int atlas_y = 0;
     uint32_t atlas_generation = 0;
-    UiSdlTexture *texture = ui_text_texture(state, text, length, color, 0,
+    int anchor_center_x = -1;
+    UiSdlTexture *texture = ui_text_texture(state, text, length, color, 0, NULL, 0,
         &width, &height, &transient, &atlas_x, &atlas_y,
-        &atlas_generation);
+        &atlas_generation, &anchor_center_x);
     if (texture == NULL) return false;
     float density = state->pixel_density > 0.0f ? state->pixel_density : 1.0f;
     UiSdlFRect destination = {x, y, (float)width / density, (float)height / density};
+    UiSdlFRect source = {
+        (float)atlas_x, (float)atlas_y, (float)width, (float)height
+    };
+    bool result = state->renderer_kind == 3u
+        ? (atlas_generation == 0
+            ? luma_vk_ui_texture_draw(state->direct_compositor,
+                (size_t)(uintptr_t)texture, destination.x, destination.y,
+                destination.w, destination.h)
+            : luma_vk_ui_texture_draw_region(state->direct_compositor,
+                (size_t)(uintptr_t)texture, destination.x, destination.y,
+                destination.w, destination.h, (uint32_t)atlas_x,
+                (uint32_t)atlas_y, (uint32_t)width, (uint32_t)height))
+        : g_sdl.RenderTexture(state->renderer, texture,
+            atlas_generation == 0 ? NULL : &source, &destination);
+    if (transient) ui_destroy_text_texture(state, texture);
+    return result;
+}
+
+bool luma_styled_text(size_t handle, float x, float y, encore_str value,
+        encore_str runs) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || !state->open) return false;
+    const char *text = value.object == NULL ? "" : value.object->data;
+    size_t length = value.object == NULL ? 0 : value.object->len;
+    const char *styles = runs.object == NULL ? "" : runs.object->data;
+    size_t style_length = runs.object == NULL ? 0 : runs.object->len;
+    if (length == 0) return true;
+    if (style_length == 0) return luma_text(handle, x, y, value, 0xffffffffu);
+    if (state->font == NULL) {
+        if (state->renderer_kind == 3u) return false;
+        char *terminated = ui_copy_text(text, length);
+        if (terminated == NULL || !ui_color(state, 0xffffffffu)) {
+            free(terminated);
+            return false;
+        }
+        bool result = g_sdl.RenderDebugText(state->renderer, x, y, terminated);
+        free(terminated);
+        return result;
+    }
+    int width = 0, height = 0, atlas_x = 0, atlas_y = 0;
+    bool transient = false;
+    uint32_t atlas_generation = 0;
+    int anchor_center_x = -1;
+    UiSdlTexture *texture = ui_text_texture(state, text, length, 0u, 0,
+        styles, style_length, &width, &height, &transient, &atlas_x,
+        &atlas_y, &atlas_generation, &anchor_center_x);
+    if (texture == NULL) {
+        ui_set_error(g_sdl.GetError());
+        return false;
+    }
+    float density = state->pixel_density > 0.0f ? state->pixel_density : 1.0f;
+    float draw_x = anchor_center_x >= 0 ? x - (float)anchor_center_x / density : x;
+    UiSdlFRect destination = {draw_x, y, (float)width / density, (float)height / density};
     UiSdlFRect source = {
         (float)atlas_x, (float)atlas_y, (float)width, (float)height
     };
@@ -2007,9 +2466,10 @@ bool luma_text_wrapped(size_t handle, float x, float y, encore_str value, uint32
     int atlas_x = 0;
     int atlas_y = 0;
     uint32_t atlas_generation = 0;
-    UiSdlTexture *texture = ui_text_texture(state, text, length, color, limit,
+    int anchor_center_x = -1;
+    UiSdlTexture *texture = ui_text_texture(state, text, length, color, limit, NULL, 0,
         &width, &height, &transient, &atlas_x, &atlas_y,
-        &atlas_generation);
+        &atlas_generation, &anchor_center_x);
     if (texture == NULL) return false;
     UiSdlFRect destination = {x, y, (float)width / density, (float)height / density};
     UiSdlFRect source = {
@@ -2166,6 +2626,254 @@ static float ui_text_extent(size_t handle, encore_str value, bool width) {
 
 float luma_text_width(size_t handle, encore_str value) { return ui_text_extent(handle, value, true); }
 float luma_text_height(size_t handle, encore_str value) { return ui_text_extent(handle, value, false); }
+
+typedef struct {
+    char text[5];
+    uint32_t foreground;
+    uint32_t background;
+    bool bold;
+} UiTerminalCell;
+
+static uint32_t ui_terminal_rgb(uint8_t red, uint8_t green, uint8_t blue) {
+    return ((uint32_t)red << 24) | ((uint32_t)green << 16) |
+        ((uint32_t)blue << 8) | 255u;
+}
+
+static uint32_t ui_terminal_palette(int index) {
+    static const uint8_t colors[16][3] = {
+        {  12,  14,  18}, {205,  73,  69}, { 78, 186, 111}, {229, 181,  85},
+        { 82, 139, 230}, {174, 103, 214}, { 70, 183, 198}, {203, 208, 218},
+        { 91,  98, 112}, {245, 101,  96}, {105, 205, 146}, {245, 207, 107},
+        {116, 167, 255}, {202, 136, 246}, { 91, 196, 210}, {244, 246, 250}
+    };
+    if (index < 0) index = 0;
+    if (index < 16) return ui_terminal_rgb(colors[index][0], colors[index][1], colors[index][2]);
+    if (index < 232) {
+        int value = index - 16;
+        int red = value / 36, green = (value / 6) % 6, blue = value % 6;
+        uint8_t levels[6] = {0, 95, 135, 175, 215, 255};
+        return ui_terminal_rgb(levels[red], levels[green], levels[blue]);
+    }
+    int gray = 8 + (index - 232) * 10;
+    if (gray > 255) gray = 255;
+    return ui_terminal_rgb((uint8_t)gray, (uint8_t)gray, (uint8_t)gray);
+}
+
+static void ui_terminal_clear(UiTerminalCell *cells, size_t count,
+        uint32_t foreground, uint32_t background) {
+    for (size_t index = 0; index < count; index += 1) {
+        cells[index].text[0] = ' ';
+        cells[index].text[1] = '\0';
+        cells[index].foreground = foreground;
+        cells[index].background = background;
+        cells[index].bold = false;
+    }
+}
+
+static void ui_terminal_scroll(UiTerminalCell *cells, size_t columns, size_t rows,
+        uint32_t foreground, uint32_t background) {
+    if (rows <= 1) return;
+    memmove(cells, cells + columns, (rows - 1) * columns * sizeof(*cells));
+    ui_terminal_clear(cells + (rows - 1) * columns, columns, foreground, background);
+}
+
+static int ui_terminal_param(const int *params, size_t count, size_t index, int fallback) {
+    return index < count && params[index] >= 0 ? params[index] : fallback;
+}
+
+static void ui_terminal_sgr(const int *params, size_t count, uint32_t default_foreground,
+        uint32_t default_background, uint32_t *foreground, uint32_t *background,
+        bool *bold) {
+    if (count == 0) {
+        *foreground = default_foreground; *background = default_background; *bold = false;
+        return;
+    }
+    for (size_t index = 0; index < count; index += 1) {
+        int value = params[index] < 0 ? 0 : params[index];
+        if (value == 0) {
+            *foreground = default_foreground; *background = default_background; *bold = false;
+        } else if (value == 1) *bold = true;
+        else if (value == 22) *bold = false;
+        else if (value >= 30 && value <= 37) *foreground = ui_terminal_palette(value - 30 + (*bold ? 8 : 0));
+        else if (value >= 90 && value <= 97) *foreground = ui_terminal_palette(value - 90 + 8);
+        else if (value == 39) *foreground = default_foreground;
+        else if (value >= 40 && value <= 47) *background = ui_terminal_palette(value - 40);
+        else if (value >= 100 && value <= 107) *background = ui_terminal_palette(value - 100 + 8);
+        else if (value == 49) *background = default_background;
+        else if ((value == 38 || value == 48) && index + 2 < count && params[index + 1] == 5) {
+            uint32_t color = ui_terminal_palette(params[index + 2]);
+            if (value == 38) *foreground = color; else *background = color;
+            index += 2;
+        } else if ((value == 38 || value == 48) && index + 4 < count && params[index + 1] == 2) {
+            uint32_t color = ui_terminal_rgb((uint8_t)params[index + 2],
+                (uint8_t)params[index + 3], (uint8_t)params[index + 4]);
+            if (value == 38) *foreground = color; else *background = color;
+            index += 4;
+        }
+    }
+}
+
+bool luma_terminal(size_t handle, float x, float y, float width, float height,
+        encore_str value, uint32_t default_foreground, uint32_t default_background,
+        bool focused) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || !state->open || width <= 0 || height <= 0) return false;
+    float cell_width = luma_text_width(handle, ui_string("M"));
+    float cell_height = luma_text_height(handle, ui_string("Mg")) + 2.0f;
+    if (cell_width <= 0) cell_width = 8.0f;
+    if (cell_height <= 2.0f) cell_height = 16.0f;
+    size_t columns = (size_t)(width / cell_width);
+    size_t rows = (size_t)(height / cell_height);
+    if (columns < 2) columns = 2; if (columns > 240) columns = 240;
+    if (rows < 1) rows = 1; if (rows > 120) rows = 120;
+    size_t cell_count = columns * rows;
+    UiTerminalCell *cells = calloc(cell_count, sizeof(*cells));
+    if (cells == NULL) return false;
+    ui_terminal_clear(cells, cell_count, default_foreground, default_background);
+
+    const unsigned char *bytes = value.object == NULL ? (const unsigned char *)"" :
+        (const unsigned char *)value.object->data;
+    size_t length = value.object == NULL ? 0 : value.object->len;
+    size_t row = 0, column = 0;
+    uint32_t foreground = default_foreground, background = default_background;
+    bool bold = false;
+    for (size_t offset = 0; offset < length;) {
+        unsigned char byte = bytes[offset++];
+        if (byte == 0x1b && offset < length && bytes[offset] == ']') {
+            offset += 1;
+            while (offset < length && bytes[offset] != 0x07 &&
+                    !(bytes[offset] == 0x1b && offset + 1 < length && bytes[offset + 1] == '\\')) offset += 1;
+            if (offset < length && bytes[offset] == 0x07) offset += 1;
+            else if (offset + 1 < length) offset += 2;
+            continue;
+        }
+        if (byte == 0x1b && offset < length && bytes[offset] == '[') {
+            offset += 1;
+            if (offset < length && bytes[offset] == '?') offset += 1;
+            int params[16]; size_t param_count = 0; int current = -1;
+            while (offset < length) {
+                unsigned char part = bytes[offset++];
+                if (part >= '0' && part <= '9') current = (current < 0 ? 0 : current) * 10 + (part - '0');
+                else if (part == ';') {
+                    if (param_count < 16) params[param_count++] = current;
+                    current = -1;
+                } else {
+                    if (current >= 0 || param_count > 0) {
+                        if (param_count < 16) params[param_count++] = current;
+                    }
+                    int amount = ui_terminal_param(params, param_count, 0, 1);
+                    if (part == 'm') ui_terminal_sgr(params, param_count, default_foreground,
+                        default_background, &foreground, &background, &bold);
+                    else if (part == 'A') row = row > (size_t)amount ? row - (size_t)amount : 0;
+                    else if (part == 'B') { row += (size_t)amount; if (row >= rows) row = rows - 1; }
+                    else if (part == 'C') { column += (size_t)amount; if (column >= columns) column = columns - 1; }
+                    else if (part == 'D') column = column > (size_t)amount ? column - (size_t)amount : 0;
+                    else if (part == 'G') { column = amount > 0 ? (size_t)(amount - 1) : 0; if (column >= columns) column = columns - 1; }
+                    else if (part == 'H' || part == 'f') {
+                        int requested_row = ui_terminal_param(params, param_count, 0, 1);
+                        int requested_column = ui_terminal_param(params, param_count, 1, 1);
+                        row = requested_row > 0 ? (size_t)(requested_row - 1) : 0;
+                        column = requested_column > 0 ? (size_t)(requested_column - 1) : 0;
+                        if (row >= rows) row = rows - 1; if (column >= columns) column = columns - 1;
+                    } else if (part == 'J') {
+                        if (amount == 2 || amount == 3) {
+                            ui_terminal_clear(cells, cell_count, default_foreground, default_background);
+                            row = 0; column = 0;
+                        } else {
+                            size_t start = row * columns + column;
+                            ui_terminal_clear(cells + start, cell_count - start, foreground, background);
+                        }
+                    } else if (part == 'K') {
+                        size_t start = row * columns + (amount == 1 ? 0 : column);
+                        size_t finish = row * columns + (amount == 0 ? columns : column + 1);
+                        if (finish > start) ui_terminal_clear(cells + start, finish - start, foreground, background);
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+        if (byte == 0x1b) {
+            /* Charset designators and other short ESC commands are control
+             * sequences, never printable terminal cells. */
+            if (offset < length &&
+                    (bytes[offset] == '(' || bytes[offset] == ')' ||
+                     bytes[offset] == '*' || bytes[offset] == '+')) {
+                offset += 1;
+                if (offset < length) offset += 1;
+            } else if (offset < length) {
+                offset += 1;
+            }
+            continue;
+        }
+        if (byte == '\r') { column = 0; continue; }
+        if (byte == '\n') {
+            column = 0; row += 1;
+            if (row >= rows) { ui_terminal_scroll(cells, columns, rows, foreground, background); row = rows - 1; }
+            continue;
+        }
+        if (byte == '\b') { if (column > 0) column -= 1; continue; }
+        if (byte == '\t') { column = ((column / 8) + 1) * 8; if (column >= columns) column = columns - 1; continue; }
+        if (byte < 0x20 || (byte >= 0x7f && byte <= 0x9f)) continue;
+        size_t sequence = byte < 0x80 ? 1 : (byte < 0xe0 ? 2 : (byte < 0xf0 ? 3 : 4));
+        if (offset - 1 + sequence > length) continue;
+        bool valid_utf8 = sequence == 1;
+        if (sequence > 1) {
+            valid_utf8 = true;
+            for (size_t part = 1; part < sequence; part += 1) {
+                if ((bytes[offset - 1 + part] & 0xc0u) != 0x80u) {
+                    valid_utf8 = false;
+                    break;
+                }
+            }
+        }
+        if (!valid_utf8) continue;
+        UiTerminalCell *cell = &cells[row * columns + column];
+        memcpy(cell->text, bytes + offset - 1, sequence);
+        cell->text[sequence] = '\0'; cell->foreground = foreground;
+        cell->background = background; cell->bold = bold;
+        offset += sequence - 1; column += 1;
+        if (column >= columns) {
+            column = 0; row += 1;
+            if (row >= rows) { ui_terminal_scroll(cells, columns, rows, foreground, background); row = rows - 1; }
+        }
+    }
+
+    for (size_t line = 0; line < rows; line += 1) {
+        size_t start = 0;
+        while (start < columns) {
+            UiTerminalCell *first = &cells[line * columns + start];
+            size_t finish = start + 1;
+            while (finish < columns) {
+                UiTerminalCell *next = &cells[line * columns + finish];
+                if (next->foreground != first->foreground || next->background != first->background ||
+                        next->bold != first->bold) break;
+                finish += 1;
+            }
+            if (first->background != default_background) {
+                luma_fill_rect(handle, x + (float)start * cell_width,
+                    y + (float)line * cell_height, (float)(finish - start) * cell_width,
+                    cell_height, first->background);
+            }
+            char text[1024]; size_t used = 0;
+            for (size_t index = start; index < finish && used + 5 < sizeof(text); index += 1) {
+                size_t part = strlen(cells[line * columns + index].text);
+                memcpy(text + used, cells[line * columns + index].text, part); used += part;
+            }
+            text[used] = '\0';
+            if (used > 0) luma_text(handle, x + (float)start * cell_width,
+                y + (float)line * cell_height, ui_string(text), first->foreground);
+            start = finish;
+        }
+    }
+    if (focused) {
+        luma_fill_rect(handle, x + (float)column * cell_width,
+            y + (float)row * cell_height + cell_height - 2.0f,
+            cell_width, 2.0f, default_foreground);
+    }
+    free(cells);
+    return true;
+}
 size_t luma_text_index(size_t handle, encore_str value, float max_width) {
     UiWindow *state = ui_window(handle);
     if (state == NULL || value.object == NULL || max_width <= 0.0f) return 0;
@@ -2236,6 +2944,22 @@ size_t luma_direct_frame_acquire(size_t handle) {
     size_t frame = luma_vk_ui_frame_acquire(state->direct_compositor);
     if (frame != 0) state->borrowed_frame = frame;
     return frame;
+}
+
+size_t luma_direct_frame_prepare(size_t handle) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || !state->open || state->renderer_kind != 3u ||
+        state->direct_compositor == 0 || state->borrowed_frame != 0) return 0;
+    size_t frame = luma_vk_ui_frame_prepare(state->direct_compositor);
+    if (frame != 0) state->borrowed_frame = frame;
+    return frame;
+}
+
+bool luma_direct_frame_begin_composition(size_t handle, size_t frame) {
+    UiWindow *state = ui_window(handle);
+    return state != NULL && state->open && state->renderer_kind == 3u &&
+        state->direct_compositor != 0 && state->borrowed_frame == frame &&
+        luma_vk_ui_frame_begin_composition(state->direct_compositor, frame);
 }
 
 bool luma_direct_composition_split(size_t handle) {

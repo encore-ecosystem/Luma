@@ -1,11 +1,9 @@
 //! SVG icon assets, directories, and bundled Lucide catalog management.
 
 import core::option::Option
-import core::os:: {
-    file_exists, read_dir, read_file
-}
 import core::vec::Vec
 import refrain::svg::SvgDocument
+import std::os::{file_exists, read_dir, read_file}
 
 pub struct IconAsset {
     name: str

@@ -1,13 +1,9 @@
 //! Font discovery, registration, family selection, size, and weight management.
 
 import core::option::Option
-import core::os:: {
-    file_exists, read_dir
-}
 import core::vec::Vec
-import refrain::application:: {
-    Window, backend_error
-}
+import refrain::application::{Window, backend_error}
+import std::os::{file_exists, read_dir}
 
 pub struct FontFace {
     family: str
@@ -66,6 +62,18 @@ impl for FontManager {
     /// Discovers a native UI font without requiring application setup.
     pub fn system_default() -> FontManager {
         let mut manager = FontManager::new()
+        // Register a coding face as well as the UI face. Nerd Font variants
+        // keep shell prompts and developer glyphs renderable in terminals.
+        let _jetbrains_linux = manager.register("JetBrains Mono",
+            "/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Regular.ttf",)
+        let _jetbrains_macos = manager.register("JetBrains Mono",
+            "/Library/Fonts/JetBrainsMono-Regular.ttf",)
+        let _jetbrains_windows = manager.register("JetBrains Mono",
+            "C:/Windows/Fonts/JetBrainsMono-Regular.ttf",)
+        let _noto_mono = manager.register("Noto Sans Mono",
+            "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",)
+        let _roboto_mono = manager.register("Roboto Mono",
+            "/usr/share/fonts/TTF/RobotoMonoNerdFont-Regular.ttf",)
         if manager.register("Inter", "/usr/share/fonts/TTF/InterVariable.ttf") {
             manager.default_family = "Inter"
             ret manager

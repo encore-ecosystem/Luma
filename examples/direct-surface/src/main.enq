@@ -1,0 +1,48 @@
+//! Compileable managed direct-render integration used by engine embedders.
+
+import core::option::Option
+import core::vec::Vec
+import luma:: {
+    AppEvent, DirectRenderApplication, RendererKind, SurfaceSlot,
+    VulkanFrameInterop, Widget, Window, run_direct_render_application
+}
+
+struct SurfaceDemo { revision: u64 }
+
+impl DirectRenderApplication for SurfaceDemo {
+    fn view(self: Self) -> Widget {
+        let mut root = Widget::panel("root")
+        root.push(Widget::render_surface("viewport")
+            .with_secondary_pointer_lock()
+            .with_flex(0.0_f32, 1.0_f32))
+        ret root
+    }
+    fn view_target(self: Self, target: str) -> Option[Widget] {
+        ret Option[Widget]::None
+    }
+    fn update(self: Self, event: AppEvent) -> Self {
+        ret Self { self.revision + if event.is_tick() { 1_u64 } else { 0_u64 } }
+    }
+    fn background_interval_ms(self: Self) -> u32 { ret 0_u32 }
+    fn background_revision(self: Self) -> u64 { ret self.revision }
+    fn can_close(self: Self) -> bool { ret true }
+    fn render_surface_id(self: Self) -> str { ret "viewport" }
+    fn render_overlay_ids(self: Self) -> Vec[str] { ret Vec[str]::new() }
+    fn prepare_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret frame.valid() && surface.pixel_width() > 0_u32 &&
+        surface.pixel_height() > 0_u32
+    }
+    fn record_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret frame.valid() && surface.id() == "viewport"
+    }
+}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer("Direct surface", 640_u32,
+        360_u32, RendererKind::Auto,)
+    if !window.available() { ret 0_u32 }
+    let _final = run_direct_render_application(window, SurfaceDemo { 0_u64 })
+    ret 0_u32
+}

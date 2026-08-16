@@ -1,19 +1,21 @@
 //! Default event-driven application runtime.
 
+import core::fmt::Debug
 import core::option::Option
-import core::time::perf_counter_ms
+import core::vec::Vec
+import geometry::Rect
+import std::io::eprintln
+import std::time::{perf_counter_ms}
 
-import refrain::application:: {
-    Window, event_close, event_key_down, event_pointer_down, event_pointer_move,
-    event_pointer_up, event_resize, key_enter, key_tab
-}
+import refrain::application::{Event, SurfaceSlot, VulkanFrameInterop, Window, cursor_default, cursor_resize_horizontal, cursor_resize_vertical, cursor_text, event_close, event_focus_lost, event_key_down, event_none, event_pointer_down, event_pointer_move, event_pointer_up, event_resize, event_scroll, event_text_input, event_key_up, key_backspace, key_delete, key_down, key_end, key_enter, key_escape, key_home, key_left, key_right, key_tab, key_up}
+import refrain::css::StyleSheet
+import refrain::event::{UiEvent, ui_event_click, ui_event_key_down, ui_event_key_up, ui_event_pointer_down, ui_event_pointer_move, ui_event_pointer_up, ui_event_scroll}
 import refrain::font::FontManager
-import refrain::interaction::InteractionState
-import refrain::widget:: {
-    ReactiveUi, Widget, widget_button, widget_checkbox, widget_icon_button,
-    widget_icon_card, widget_link, widget_radio, widget_select, widget_slider,
-    widget_switch
-}
+import refrain::interaction::{InteractionState, TextEditor}
+import refrain::style::{Color, Style}
+import refrain::widget::{ReactiveUi, Widget, WidgetLayout, widget_button, widget_checkbox, widget_icon_button, widget_icon_card, widget_link, widget_radio, widget_range_slider, widget_select, widget_slider, widget_switch, widget_input, widget_terminal, widget_textarea, layout_widget}
+
+extern fn encore_str_from_codepoint(value: usize) -> str
 
 /// Defines an application model rendered by Luma's managed runtime.
 ///
@@ -22,6 +24,191 @@ import refrain::widget:: {
 pub trait Application {
     fn view(self: Self) -> Widget
     fn update(self: Self, event: AppEvent) -> Self
+    /// Returns the requested background-update interval in milliseconds.
+    ///
+    /// Return zero while no background service needs observation. The runtime
+    /// then blocks for native events and performs no periodic redraws.
+    fn background_interval_ms(self: Self) -> u32
+    /// Monotonic token for observable background state. A tick is delivered
+    /// to the model on schedule, but the retained UI is reconciled only when
+    /// this token changes.
+    fn background_revision(self: Self) -> u64
+    /// Returns whether a native close request may terminate the application.
+    ///
+    /// The runtime first delivers `AppEvent::is_close_requested`; models may
+    /// update confirmation or dirty-document state before this is queried.
+    fn can_close(self: Self) -> bool
+}
+
+/// An application that can render one updated retained widget or one directly
+/// dependent widget without rebuilding its complete view. The returned widget
+/// must keep a stable ID already present in the retained tree. Return `None`
+/// when no dependent patch is required.
+pub trait IncrementalApplication {
+    fn view(self: Self) -> Widget
+    fn view_target(self: Self, target: str) -> Option[Widget]
+    fn update(self: Self, event: AppEvent) -> Self
+    fn background_interval_ms(self: Self) -> u32
+    fn background_revision(self: Self) -> u64
+    fn can_close(self: Self) -> bool
+}
+
+/// An incremental application with one zero-copy surface recorded directly
+/// into Luma's active Vulkan frame. Luma remains the sole owner of layout,
+/// composition, submission and presentation.
+pub trait DirectRenderApplication {
+    fn view(self: Self) -> Widget
+    fn view_target(self: Self, target: str) -> Option[Widget]
+    fn update(self: Self, event: AppEvent) -> Self
+    fn background_interval_ms(self: Self) -> u32
+    fn background_revision(self: Self) -> u64
+    fn can_close(self: Self) -> bool
+    fn render_surface_id(self: Self) -> str
+    fn render_overlay_ids(self: Self) -> Vec[str]
+    /// Records uploads and compute work before Luma begins composition.
+    fn prepare_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool
+    /// Records the surface graphics pass after Luma begins composition.
+    fn record_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool
+}
+
+trait RuntimeApplication {
+    fn runtime_view(self: Self) -> Widget
+    fn runtime_view_target(self: Self, target: str) -> Option[Widget]
+    fn runtime_update(self: Self, event: AppEvent) -> Self
+    fn runtime_background_interval_ms(self: Self) -> u32
+    fn runtime_background_revision(self: Self) -> u64
+    fn runtime_can_close(self: Self) -> bool
+    fn runtime_render_surface_id(self: Self) -> str
+    fn runtime_render_overlay_ids(self: Self) -> Vec[str]
+    fn runtime_prepare_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool
+    fn runtime_record_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool
+}
+
+struct ApplicationAdapter[A] {
+    value: A
+}
+
+impl[A: Application] RuntimeApplication for ApplicationAdapter[A] {
+    fn runtime_view(self: Self) -> Widget {
+        ret self.value.view()
+    }
+    fn runtime_view_target(self: Self, target: str) -> Option[Widget] {
+        ret Option[Widget]::None
+    }
+    fn runtime_update(self: Self, event: AppEvent) -> Self {
+        ret Self {
+            self.value.update(event)
+        }
+    }
+    fn runtime_background_interval_ms(self: Self) -> u32 {
+        ret self.value.background_interval_ms()
+    }
+    fn runtime_background_revision(self: Self) -> u64 {
+        ret self.value.background_revision()
+    }
+    fn runtime_can_close(self: Self) -> bool {
+        ret self.value.can_close()
+    }
+    fn runtime_render_surface_id(self: Self) -> str {
+        ret ""
+    }
+    fn runtime_render_overlay_ids(self: Self) -> Vec[str] {
+        ret Vec[str]::new()
+    }
+    fn runtime_prepare_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret false
+    }
+    fn runtime_record_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret false
+    }
+}
+
+struct IncrementalApplicationAdapter[A] {
+    value: A
+}
+
+impl[A: IncrementalApplication] RuntimeApplication for IncrementalApplicationAdapter[A] {
+    fn runtime_view(self: Self) -> Widget {
+        ret self.value.view()
+    }
+    fn runtime_view_target(self: Self, target: str) -> Option[Widget] {
+        ret self.value.view_target(target)
+    }
+    fn runtime_update(self: Self, event: AppEvent) -> Self {
+        ret Self {
+            self.value.update(event)
+        }
+    }
+    fn runtime_background_interval_ms(self: Self) -> u32 {
+        ret self.value.background_interval_ms()
+    }
+    fn runtime_background_revision(self: Self) -> u64 {
+        ret self.value.background_revision()
+    }
+    fn runtime_can_close(self: Self) -> bool {
+        ret self.value.can_close()
+    }
+    fn runtime_render_surface_id(self: Self) -> str {
+        ret ""
+    }
+    fn runtime_render_overlay_ids(self: Self) -> Vec[str] {
+        ret Vec[str]::new()
+    }
+    fn runtime_prepare_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret false
+    }
+    fn runtime_record_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret false
+    }
+}
+
+struct DirectRenderApplicationAdapter[A] {
+    value: A
+}
+
+impl[A: DirectRenderApplication] RuntimeApplication for DirectRenderApplicationAdapter[A] {
+    fn runtime_view(self: Self) -> Widget {
+        ret self.value.view()
+    }
+    fn runtime_view_target(self: Self, target: str) -> Option[Widget] {
+        ret self.value.view_target(target)
+    }
+    fn runtime_update(self: Self, event: AppEvent) -> Self {
+        ret Self {
+            self.value.update(event)
+        }
+    }
+    fn runtime_background_interval_ms(self: Self) -> u32 {
+        ret self.value.background_interval_ms()
+    }
+    fn runtime_background_revision(self: Self) -> u64 {
+        ret self.value.background_revision()
+    }
+    fn runtime_can_close(self: Self) -> bool {
+        ret self.value.can_close()
+    }
+    fn runtime_render_surface_id(self: Self) -> str {
+        ret self.value.render_surface_id()
+    }
+    fn runtime_render_overlay_ids(self: Self) -> Vec[str] {
+        ret self.value.render_overlay_ids()
+    }
+    fn runtime_prepare_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret self.value.prepare_direct_frame(frame, surface, elapsed_ms)
+    }
+    fn runtime_record_direct_frame(self: Self, frame: VulkanFrameInterop,
+        surface: SurfaceSlot, elapsed_ms: u64,) -> bool {
+        ret self.value.record_direct_frame(frame, surface, elapsed_ms)
+    }
 }
 
 /// High-level event delivered to managed application state. A value object is
@@ -31,18 +218,315 @@ pub struct AppEvent {
     kind: u32
     action: str
     elapsed_ms: u64
+    edit: TextEditIntent
+    key: u32
+    shift: bool
+    control: bool
+    target: str
+    x: f32
+    y: f32
+    dx: f32
+    dy: f32
+    buttons: u32
+    modifiers: u32
+    timestamp_ns: u64
+}
+
+/// A normalized, model-owned edit requested by Luma's managed runtime.
+///
+/// Applications may apply it to `TextEditor` or translate it to an external
+/// document engine. Luma never takes ownership of the document contents.
+pub struct TextEditIntent {
+    kind: u32
+    target: str
+    text: str
+    extend: bool
+    position: usize
+}
+
+impl for TextEditIntent {
+    fn new(kind: u32, target: str, text: str, extend: bool, position: usize) -> Self {
+        ret Self {
+            kind, target, text, extend, position
+        }
+    }
+    fn none() -> Self {
+        ret Self::new(0_u32, "", "", false, 0_usize)
+    }
+    pub fn insert(target: str, text: str) -> Self {
+        ret Self::new(1_u32, target, text, false, 0_usize)
+    }
+    pub fn backspace(target: str) -> Self {
+        ret Self::new(2_u32, target, "", false, 0_usize)
+    }
+    pub fn delete(target: str) -> Self {
+        ret Self::new(3_u32, target, "", false, 0_usize)
+    }
+    pub fn move_left(target: str, extend: bool) -> Self {
+        ret Self::new(4_u32, target, "", extend, 0_usize)
+    }
+    pub fn move_right(target: str, extend: bool) -> Self {
+        ret Self::new(5_u32, target, "", extend, 0_usize)
+    }
+    pub fn move_home(target: str, extend: bool) -> Self {
+        ret Self::new(6_u32, target, "", extend, 0_usize)
+    }
+    pub fn move_end(target: str, extend: bool) -> Self {
+        ret Self::new(7_u32, target, "", extend, 0_usize)
+    }
+    pub fn move_up(target: str, extend: bool) -> Self {
+        ret Self::new(8_u32, target, "", extend, 0_usize)
+    }
+    pub fn move_down(target: str, extend: bool) -> Self {
+        ret Self::new(9_u32, target, "", extend, 0_usize)
+    }
+    pub fn select_all(target: str) -> Self {
+        ret Self::new(10_u32, target, "", false, 0_usize)
+    }
+    pub fn copy(target: str) -> Self {
+        ret Self::new(11_u32, target, "", false, 0_usize)
+    }
+    pub fn cut(target: str) -> Self {
+        ret Self::new(12_u32, target, "", false, 0_usize)
+    }
+    pub fn paste(target: str, text: str) -> Self {
+        ret Self::new(13_u32, target, text, false, 0_usize)
+    }
+    pub fn place_cursor(target: str, position: usize) -> Self {
+        ret Self::new(14_u32, target, "", false, position)
+    }
+    pub fn extend_to(target: str, position: usize) -> Self {
+        ret Self::new(15_u32, target, "", true, position)
+    }
+    pub fn target(self: Self) -> str {
+        ret self.target
+    }
+    pub fn text(self: Self) -> str {
+        ret self.text
+    }
+    pub fn extend_selection(self: Self) -> bool {
+        ret self.extend
+    }
+    pub fn is_insert(self: Self) -> bool {
+        ret self.kind == 1_u32
+    }
+    pub fn is_backspace(self: Self) -> bool {
+        ret self.kind == 2_u32
+    }
+    pub fn is_delete(self: Self) -> bool {
+        ret self.kind == 3_u32
+    }
+    pub fn is_move(self: Self) -> bool {
+        ret self.kind >= 4_u32 && self.kind <= 9_u32
+    }
+    pub fn is_move_left(self: Self) -> bool {
+        ret self.kind == 4_u32
+    }
+    pub fn is_move_right(self: Self) -> bool {
+        ret self.kind == 5_u32
+    }
+    pub fn is_move_up(self: Self) -> bool {
+        ret self.kind == 8_u32
+    }
+    pub fn is_move_down(self: Self) -> bool {
+        ret self.kind == 9_u32
+    }
+    pub fn is_select_all(self: Self) -> bool {
+        ret self.kind == 10_u32
+    }
+    pub fn is_copy(self: Self) -> bool {
+        ret self.kind == 11_u32
+    }
+    pub fn is_cut(self: Self) -> bool {
+        ret self.kind == 12_u32
+    }
+    pub fn is_paste(self: Self) -> bool {
+        ret self.kind == 13_u32
+    }
+    pub fn is_pointer_selection(self: Self) -> bool {
+        ret self.kind == 14_u32 || self.kind == 15_u32
+    }
+    pub fn position(self: Self) -> usize {
+        ret self.position
+    }
+    pub fn apply(self: Self, editor: TextEditor) -> TextEditor {
+        if self.kind == 1_u32 {
+            ret editor.insert(self.text)
+        }
+        if self.kind == 2_u32 {
+            ret editor.backspace()
+        }
+        if self.kind == 3_u32 {
+            ret editor.delete()
+        }
+        if self.kind == 4_u32 {
+            ret editor.move_left(self.extend)
+        }
+        if self.kind == 5_u32 {
+            ret editor.move_right(self.extend)
+        }
+        if self.kind == 6_u32 {
+            ret editor.move_line_home(self.extend)
+        }
+        if self.kind == 7_u32 {
+            ret editor.move_line_end(self.extend)
+        }
+        if self.kind == 8_u32 {
+            ret editor.move_up(self.extend)
+        }
+        if self.kind == 9_u32 {
+            ret editor.move_down(self.extend)
+        }
+        if self.kind == 10_u32 {
+            ret editor.select_all()
+        }
+        if self.kind == 12_u32 {
+            ret editor.cut()
+        }
+        if self.kind == 13_u32 {
+            ret editor.paste(self.text)
+        }
+        if self.kind == 14_u32 {
+            ret editor.with_cursor(self.position)
+        }
+        if self.kind == 15_u32 {
+            ret editor.with_selection(editor.selection_anchor(), self.position)
+        }
+        ret editor
+    }
 }
 
 impl for AppEvent {
     fn action_event(action: str) -> Self {
         ret Self {
-            1_u32, action, 0_u64
+            1_u32, action, 0_u64, TextEditIntent::none(), 0_u32, false, false,
+            "", 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
         }
     }
     fn tick_event(elapsed_ms: u64) -> Self {
         ret Self {
-            2_u32, "", elapsed_ms
+            2_u32, "", elapsed_ms, TextEditIntent::none(), 0_u32, false, false,
+            "", 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
         }
+    }
+    fn edit_event(edit: TextEditIntent) -> Self {
+        ret Self {
+            3_u32, "", 0_u64, edit, 0_u32, false, false,
+            "", 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
+        }
+    }
+    fn key_event(key: u32, shift: bool, control: bool, modifiers: u32,
+        target: str,) -> Self {
+        ret Self {
+            4_u32, "", 0_u64, TextEditIntent::none(), key, shift, control,
+            target, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32,
+            modifiers, 0_u64
+        }
+    }
+    fn close_event() -> Self {
+        ret Self {
+            5_u32, "", 0_u64, TextEditIntent::none(), 0_u32, false, false,
+            "", 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
+        }
+    }
+    fn pointer_event(kind: u32, target: str, x: f32, y: f32) -> Self {
+        ret Self {
+            kind, "", 0_u64, TextEditIntent::none(), 0_u32, false, false,
+            target, x, y, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
+        }
+    }
+    fn scroll_event(target: str, x: f32, y: f32) -> Self {
+        ret Self {
+            9_u32, "", 0_u64, TextEditIntent::none(), 0_u32, false, false,
+            target, x, y, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
+        }
+    }
+    fn control_event(target: str, value: f32) -> Self {
+        ret Self {
+            10_u32, "", 0_u64, TextEditIntent::none(), 0_u32, false, false,
+            target, value, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
+        }
+    }
+    fn range_event(target: str, start: f32, end: f32) -> Self {
+        ret Self {
+            10_u32, "", 0_u64, TextEditIntent::none(), 0_u32, false, false,
+            target, start, end, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
+        }
+    }
+    fn raw_pointer_event(kind: u32, target: str, event: Event) -> Self {
+        ret Self {
+            kind, "", 0_u64, TextEditIntent::none(), event.key(),
+            event.shift(), event.control(), target, event.x(), event.y(),
+            event.dx(), event.dy(), event.buttons(), event.modifiers(),
+            event.timestamp_ns()
+        }
+    }
+    fn raw_pointer_sample(kind: u32, target: str, x: f32, y: f32,
+        dx: f32, dy: f32, buttons: u32, modifiers: u32,
+        timestamp_ns: u64,) -> Self {
+        ret Self {
+            kind, "", 0_u64, TextEditIntent::none(), 0_u32,
+            (modifiers & 3_u32) != 0_u32,(modifiers & 192_u32) != 0_u32,
+            target, x, y, dx, dy, buttons, modifiers, timestamp_ns
+        }
+    }
+    fn key_up_event(key: u32, shift: bool, control: bool, modifiers: u32,
+        target: str,) -> Self {
+        ret Self {
+            11_u32, "", 0_u64, TextEditIntent::none(), key, shift, control,
+            target, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32,
+            modifiers, 0_u64
+        }
+    }
+    fn focus_lost_event() -> Self {
+        ret Self {
+            12_u32, "", 0_u64, TextEditIntent::none(), 0_u32, false, false,
+            "", 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u64
+        }
+    }
+    pub fn pointer_down(target: str, x: f32, y: f32) -> Self {
+        ret Self::pointer_event(6_u32, target, x, y)
+    }
+    pub fn pointer_move(target: str, x: f32, y: f32) -> Self {
+        ret Self::pointer_event(7_u32, target, x, y)
+    }
+    pub fn pointer_up(target: str, x: f32, y: f32) -> Self {
+        ret Self::pointer_event(8_u32, target, x, y)
+    }
+    pub fn pointer_button_down(target: str, x: f32, y: f32,
+        button: u32, modifiers: u32,) -> Self {
+        ret Self {
+            6_u32, "", 0_u64, TextEditIntent::none(), button,
+            (modifiers & 3_u32) != 0_u32,(modifiers & 192_u32) != 0_u32,
+            target, x, y, 0.0_f32, 0.0_f32, 0_u32, modifiers, 0_u64
+        }
+    }
+    pub fn pointer_motion(target: str, x: f32, y: f32, dx: f32, dy: f32,
+        buttons: u32, modifiers: u32, timestamp_ns: u64,) -> Self {
+        ret Self::raw_pointer_sample(7_u32, target, x, y, dx, dy, buttons,
+            modifiers, timestamp_ns,)
+    }
+    pub fn pointer_button_up(target: str, x: f32, y: f32,
+        button: u32, modifiers: u32,) -> Self {
+        ret Self {
+            8_u32, "", 0_u64, TextEditIntent::none(), button,
+            (modifiers & 3_u32) != 0_u32,(modifiers & 192_u32) != 0_u32,
+            target, x, y, 0.0_f32, 0.0_f32, 0_u32, modifiers, 0_u64
+        }
+    }
+    /// Constructs a managed key press for embedders and deterministic tests.
+    pub fn key_down(key: u32, modifiers: u32, target: str) -> Self {
+        ret Self::key_event(key,(modifiers & 3_u32) != 0_u32,
+            (modifiers & 192_u32) != 0_u32, modifiers, target,)
+    }
+    /// Constructs a managed key release for embedders and deterministic tests.
+    pub fn key_up(key: u32, modifiers: u32, target: str) -> Self {
+        ret Self::key_up_event(key,(modifiers & 3_u32) != 0_u32,
+            (modifiers & 192_u32) != 0_u32, modifiers, target,)
+    }
+    /// Constructs the cancellation delivered when the native window loses focus.
+    pub fn focus_lost() -> Self {
+        ret Self::focus_lost_event()
     }
     pub fn is_action(self: Self) -> bool {
         ret self.kind == 1_u32
@@ -50,24 +534,794 @@ impl for AppEvent {
     pub fn is_tick(self: Self) -> bool {
         ret self.kind == 2_u32
     }
+    pub fn is_text_edit(self: Self) -> bool {
+        ret self.kind == 3_u32
+    }
+    pub fn is_key(self: Self) -> bool {
+        ret self.kind == 4_u32
+    }
+    pub fn is_key_down(self: Self) -> bool {
+        ret self.kind == 4_u32
+    }
+    pub fn is_key_up(self: Self) -> bool {
+        ret self.kind == 11_u32
+    }
+    pub fn is_focus_lost(self: Self) -> bool {
+        ret self.kind == 12_u32
+    }
+    pub fn is_close_requested(self: Self) -> bool {
+        ret self.kind == 5_u32
+    }
+    pub fn is_pointer_down(self: Self) -> bool {
+        ret self.kind == 6_u32
+    }
+    pub fn is_pointer_move(self: Self) -> bool {
+        ret self.kind == 7_u32
+    }
+    pub fn is_pointer_up(self: Self) -> bool {
+        ret self.kind == 8_u32
+    }
+    pub fn is_scroll(self: Self) -> bool {
+        ret self.kind == 9_u32
+    }
+    /// A checkbox, radio, switch, or range control changed through native
+    /// pointer/keyboard interaction.
+    pub fn is_control_change(self: Self) -> bool {
+        ret self.kind == 10_u32
+    }
     pub fn action(self: Self) -> str {
         ret self.action
     }
     pub fn elapsed_ms(self: Self) -> u64 {
         ret self.elapsed_ms
     }
+    pub fn text_edit(self: Self) -> TextEditIntent {
+        ret self.edit
+    }
+    pub fn key(self: Self) -> u32 {
+        ret self.key
+    }
+    pub fn shift(self: Self) -> bool {
+        ret self.shift
+    }
+    pub fn control(self: Self) -> bool {
+        ret self.control
+    }
+    pub fn target(self: Self) -> str {
+        ret self.target
+    }
+    pub fn x(self: Self) -> f32 {
+        ret self.x
+    }
+    pub fn y(self: Self) -> f32 {
+        ret self.y
+    }
+    pub fn dx(self: Self) -> f32 {
+        ret self.dx
+    }
+    pub fn dy(self: Self) -> f32 {
+        ret self.dy
+    }
+    pub fn buttons(self: Self) -> u32 {
+        ret self.buttons
+    }
+    pub fn pointer_button(self: Self) -> u32 {
+        ret self.key
+    }
+    pub fn modifiers(self: Self) -> u32 {
+        ret self.modifiers
+    }
+    pub fn timestamp_ns(self: Self) -> u64 {
+        ret self.timestamp_ns
+    }
+    pub fn value(self: Self) -> f32 {
+        ret self.x
+    }
+    pub fn range_start(self: Self) -> f32 {
+        ret self.x
+    }
+    pub fn range_end(self: Self) -> f32 {
+        ret self.y
+    }
+    pub fn checked(self: Self) -> bool {
+        ret self.x >= 0.5_f32
+    }
+}
+
+fn runtime_pointer_sample_is_current(timestamp_ns: u64,
+    newest_timestamp_ns: u64,) -> bool {
+    // Tests and embedders may synthesize events without a platform timestamp.
+    // Native samples are monotonic and may therefore reject stale queued data.
+    ret timestamp_ns == 0_u64 || timestamp_ns >= newest_timestamp_ns
+}
+
+fn runtime_pending_interaction_timeout(now_ms: u64,
+    deadline_ms: u64,) -> u32 {
+    ret if now_ms >= deadline_ms {
+        0_u32
+    } else {
+        (deadline_ms - now_ms) as u32
+    }
+}
+
+fn runtime_input_precedes_background(kind: u32) -> bool {
+    // A command that arrived at the same deadline as a model transition owns
+    // the state the user can still see. Defer the background transition to
+    // the next loop; the command will either cancel it or reschedule it from
+    // the model's remaining time.
+    ret kind == event_pointer_up() || kind == event_key_down() ||
+    kind == event_key_up() || kind == event_focus_lost()
+}
+
+fn runtime_view_captures_application_key(ui: mut ReactiveUi, key: u32) -> bool {
+    ret ui.layout().retained_widget().attribute(
+        "data-luma-application-key-" + Debug::fmt(key),).is_some()
+}
+
+fn runtime_model_captures_application_key(root: Widget, key: u32) -> bool {
+    ret root.attribute("data-luma-application-key-" + Debug::fmt(key)).is_some()
+}
+
+fn runtime_model_application_key_target(root: Widget, key: u32) -> str {
+    ret root.attribute(
+        "data-luma-application-key-" + Debug::fmt(key),).unwrap_or("")
+}
+
+fn runtime_scrollable_ancestor(root: Widget, target: str) -> str {
+    if target == "" || root.find(target).is_none() {
+        ret ""
+    }
+    for child in root.children() {
+        let found = runtime_scrollable_ancestor(child, target)
+        if found != "" {
+            ret found
+        }
+    }
+    ret if root.id() != "" &&
+    root.attribute("data-luma-scrollable").unwrap_or("") == "true" {
+        root.id()
+    } else {
+        ""
+    }
+}
+
+fn runtime_apply_default_scroll(window: Window, ui: mut ReactiveUi,
+    target: str, wheel_y: f32, previous_y: f32,) -> ReactiveUi {
+    let container = runtime_scrollable_ancestor(
+        ui.layout().retained_widget(), target,)
+    if container == "" || wheel_y == 0.0_f32 {
+        ret ui
+    }
+    match ui.find_widget(container) {
+        Some(widget) => {
+            let scroll = widget.style().layout().scroll()
+            let raw = previous_y - wheel_y * 48.0_f32
+            let max_y = runtime_default_scroll_max_y(ui, container)
+            let next = if raw < 0.0_f32 {
+                0.0_f32
+            } elif raw > max_y {
+                max_y
+            } else {
+                raw
+            }
+            if next != scroll.y() {
+                let _patched = ui.patch_style(container,
+                    widget.style().with_scroll(scroll.x(), next),)
+                ret window.relayout_reactive(ui)
+            }
+        }
+        None => {
+        }
+    }
+    ret ui
+}
+
+fn runtime_default_scroll_max_y(ui: mut ReactiveUi, container: str) -> f32 {
+    match ui.find_layout(container) {
+        Some(layout) => {
+            let viewport_bottom = layout.bounds().bottom()
+            let mut content_bottom = viewport_bottom
+            for child in layout.children() {
+                let bottom = child.paint_bounds().bottom()
+                if bottom > content_bottom {
+                    content_bottom = bottom
+                }
+            }
+            ret content_bottom - viewport_bottom
+        }
+        None => {
+        }
+    }
+    ret 0.0_f32
+}
+
+fn runtime_default_scroll_y(ui: mut ReactiveUi, target: str) -> f32 {
+    let container = runtime_scrollable_ancestor(
+        ui.layout().retained_widget(), target,)
+    match ui.find_widget(container) {
+        Some(widget) => {
+            ret widget.style().layout().scroll().y()
+        }
+        None => {
+        }
+    }
+    ret 0.0_f32
+}
+
+fn runtime_control_change(ui: mut ReactiveUi, target: str, pointer_x: f32,
+    activate: bool, range_thumb: u32,) -> Option[AppEvent] {
+    let widget = match ui.find_widget(target) {
+        Some(value) => value
+        None => {
+            ret Option[AppEvent]::None
+        }
+    }
+    if widget.disabled() {
+        ret Option[AppEvent]::None
+    }
+    if widget.kind() == widget_checkbox() || widget.kind() == widget_switch() {
+        if activate {
+            ret Option[AppEvent]::Some(AppEvent::control_event(target,
+                    if widget.checked() {
+                        0.0_f32
+                    } else {
+                        1.0_f32
+                    }
+                    ,))
+        }
+        ret Option[AppEvent]::None
+    }
+    if widget.kind() == widget_radio() {
+        if activate {
+            ret Option[AppEvent]::Some(AppEvent::control_event(target, 1.0_f32))
+        }
+        ret Option[AppEvent]::None
+    }
+    if widget.kind() == widget_slider() {
+        match ui.layout().find_bounds(target) {
+            Some(bounds) => {
+                // Match render_slider's six-pixel track inset exactly so the
+                // thumb stays underneath the captured pointer at every value.
+                let usable = bounds.width() - 12.0_f32
+                let raw = if usable > 0.0_f32 {
+                    (pointer_x - bounds.x() - 6.0_f32) / usable
+                } else {
+                    0.0_f32
+                }
+                let value = if raw < 0.0_f32 {
+                    0.0_f32
+                } elif raw > 1.0_f32 {
+                    1.0_f32
+                } else {
+                    raw
+                }
+                ret Option[AppEvent]::Some(AppEvent::control_event(target, value))
+            }
+            None => {
+            }
+        }
+    }
+    if widget.kind() == widget_range_slider() {
+        match ui.layout().find_bounds(target) {
+            Some(bounds) => {
+                let usable = bounds.width() - 18.0_f32
+                let raw = if usable > 0.0_f32 {
+                    (pointer_x - bounds.x() - 9.0_f32) / usable
+                } else {
+                    0.0_f32
+                }
+                let unclamped = if raw < 0.0_f32 {
+                    0.0_f32
+                } elif raw > 1.0_f32 {
+                    1.0_f32
+                } else {
+                    raw
+                }
+                let value = runtime_range_snap(widget, unclamped, activate)
+                let lower = widget.range_start()
+                let upper = widget.range_end()
+                ret if range_thumb == 1_u32 {
+                    Option[AppEvent]::Some(AppEvent::range_event(target,
+                            if value > upper {
+                                upper
+                            } else {
+                                value
+                            }
+                            , upper,))
+                } elif range_thumb == 2_u32 {
+                    Option[AppEvent]::Some(AppEvent::range_event(target, lower,
+                            if value < lower {
+                                lower
+                            } else {
+                                value
+                            }
+                            ,))
+                } else {
+                    // A collapsed range defers thumb selection until the
+                    // first directional motion. Pointer-down itself must not
+                    // move either endpoint based on sub-pixel rounding.
+                    Option[AppEvent]::Some(AppEvent::range_event(target,
+                            lower, upper,))
+                }
+            }
+            None => {
+            }
+        }
+    }
+    ret Option[AppEvent]::None
+}
+
+fn runtime_range_snap(widget: Widget, value: f32, commit: bool) -> f32 {
+    let ticks = widget.range_ticks()
+    if ticks < 2_usize {
+        ret value
+    }
+    let intervals = ticks - 1_usize
+    let scaled = value * intervals as f32
+    let nearest_index =(scaled + 0.5_f32) as usize
+    let nearest = nearest_index as f32 / intervals as f32
+    if commit {
+        ret nearest
+    }
+    // A ruler remains continuous while dragging, but softly attracts the
+    // thumb near a mark. This avoids step-to-step teleportation while making
+    // each discrete value easy to acquire.
+    let distance = if value > nearest {
+        value - nearest
+    } else {
+        nearest - value
+    }
+    let radius = 0.35_f32 / intervals as f32
+    if distance >= radius || radius <= 0.0_f32 {
+        ret value
+    }
+    let attraction = 1.0_f32 - distance / radius
+    ret value +(nearest - value) * attraction * attraction
+}
+
+fn runtime_update_live_control(ui: mut ReactiveUi, target: str,
+    value: f32, range_start: f32, range_end: f32,) -> ReactiveUi {
+    ui.cancel_range_transition(target)
+    let _painted = match ui.find_widget(target) {
+        Some(control) => {
+            if control.kind() == widget_slider() {
+                ui.patch_value(target, value)
+            } elif control.kind() == widget_range_slider() {
+                ui.patch_range(target, range_start, range_end)
+            } else {
+                false
+            }
+        }
+        None => {
+            false
+        }
+    }
+    ret ui
+}
+
+fn runtime_patch_live_control(window: Window, ui: mut ReactiveUi, target: str,
+    value: f32, range_start: f32, range_end: f32,) -> ReactiveUi {
+    ui = runtime_update_live_control(ui, target, value, range_start, range_end)
+    ret ui
+}
+
+fn runtime_range_thumb(ui: mut ReactiveUi, target: str, pointer_x: f32) -> u32 {
+    let widget = match ui.find_widget(target) {
+        Some(value) => value
+        None => {
+            ret 0_u32
+        }
+    }
+    if widget.kind() != widget_range_slider() {
+        ret 0_u32
+    }
+    match ui.layout().find_bounds(target) {
+        Some(bounds) => {
+            let usable = bounds.width() - 18.0_f32
+            let raw = if usable > 0.0_f32 {
+                (pointer_x - bounds.x() - 9.0_f32) / usable
+            } else {
+                0.0_f32
+            }
+            let lower_distance = if raw > widget.range_start() {
+                raw - widget.range_start()
+            } else {
+                widget.range_start() - raw
+            }
+            let upper_distance = if raw > widget.range_end() {
+                raw - widget.range_end()
+            } else {
+                widget.range_end() - raw
+            }
+            // Equal endpoints must not trap the lower thumb forever. The
+            // pointer side disambiguates a collapsed range: press at or left
+            // of the shared thumb to move the lower endpoint, and right of it
+            // to move the upper endpoint.
+            if widget.range_start() == widget.range_end() {
+                let distance = if raw > widget.range_start() {
+                    raw - widget.range_start()
+                } else {
+                    widget.range_start() - raw
+                }
+                let overlap_radius = if usable > 0.0_f32 {
+                    9.0_f32 / usable
+                } else {
+                    1.0_f32
+                }
+                if distance <= overlap_radius {
+                    ret 3_u32
+                }
+                ret if raw < widget.range_start() {
+                    1_u32
+                } else {
+                    2_u32
+                }
+            }
+            ret if lower_distance <= upper_distance {
+                1_u32
+            } else {
+                2_u32
+            }
+        }
+        None => {
+        }
+    }
+    ret 0_u32
+}
+
+fn runtime_slider_control(widget: Widget) -> bool {
+    ret widget.kind() == widget_slider() ||
+    widget.kind() == widget_range_slider()
+}
+
+fn runtime_release_action(ui: mut ReactiveUi, active: str, hit: str) -> str {
+    if active == "" {
+        ret ""
+    }
+    match ui.find_widget(active) {
+        Some(widget) => {
+            if runtime_slider_control(widget) {
+                ret active
+            }
+        }
+        None => {
+        }
+    }
+    ret if hit == active {
+        active
+    } else {
+        ""
+    }
+}
+
+fn runtime_current_control_commit(ui: mut ReactiveUi, target: str,
+    range_thumb: u32,) -> Option[AppEvent] {
+    let widget = match ui.find_widget(target) {
+        Some(value) => value
+        None => {
+            ret Option[AppEvent]::None
+        }
+    }
+    if widget.disabled() || !runtime_slider_control(widget) {
+        ret Option[AppEvent]::None
+    }
+    if widget.kind() == widget_slider() {
+        ret Option[AppEvent]::Some(AppEvent::control_event(target,
+                widget.value(),))
+    }
+    let lower = widget.range_start()
+    let upper = widget.range_end()
+    let committed_lower = if range_thumb == 1_u32 {
+        runtime_range_snap(widget, lower, true)
+    } else {
+        lower
+    }
+    let committed_upper = if range_thumb == 2_u32 {
+        runtime_range_snap(widget, upper, true)
+    } else {
+        upper
+    }
+    ret Option[AppEvent]::Some(AppEvent::range_event(target,
+            if committed_lower > committed_upper {
+                committed_upper
+            } else {
+                committed_lower
+            }
+            , if committed_upper < committed_lower {
+                committed_lower
+            } else {
+                committed_upper
+            }
+            ,))
+}
+
+fn runtime_keyboard_control_change(ui: mut ReactiveUi, target: str,
+    event: Event,) -> Option[AppEvent] {
+    if event.kind() != event_key_down() ||
+    (event.key() != key_left() && event.key() != key_right() &&
+        event.key() != key_home() && event.key() != key_end()) {
+        ret Option[AppEvent]::None
+    }
+    let widget = match ui.find_widget(target) {
+        Some(value) => value
+        None => {
+            ret Option[AppEvent]::None
+        }
+    }
+    if widget.disabled() || !runtime_slider_control(widget) {
+        ret Option[AppEvent]::None
+    }
+    let step = if widget.kind() == widget_range_slider() &&
+    widget.range_ticks() >= 2_usize {
+        1.0_f32 /(widget.range_ticks() - 1_usize) as f32
+    } else {
+        0.01_f32
+    }
+    if widget.kind() == widget_slider() {
+        let current = widget.value()
+        let raw = if event.key() == key_home() {
+            0.0_f32
+        } elif event.key() == key_end() {
+            1.0_f32
+        } elif event.key() == key_left() {
+            current - step
+        } else {
+            current + step
+        }
+        let value = if raw < 0.0_f32 {
+            0.0_f32
+        } elif raw > 1.0_f32 {
+            1.0_f32
+        } else {
+            raw
+        }
+        if value == current {
+            ret Option[AppEvent]::None
+        }
+        ret Option[AppEvent]::Some(AppEvent::control_event(target, value))
+    }
+    let lower = widget.range_start()
+    let upper = widget.range_end()
+    if event.shift() {
+        let raw = if event.key() == key_home() {
+            lower
+        } elif event.key() == key_end() {
+            1.0_f32
+        } elif event.key() == key_left() {
+            upper - step
+        } else {
+            upper + step
+        }
+        let next = if raw < lower {
+            lower
+        } elif raw > 1.0_f32 {
+            1.0_f32
+        } else {
+            raw
+        }
+        if next == upper {
+            ret Option[AppEvent]::None
+        }
+        ret Option[AppEvent]::Some(AppEvent::range_event(target, lower, next))
+    }
+    let raw = if event.key() == key_home() {
+        0.0_f32
+    } elif event.key() == key_end() {
+        upper
+    } elif event.key() == key_left() {
+        lower - step
+    } else {
+        lower + step
+    }
+    let next = if raw < 0.0_f32 {
+        0.0_f32
+    } elif raw > upper {
+        upper
+    } else {
+        raw
+    }
+    if next == lower {
+        ret Option[AppEvent]::None
+    }
+    ret Option[AppEvent]::Some(AppEvent::range_event(target, next, upper))
+}
+
+fn runtime_keyboard_control_target(ui: mut ReactiveUi, target: str,
+    event: Event,) -> bool {
+    if event.kind() != event_key_down() ||
+    (event.key() != key_left() && event.key() != key_right() &&
+        event.key() != key_home() && event.key() != key_end()) {
+        ret false
+    }
+    match ui.find_widget(target) {
+        Some(widget) => {
+            ret !widget.disabled() && runtime_slider_control(widget)
+        }
+        None => {
+        }
+    }
+    ret false
+}
+
+fn editable_widget(widget: Widget) -> bool {
+    ret !widget.disabled() &&(widget.kind() == widget_input() ||
+        widget.kind() == widget_textarea() || widget.kind() == widget_terminal())
+}
+
+// Printable key-down is followed by the platform's committed text event.
+// Reserving it here prevents the generic command path from rebuilding the
+// application once before the actual TextEditIntent is delivered.
+fn runtime_editor_reserves_printable_key(widget: Option[Widget], event: Event) -> bool {
+    if event.kind() != event_key_down() || event.control() ||
+    event.key() < 32_u32 || event.key() > 126_u32 {
+        ret false
+    }
+    match widget {
+        Some(field) => {
+            ret editable_widget(field)
+        }
+        None => {
+        }
+    }
+    ret false
+}
+
+fn runtime_printable_key_text(event: Event) -> Option[str] {
+    if event.kind() != event_key_down() || event.control() ||
+    event.key() < 32_u32 || event.key() > 126_u32 {
+        ret Option[str]::None
+    }
+    let codepoint = if event.shift() && event.key() >= 97_u32 && event.key() <= 122_u32 {
+        event.key() - 32_u32
+    } else {
+        event.key()
+    }
+    ret Option[str]::Some(unsafe {
+            encore_str_from_codepoint(codepoint as usize)
+        }
+    )
+}
+
+fn runtime_activation_falls_back_to_application_key(action: str, event: Event,
+    key_default: bool,) -> bool {
+    ret action == "" && key_default && event.kind() == event_key_down() &&
+    event.key() == key_enter()
+}
+
+fn selected_widget_text(widget: Widget) -> str {
+    let selection = widget.selection()
+    let start = selection.start()
+    let finish = selection.end()
+    ret widget.text().slice(start, finish - start)
+}
+
+fn runtime_text_edit(window: Window, focused: str, widget: Option[Widget],
+    event: Event,) -> Option[TextEditIntent] {
+    if focused == "" {
+        ret Option[TextEditIntent]::None
+    }
+    match widget {
+        Option::Some(field) => {
+            if !editable_widget(field) {
+                ret Option[TextEditIntent]::None
+            }
+            if event.kind() == event_text_input() && event.text() != "" {
+                ret Option[TextEditIntent]::Some(TextEditIntent::insert(focused, event.text()))
+            }
+            if event.kind() != event_key_down() {
+                ret Option[TextEditIntent]::None
+            }
+            if event.control() && event.key() == 97_u32 {
+                ret Option[TextEditIntent]::Some(TextEditIntent::select_all(focused))
+            }
+            if event.control() && event.key() == 99_u32 {
+                let _copied = window.set_clipboard(selected_widget_text(field))
+                ret Option[TextEditIntent]::Some(TextEditIntent::copy(focused))
+            }
+            if event.control() && event.key() == 120_u32 {
+                let _copied = window.set_clipboard(selected_widget_text(field))
+                ret Option[TextEditIntent]::Some(TextEditIntent::cut(focused))
+            }
+            if event.control() && event.key() == 118_u32 {
+                ret Option[TextEditIntent]::Some(TextEditIntent::paste(focused, window.clipboard_text()))
+            }
+            if event.key() == key_backspace() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::backspace(focused))
+            }
+            if event.key() == key_delete() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::delete(focused))
+            }
+            if event.key() == key_left() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::move_left(focused, event.shift()))
+            }
+            if event.key() == key_right() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::move_right(focused, event.shift()))
+            }
+            if event.key() == key_home() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::move_home(focused, event.shift()))
+            }
+            if event.key() == key_end() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::move_end(focused, event.shift()))
+            }
+            if event.key() == key_up() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::move_up(focused, event.shift()))
+            }
+            if event.key() == key_down() {
+                ret Option[TextEditIntent]::Some(TextEditIntent::move_down(focused, event.shift()))
+            }
+            if event.key() == key_enter() &&
+            (field.kind() == widget_textarea() || field.kind() == widget_terminal()) {
+                ret Option[TextEditIntent]::Some(TextEditIntent::insert(focused, "\n"))
+            }
+        }
+        Option::None => {
+        }
+    }
+    ret Option[TextEditIntent]::None
+}
+
+fn runtime_pointer_edit(window: Window, ui: mut ReactiveUi, target: str,
+    x: f32, y: f32, extend: bool,) -> Option[TextEditIntent] {
+    if target == "" {
+        ret Option[TextEditIntent]::None
+    }
+    let field = match ui.find_widget(target) {
+        Option::Some(value) => value
+        Option::None => {
+            ret Option[TextEditIntent]::None
+        }
+    }
+    if !editable_widget(field) {
+        ret Option[TextEditIntent]::None
+    }
+    match ui.layout().find_bounds(target) {
+        Option::Some(bounds) => {
+            let position = if field.kind() == widget_textarea() {
+                let gutter = if field.attribute("line-numbers").is_some() {
+                    52.0_f32
+                } else {
+                    0.0_f32
+                }
+                let wrap_width = if field.attribute("wrap").is_some() {
+                    1000000.0_f32
+                } else {
+                    bounds.width() - 20.0_f32 - gutter
+                }
+                let scroll_y = field.style().layout().scroll().y()
+                let scroll_x = field.style().layout().scroll().x()
+                window.wrapped_text_index(
+                    field.text(), wrap_width,
+                    x - bounds.x() - 10.0_f32 - gutter + scroll_x,
+                    y - bounds.y() - 10.0_f32 + scroll_y,)
+            } else {
+                window.text_index(field.text(), x - bounds.x() - 10.0_f32)
+            }
+            ret Option[TextEditIntent]::Some(if extend {
+                    TextEditIntent::extend_to(target, position)
+                } else {
+                    TextEditIntent::place_cursor(target, position)
+                }
+            )
+        }
+        Option::None => {
+        }
+    }
+    ret Option[TextEditIntent]::None
 }
 
 /// Scheduler policy for managed applications.
 pub struct ApplicationOptions {
     frame_interval_ms: u32
+    reduced_motion: bool
+    application_key: u32
+    exit_key: u32
 }
 
 impl for ApplicationOptions {
     /// Event-driven UI without periodic frames.
     pub fn event_driven() -> Self {
         ret Self {
-            0_u32
+            0_u32, false, 0_u32, 0_u32
         }
     }
     /// Requests animation ticks at up to `frames_per_second`.
@@ -83,10 +1337,37 @@ impl for ApplicationOptions {
             } else {
                 1000_u32 / fps
             }
+            , false, 0_u32, 0_u32
         }
     }
     pub fn frame_interval_ms(self: Self) -> u32 {
         ret self.frame_interval_ms
+    }
+    /// Disables interpolation while preserving final styles and input state.
+    pub fn with_reduced_motion(self: mut Self, reduced: bool) -> Self {
+        self.reduced_motion = reduced
+        ret self
+    }
+    pub fn reduced_motion(self: Self) -> bool {
+        ret self.reduced_motion
+    }
+    /// Routes one global command key to `Application::update` before focused
+    /// control activation. Zero disables global key capture.
+    pub fn with_application_key(self: mut Self, key: u32) -> Self {
+        self.application_key = key
+        ret self
+    }
+    fn captures_application_key(self: Self, key: u32) -> bool {
+        ret self.application_key != 0_u32 && self.application_key == key
+    }
+    /// Requests a graceful application close when `key` is pressed and the
+    /// current view has not captured that key for a local interaction.
+    pub fn with_exit_key(self: mut Self, key: u32) -> Self {
+        self.exit_key = key
+        ret self
+    }
+    fn requests_exit_key(self: Self, key: u32) -> bool {
+        ret self.exit_key != 0_u32 && self.exit_key == key
     }
 }
 
@@ -95,44 +1376,372 @@ fn runtime_actionable(widget: Widget) -> bool {
     ret kind == widget_button() || kind == widget_icon_button() ||
     kind == widget_icon_card() || kind == widget_checkbox() ||
     kind == widget_link() || kind == widget_radio() ||
-    kind == widget_select() || kind == widget_slider() ||
+    kind == widget_select() || kind == widget_slider() || kind == widget_range_slider() ||
     kind == widget_switch()
 }
 
-fn restore_runtime_widget(ui: mut ReactiveUi, id: str,
-    original: Option[Widget],) -> bool {
-    if id == "" {
+fn runtime_widget_has_attribute(ui: mut ReactiveUi, target: str,
+    name: str,) -> bool {
+    if target == "" {
         ret false
     }
-    match original {
-        Option::Some(widget) => {
-            ret ui.restore_widget(id, widget)
+    match ui.find_widget(target) {
+        Some(widget) => {
+            ret widget.attribute(name).is_some()
         }
-        Option::None => {
+        None => {
+            ret false
+        }
+    }
+}
+
+fn runtime_raw_input_target(ui: mut ReactiveUi, target: str) -> bool {
+    ret runtime_widget_has_attribute(ui, target, "data-luma-raw-input")
+}
+
+fn runtime_secondary_pointer_lock_target(ui: mut ReactiveUi,
+    target: str,) -> bool {
+    ret runtime_widget_has_attribute(ui, target,
+        "data-luma-secondary-pointer-lock",)
+}
+
+fn runtime_keyboard_activation_action(ui: mut ReactiveUi, action: str) -> str {
+    if action == "" {
+        ret ""
+    }
+    match ui.find_widget(action) {
+        Some(widget) => {
+            if runtime_slider_control(widget) {
+                ret ""
+            }
+        }
+        None => {
+        }
+    }
+    ret action
+}
+
+fn runtime_starts_with(value: str, prefix: str) -> bool {
+    ret value.len() >= prefix.len() &&
+    value.slice(0_usize, prefix.len()) == prefix
+}
+
+fn runtime_cursor_for_target(ui: mut ReactiveUi, target: str) -> u32 {
+    match ui.find_widget(target) {
+        Some(widget) => {
+            if widget.style().pointer_cursor() != cursor_default() {
+                ret widget.style().pointer_cursor()
+            }
+        }
+        None => {
+        }
+    }
+    if target == "splitter-explorer" || target == "splitter-assistant" {
+        ret cursor_resize_horizontal()
+    }
+    if target == "splitter-terminal" {
+        ret cursor_resize_vertical()
+    }
+    if target == "code-editor" {
+        ret cursor_text()
+    }
+    ret cursor_default()
+}
+
+fn declared_focus(widget: Widget) -> str {
+    if widget.focused() && editable_widget(widget) && widget.id() != "" {
+        ret widget.id()
+    }
+    for child in widget.children() {
+        let found = declared_focus(child)
+        if found != "" {
+            ret found
+        }
+    }
+    ret ""
+}
+
+fn reconcile_declared_focus(ui: mut ReactiveUi,
+    interaction: InteractionState,) -> InteractionState {
+    let desired = declared_focus(ui.layout().retained_widget())
+    if desired == "" || desired == interaction.focused() {
+        ret interaction
+    }
+    ret interaction.with_focus(desired)
+}
+
+fn runtime_state_style(widget: Widget, active: bool) -> Style {
+    let style = widget.style()
+    if active {
+        ret style.with_opacity(style.opacity() * 0.82_f32)
+    }
+    let color = style.background()
+    ret style.with_background(Color::rgba(
+            brighten_channel(color.red()), brighten_channel(color.green()),
+            brighten_channel(color.blue()), color.alpha(),))
+    .with_border(style.border_width(),
+        Color::rgba(brighten_channel(style.border_color().red()),
+            brighten_channel(style.border_color().green()),
+            brighten_channel(style.border_color().blue()),
+            style.border_color().alpha(),),)
+}
+
+fn runtime_style_target(root: Widget, id: str, active: bool) -> Widget {
+    let mut children = Vec[Widget]::new()
+    for child in root.children() {
+        children.push(runtime_style_target(child, id, active))
+    }
+    let rebuilt = root.with_children(children)
+    if id != "" && rebuilt.id() == id && !rebuilt.disabled() &&
+    runtime_actionable(rebuilt) {
+        ret rebuilt.with_style(runtime_state_style(rebuilt, active))
+    }
+    ret rebuilt
+}
+
+fn runtime_styled_view(sheet: StyleSheet, root: Widget, hovered: str, active: str,
+    focused: str,) -> Widget {
+    ret runtime_freeze_style(sheet.apply(root, hovered, active, focused))
+}
+
+fn runtime_update_interaction_targets(window: Window, ui: mut ReactiveUi,
+    sheet: StyleSheet, targets: Vec[str], hovered: str, active: str,
+    focused: str,) -> ReactiveUi {
+    let mut visited = Vec[str]::new()
+    for target in targets {
+        if target != "" && !runtime_contains(visited, target) {
+            visited.push(target)
+            let _changed = window.patch_interaction_style(ui, sheet, target,
+                target == hovered, target == active, target == focused,)
+        }
+    }
+    ret ui
+}
+
+fn runtime_patch_interaction_targets(window: Window, ui: mut ReactiveUi,
+    sheet: StyleSheet, targets: Vec[str], hovered: str, active: str,
+    focused: str,) -> ReactiveUi {
+    ui = runtime_update_interaction_targets(window, ui, sheet, targets,
+        hovered, active, focused,)
+    if ui.is_dirty() {
+        ret ui
+    }
+    ret ui
+}
+
+fn runtime_update_model_widget(window: Window, ui: mut ReactiveUi,
+    sheet: StyleSheet, raw: Widget, target: str, hovered: str, active: str,
+    focused: str,) -> ReactiveUi {
+    match ui.find_widget(target) {
+        Some(previous) => {
+            let normal_style = sheet.style(raw, false, false, false)
+            .inherit_text(previous.style())
+            let base = raw.with_computed_style(normal_style).with_focus(false)
+            let layout_changed = !previous.style().layout_equivalent(base.style())
+            ui.release_interaction_base(target)
+            if ui.transition_widget(target, base, perf_counter_ms()) {
+                if layout_changed {
+                    ui.invalidate_layout(target)
+                }
+                if target == hovered || target == active || target == focused {
+                    let _styled = window.patch_interaction_style(ui, sheet, target,
+                        target == hovered, target == active, target == focused,)
+                }
+                ret ui
+            }
+        }
+        None => {
+        }
+    }
+    ret ui
+}
+
+fn runtime_patch_model_widget(window: Window, ui: mut ReactiveUi,
+    sheet: StyleSheet, raw: Widget, target: str, hovered: str, active: str,
+    focused: str,) -> ReactiveUi {
+    ui = runtime_update_model_widget(window, ui, sheet, raw, target,
+        hovered, active, focused,)
+    ret ui
+}
+
+fn runtime_patch_model_fragment(window: Window, ui: mut ReactiveUi,
+    sheet: StyleSheet, raw: Widget, hovered: str, active: str,
+    focused: str,) -> ReactiveUi {
+    let fragment_target = raw.id()
+    if fragment_target == "" {
+        ret ui
+    }
+    let styled = runtime_styled_view(sheet, raw, hovered, active, focused)
+    let next = runtime_replace_retained_fragment(
+        ui.layout().retained_widget(), fragment_target, styled,)
+    ui.clear_interaction_bases()
+    ret window.update_reactive(ui, next)
+}
+
+fn runtime_replace_retained_fragment(root: Widget, target: str,
+    replacement: Widget,) -> Widget {
+    if root.id() == target {
+        ret replacement
+    }
+    let mut children = Vec[Widget]::new()
+    for child in root.children() {
+        children.push(runtime_replace_retained_fragment(
+                child, target, replacement,))
+    }
+    ret root.with_children(children)
+}
+
+fn runtime_patch_model_target(window: Window, ui: mut ReactiveUi,
+    sheet: StyleSheet, root: Widget, target: str, hovered: str, active: str,
+    focused: str,) -> ReactiveUi {
+    let mut requested = Vec[str]::new()
+    requested.push(target)
+    let replacements = root.find_many(requested)
+    match replacements.get(0_usize) {
+        Some(raw) => {
+            ret runtime_patch_model_widget(window, ui, sheet, raw, target,
+                hovered, active, focused,)
+        }
+        None => {
+        }
+    }
+    ret window.update_reactive(ui,
+        runtime_styled_view(sheet, root, hovered, active, focused),)
+}
+
+fn runtime_patch_application_target[M: RuntimeApplication](window: Window,
+    ui: mut ReactiveUi, sheet: StyleSheet, current: M, target: str,
+    hovered: str, active: str, focused: str,) -> ReactiveUi {
+    match current.runtime_view_target(target) {
+        Some(raw) => {
+            let patch_target = if raw.id() == "" {
+                target
+            } else {
+                raw.id()
+            }
+            if raw.children().len() > 0_usize {
+                ret runtime_patch_model_fragment(window, ui, sheet, raw,
+                    hovered, active, focused,)
+            }
+            ret runtime_patch_model_widget(window, ui, sheet, raw, patch_target,
+                hovered, active, focused,)
+        }
+        None => {
+        }
+    }
+    ret runtime_patch_model_target(window, ui, sheet, current.runtime_view(),
+        target, hovered, active, focused,)
+}
+
+fn runtime_update_retained_live_control(ui: mut ReactiveUi, target: str,
+    value: f32, range_start: f32, range_end: f32, active: str,) -> ReactiveUi {
+    ui = runtime_update_live_control(ui, target, value, range_start, range_end)
+    if active == target {
+        match ui.interaction_base(target) {
+            Some(base) => {
+                let updated = if base.kind() == widget_range_slider() {
+                    base.with_value(range_start)
+                    .with_attribute("data-luma-range-end", Debug::fmt(range_end))
+                } else {
+                    base.with_value(value)
+                }
+                ui.set_interaction_base(updated)
+            }
+            None => {
+            }
+        }
+    }
+    ret ui
+}
+
+fn runtime_update_application_live_control[M: RuntimeApplication](window: Window,
+    ui: mut ReactiveUi, sheet: StyleSheet, current: M, target: str,
+    value: f32, range_start: f32, range_end: f32, hovered: str,
+    active: str, focused: str,) -> ReactiveUi {
+    ui = runtime_update_retained_live_control(ui, target, value,
+        range_start, range_end, active,)
+    match current.runtime_view_target(target) {
+        Some(raw) => {
+            if raw.id() != "" && raw.id() != target {
+                ui = runtime_update_model_widget(window, ui, sheet, raw,
+                    raw.id(), hovered, active, focused,)
+            }
+        }
+        None => {
+        }
+    }
+    ret ui
+}
+
+fn runtime_patch_application_live_control[M: RuntimeApplication](window: Window,
+    ui: mut ReactiveUi, sheet: StyleSheet, current: M, target: str,
+    value: f32, range_start: f32, range_end: f32, hovered: str,
+    active: str, focused: str,) -> ReactiveUi {
+    ui = runtime_update_application_live_control[M](window, ui, sheet,
+        current, target, value, range_start, range_end, hovered, active,
+        focused,)
+    ret ui
+}
+
+fn runtime_update_model(window: Window, ui: mut ReactiveUi,
+    sheet: StyleSheet, root: Widget, hovered: str, active: str,
+    focused: str,) -> ReactiveUi {
+    // Reconcile the declarative tree without transient pseudo classes. This
+    // keeps interaction snapshots based on current model data instead of
+    // accidentally restoring an older hovered/focused widget after an edit.
+    ui.clear_interaction_bases()
+    ui = window.update_reactive(ui,
+        runtime_styled_view(sheet, root, "", "", ""),)
+    let mut targets = Vec[str]::new()
+    if hovered != "" {
+        targets.push(hovered)
+    }
+    if active != "" {
+        targets.push(active)
+    }
+    if focused != "" {
+        targets.push(focused)
+    }
+    ret runtime_patch_interaction_targets(window, ui, sheet, targets,
+        hovered, active, focused,)
+}
+
+fn runtime_contains(values: Vec[str], expected: str) -> bool {
+    for value in values {
+        if value == expected {
+            ret true
         }
     }
     ret false
 }
 
-fn apply_runtime_state(ui: mut ReactiveUi, id: str, opacity: f32) ->
-Option[Widget] {
-    if id == "" {
-        ret Option[Widget]::None
+fn runtime_freeze_style(root: Widget) -> Widget {
+    let mut children = Vec[Widget]::new()
+    for child in root.children() {
+        children.push(runtime_freeze_style(child))
     }
-    match ui.find_widget(id) {
-        Option::Some(widget) => {
-            if widget.disabled() || !runtime_actionable(widget) {
-                ret Option[Widget]::None
-            }
-            let original = widget
-            let _patched = ui.patch_style(id,
-                widget.style().with_opacity(widget.style().opacity() * opacity),)
-            ret Option[Widget]::Some(original)
-        }
-        Option::None => {
-        }
+    ret root.with_children(children).with_style(root.style())
+}
+
+#attr(test)
+fn runtime_hover_is_stable_declarative_state() -> bool {
+    let button = Widget::button("hover-target", "Hover")
+    let sheet = StyleSheet::default()
+    let first = runtime_styled_view(sheet, button, "hover-target", "", "")
+    let second = runtime_styled_view(sheet, button, "hover-target", "", "")
+    ret first.style().background().packed() ==
+    second.style().background().packed()
+    && first.style().background().packed() !=
+    button.style().background().packed()
+}
+
+fn brighten_channel(value: u8) -> u8 {
+    let raised = value as u32 + 18_u32
+    ret if raised > 255_u32 {
+        255_u8
+    } else {
+        raised as u8
     }
-    ret Option[Widget]::None
 }
 
 /// Runs an application with retained rendering, automatic input state,
@@ -146,6 +1755,97 @@ pub fn run_application[A: Application](window: Window, model: A) -> A {
 /// default event-driven policy.
 pub fn run_application_with_options[A: Application](window: Window, model: A,
     options: ApplicationOptions,) -> A {
+    let finished = run_runtime_application[ApplicationAdapter[A]](window,
+        ApplicationAdapter[A] {
+            model
+        }
+        , options,)
+    ret finished.value
+}
+
+/// Runs an application that can supply exact widget patches for hot updates.
+/// Hover, focus, input and other stable-node changes stay on the retained fast
+/// path while structural events transparently use the complete view.
+pub fn run_incremental_application[A: IncrementalApplication](window: Window,
+    model: A,) -> A {
+    ret run_incremental_application_with_options(window, model,
+        ApplicationOptions::event_driven(),)
+}
+
+pub fn run_incremental_application_with_options[A: IncrementalApplication](
+    window: Window, model: A, options: ApplicationOptions,) -> A {
+    let finished = run_runtime_application[IncrementalApplicationAdapter[A]](window,
+        IncrementalApplicationAdapter[A] {
+            model
+        }
+        , options,)
+    ret finished.value
+}
+
+/// Runs an incremental application whose render-surface pixels are recorded
+/// into Luma's active Vulkan command buffer without an intermediate texture.
+pub fn run_direct_render_application[A: DirectRenderApplication](window: Window,
+    model: A,) -> A {
+    let finished = run_runtime_application[DirectRenderApplicationAdapter[A]](
+        window, DirectRenderApplicationAdapter[A] {
+            model
+        }
+        ,
+        ApplicationOptions::event_driven(),)
+    ret finished.value
+}
+
+fn runtime_present[M: RuntimeApplication](window: Window, ui: mut ReactiveUi,
+    current: M, elapsed_ms: u64, rebuild_retained_cache: bool,) -> ReactiveUi {
+    let surface_id = current.runtime_render_surface_id()
+    if surface_id == "" {
+        ret window.draw_reactive(ui)
+    }
+    let overlay_ids = current.runtime_render_overlay_ids()
+    let mut overlay_layouts = Vec[WidgetLayout]::new()
+    if rebuild_retained_cache {
+        for overlay_id in overlay_ids {
+            match ui.find_layout(overlay_id) {
+                Some(layout) => overlay_layouts.push(layout)
+                None => {
+                }
+            }
+        }
+    }
+    let prepared = window.prepare_frame(ui.layout(), true)
+    // The prepared transaction needs overlay IDs only so the retained
+    // base excludes those subtrees. Keep the actual layouts for the
+    // independent transparent overlay cache instead of passing one owned
+    // Vec through two native-facing calls.
+    .with_overlays(current.runtime_render_overlay_ids(),
+        Vec[WidgetLayout]::new(), true,)
+    let surface = match prepared.surface(surface_id) {
+        Some(value) => value
+        None => {
+            ret ui
+        }
+    }
+    if rebuild_retained_cache {
+        if !window.cache_prepared_frame(prepared) ||
+        !window.cache_overlay_layouts(overlay_layouts) {
+            ret ui
+        }
+    }
+    let borrowed = window.prepare_cached_vulkan_frame(
+        Vec[WidgetLayout]::new(), true,)
+    if !borrowed.valid() ||
+    !current.runtime_prepare_direct_frame(borrowed, surface, elapsed_ms) ||
+    !window.begin_vulkan_composition(borrowed) ||
+    !current.runtime_record_direct_frame(borrowed, surface, elapsed_ms) ||
+    !window.present_vulkan_frame(borrowed) {
+        ret ui
+    }
+    ui.commit_rendered()
+    ret ui
+}
+
+fn run_runtime_application[M: RuntimeApplication](window: Window, model: M,
+    options: ApplicationOptions,) -> M {
     if !window.available() {
         ret model
     }
@@ -154,17 +1854,64 @@ pub fn run_application_with_options[A: Application](window: Window, model: A,
     let _active_font = fonts.activate_default(window, 14.0_f32, 400_u32)
     let mut current = model
     let mut interaction = InteractionState::new()
-    let mut ui = window.reactive(current.view())
     let mut hovered = ""
-    let mut hovered_base = Option[Widget]::None
     let mut active = ""
-    let mut active_base = Option[Widget]::None
+    let mut last_width = window.width()
+    let mut last_height = window.height()
+    let mut ui = window.reactive(
+        runtime_styled_view(window.stylesheet(), current.runtime_view(), "", "", ""),)
+    ui = ui.with_reduced_motion(options.reduced_motion())
+    let _initial_cursor = window.set_cursor(cursor_default())
+    interaction = interaction.with_focus(
+        declared_focus(ui.layout().retained_widget()),)
     let started = perf_counter_ms()
-    let mut next_tick = started + options.frame_interval_ms() as u64
+    let interaction_frame_ms = 8_u64
+    let mut next_interaction_frame = started
+    let mut model_interval = current.runtime_background_interval_ms()
+    let mut next_tick = started + if model_interval > 0_u32 {
+        model_interval as u64
+    } else {
+        options.frame_interval_ms() as u64
+    }
+    let mut model_updated = false
+    let mut direct_frame_pending = current.runtime_render_surface_id() != ""
+    let mut pending_key_text = ""
+    let mut range_thumb = 0_u32
+    // Pointer motion is sampled at native speed but reduced to one preview
+    // update per displayed frame. These scalar slots deliberately avoid an
+    // allocated event queue on the interactive hot path.
+    let mut pending_motion_target = ""
+    let mut pending_motion_x = 0.0_f32
+    let mut pending_motion_y = 0.0_f32
+    let mut pending_motion_dx = 0.0_f32
+    let mut pending_motion_dy = 0.0_f32
+    let mut pending_motion_timestamp_ns = 0_u64
+    let mut pending_motion_buttons = 0_u32
+    let mut pending_motion_modifiers = 0_u32
+    let mut pending_control_target = ""
+    let mut pending_control_value = 0.0_f32
+    let mut pending_control_start = 0.0_f32
+    let mut pending_control_end = 0.0_f32
+    let mut pending_control_range = false
 
     while window.is_open() {
         let now = perf_counter_ms()
-        let timeout = if options.frame_interval_ms() == 0_u32 {
+        let interval = if model_interval > 0_u32 {
+            model_interval
+        } else {
+            options.frame_interval_ms()
+        }
+        let timeout = if ui.is_dirty() || direct_frame_pending {
+            0_u32
+        } elif pending_control_target != "" || pending_motion_target != "" {
+            // A final motion sample can arrive just before the frame boundary
+            // and then be followed by complete pointer stillness. Wake at the
+            // boundary ourselves; never wait for release, focus, or another
+            // motion event to make that sample visible.
+            runtime_pending_interaction_timeout(now, next_interaction_frame)
+        } elif ui.has_active_transitions() {
+            16_u32
+        } elif interval == 0_u32 {
             1000_u32
         } elif now >= next_tick {
             0_u32
@@ -173,84 +1920,1202 @@ pub fn run_application_with_options[A: Application](window: Window, model: A,
         }
         let event = window.wait(timeout)
         let after_wait = perf_counter_ms()
-        if options.frame_interval_ms() > 0_u32 && after_wait >= next_tick {
-            current = current.update(AppEvent::tick_event(after_wait - started))
-            ui = window.update_reactive(ui, current.view())
-            next_tick = after_wait + options.frame_interval_ms() as u64
+        if ui.has_active_transitions() && event.kind() == event_none() {
+            ui = window.advance_transitions(ui, after_wait)
+        }
+        // A release commits its final coordinate directly, so an unpainted
+        // preview from the same batch must not rebuild the application first.
+        // Other order-sensitive events observe one reduced preview before
+        // they run. Pointer callbacks follow the same once-per-frame rule.
+        if event.kind() == event_pointer_up() {
+            if pending_motion_target != "" {
+                let _pointer_move_default = ui.dispatch_event(
+                    pending_motion_target,
+                    UiEvent::pointer(ui_event_pointer_move(),
+                        pending_motion_target, pending_motion_x,
+                        pending_motion_y, pending_motion_dx,
+                        pending_motion_dy,),)
+                if runtime_raw_input_target(ui, pending_motion_target) {
+                    current = current.runtime_update(AppEvent::raw_pointer_sample(
+                            7_u32, pending_motion_target, pending_motion_x,
+                            pending_motion_y, pending_motion_dx, pending_motion_dy,
+                            pending_motion_buttons, pending_motion_modifiers,
+                            pending_motion_timestamp_ns,))
+                    model_updated = true
+                }
+            }
+            pending_motion_target = ""
+            pending_motion_dx = 0.0_f32
+            pending_motion_dy = 0.0_f32
+            pending_motion_timestamp_ns = 0_u64
+            pending_motion_buttons = 0_u32
+            pending_motion_modifiers = 0_u32
+            pending_control_target = ""
+        } elif event.kind() != event_pointer_move() {
+            if pending_control_target != "" {
+                let preview = if pending_control_range {
+                    AppEvent::range_event(pending_control_target,
+                        pending_control_start, pending_control_end,)
+                } else {
+                    AppEvent::control_event(pending_control_target,
+                        pending_control_value,)
+                }
+                current = current.runtime_update(preview)
+                model_updated = true
+                ui = runtime_update_application_live_control[M](window, ui,
+                    window.stylesheet(), current, pending_control_target,
+                    pending_control_value, pending_control_start,
+                    pending_control_end, hovered, active,
+                    interaction.focused(),)
+            }
+            if pending_motion_target != "" {
+                let _pointer_move_default = ui.dispatch_event(
+                    pending_motion_target,
+                    UiEvent::pointer(ui_event_pointer_move(),
+                        pending_motion_target, pending_motion_x,
+                        pending_motion_y, pending_motion_dx,
+                        pending_motion_dy,),)
+                if runtime_raw_input_target(ui, pending_motion_target) {
+                    current = current.runtime_update(AppEvent::raw_pointer_sample(
+                            7_u32, pending_motion_target, pending_motion_x,
+                            pending_motion_y, pending_motion_dx, pending_motion_dy,
+                            pending_motion_buttons, pending_motion_modifiers,
+                            pending_motion_timestamp_ns,))
+                    model_updated = true
+                }
+            }
+            pending_motion_target = ""
+            pending_motion_dx = 0.0_f32
+            pending_motion_dy = 0.0_f32
+            pending_motion_timestamp_ns = 0_u64
+            pending_motion_buttons = 0_u32
+            pending_motion_modifiers = 0_u32
+            pending_control_target = ""
+        }
+        if interval > 0_u32 && after_wait >= next_tick &&
+        !runtime_input_precedes_background(event.kind()) {
+            let trace_tick_start = perf_counter_ms()
+            let before_revision = current.runtime_background_revision()
+            current = current.runtime_update(AppEvent::tick_event(after_wait - started))
+            let trace_tick_updated = perf_counter_ms()
+            model_updated = true
+            if current.runtime_background_revision() != before_revision {
+                // Incremental applications may expose the fragment affected
+                // by a scheduled model transition. Non-incremental adapters
+                // return None and retain the full reconciliation path.
+                match current.runtime_view_target("__luma_background__") {
+                    Some(raw) => {
+                        let trace_tick_view = perf_counter_ms()
+                        let target = raw.id()
+                        ui = if target == "" {
+                            runtime_update_model(window, ui,
+                                window.stylesheet(), current.runtime_view(),
+                                hovered, active, interaction.focused(),)
+                        } elif raw.children().len() > 0_usize {
+                            runtime_patch_model_fragment(window, ui,
+                                window.stylesheet(), raw, hovered, active,
+                                interaction.focused(),)
+                        } else {
+                            runtime_patch_model_widget(window, ui,
+                                window.stylesheet(), raw, target, hovered,
+                                active, interaction.focused(),)
+                        }
+                        eprintln("LUMA_TRACE tick update=" + Debug::fmt(trace_tick_updated - trace_tick_start) +
+                            " view=" + Debug::fmt(trace_tick_view - trace_tick_updated) +
+                            " patch=" + Debug::fmt(perf_counter_ms() - trace_tick_view))
+                    }
+                    None => {
+                        ui = runtime_update_model(window, ui,
+                            window.stylesheet(), current.runtime_view(),
+                            hovered, active, interaction.focused(),)
+                    }
+                }
+            }
+            next_tick = after_wait + interval as u64
+        } elif interval == 0_u32 {
+            next_tick = after_wait
         }
         if event.kind() == event_close() {
-            break
+            current = current.runtime_update(AppEvent::close_event())
+            model_updated = true
+            ui = runtime_update_model(window, ui, window.stylesheet(),
+                current.runtime_view(), hovered, active, interaction.focused(),)
+            if current.runtime_can_close() {
+                break
+            }
+            continue
         }
-        if event.kind() == event_resize() {
-            ui = window.relayout_reactive(ui)
-        } elif event.kind() == event_pointer_move() {
-            let next = ui.hit(event.x(), event.y())
-            if next != hovered {
-                let _restored = restore_runtime_widget(ui, hovered, hovered_base)
-                hovered = next
-                hovered_base = apply_runtime_state(ui, hovered, 0.92_f32)
-                if ui.is_dirty() {
-                    ui = window.draw_reactive(ui)
+        let duplicate_text = event.kind() == event_text_input() &&
+        pending_key_text != "" && event.text() == pending_key_text
+        if event.kind() == event_text_input() {
+            pending_key_text = ""
+        }
+        let edit = if duplicate_text {
+            Option[TextEditIntent]::None
+        } else {
+            runtime_text_edit(window, interaction.focused(),
+                ui.find_widget(interaction.focused()), event,)
+        }
+        match edit {
+            Option::Some(intent) => {
+                let target = intent.target()
+                let _input_default = ui.dispatch_event(target,
+                    UiEvent::input(target, intent.text()),)
+                current = current.runtime_update(AppEvent::edit_event(intent))
+                model_updated = true
+                ui = runtime_patch_application_target[M](window, ui, window.stylesheet(),
+                    current, target, hovered, active,
+                    interaction.focused(),)
+            }
+            Option::None => {
+            }
+        }
+        if edit.is_some() {
+        } elif event.kind() == event_focus_lost() {
+            let _relative_released = window.set_relative_mouse_mode(false)
+            current = current.runtime_update(AppEvent::focus_lost_event())
+            model_updated = true
+            let previous_hovered = hovered
+            let previous_active = active
+            let mut committed_control = false
+            if runtime_starts_with(previous_active, "splitter-") {
+                current = current.runtime_update(AppEvent::pointer_event(
+                        8_u32, previous_active, event.x(), event.y(),))
+                model_updated = true
+            }
+            match runtime_current_control_commit(ui, previous_active,
+                range_thumb,) {
+                Some(change) => {
+                    current = current.runtime_update(change)
+                    current = current.runtime_update(
+                        AppEvent::action_event(previous_active),)
+                    model_updated = true
+                    committed_control = true
                 }
+                None => {
+                }
+            }
+            hovered = ""
+            active = ""
+            interaction = interaction.pointer_cancel()
+            range_thumb = 0_u32
+            let mut targets = Vec[str]::new()
+            if previous_hovered != "" {
+                targets.push(previous_hovered)
+            }
+            if previous_active != "" {
+                targets.push(previous_active)
+            }
+            ui = if committed_control {
+                runtime_update_model(window, ui, window.stylesheet(),
+                    current.runtime_view(), hovered, active,
+                    interaction.focused(),)
+            } else {
+                runtime_patch_interaction_targets(window, ui,
+                    window.stylesheet(), targets, hovered, active,
+                    interaction.focused(),)
+            }
+        } elif event.kind() == event_resize() {
+            let width = window.width()
+            let height = window.height()
+            if width != last_width || height != last_height {
+                last_width = width
+                last_height = height
+                ui = window.relayout_reactive(ui)
+            }
+        } elif event.kind() == event_pointer_move() {
+            if runtime_starts_with(interaction.active(), "splitter-") {
+                current = current.runtime_update(AppEvent::pointer_event(
+                        7_u32, interaction.active(), event.x(), event.y(),))
+                model_updated = true
+                ui = runtime_update_model(window, ui, window.stylesheet(),
+                    current.runtime_view(), hovered, active, interaction.focused(),)
+            }
+            if active != "" && active == interaction.focused() {
+                match runtime_pointer_edit(window, ui, interaction.focused(),
+                    event.x(), event.y(), true,) {
+                    Option::Some(intent) => {
+                        let target = intent.target()
+                        current = current.runtime_update(AppEvent::edit_event(intent))
+                        model_updated = true
+                        ui = runtime_patch_application_target[M](window, ui,
+                            window.stylesheet(), current, target, hovered,
+                            active, interaction.focused(),)
+                    }
+                    Option::None => {
+                    }
+                }
+            }
+            let control_target = active
+            if range_thumb == 3_u32 {
+                range_thumb = runtime_range_thumb(ui, control_target,
+                    event.x(),)
+            }
+            match runtime_control_change(ui, control_target, event.x(), false, range_thumb) {
+                Some(change) => {
+                    let control_value = change.value()
+                    let range_start = change.range_start()
+                    let range_end = change.range_end()
+                    let retained_control = match ui.find_widget(control_target) {
+                        Some(control) => {
+                            control.kind() == widget_slider() ||
+                            control.kind() == widget_range_slider()
+                        }
+                        None => {
+                            false
+                        }
+                    }
+                    if retained_control {
+                        pending_control_target = control_target
+                        pending_control_value = control_value
+                        pending_control_start = range_start
+                        pending_control_end = range_end
+                        pending_control_range = match ui.find_widget(control_target) {
+                            Some(control) => control.kind() == widget_range_slider()
+                            None => false
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+            let hit = ui.hit(event.x(), event.y())
+            let next = if runtime_raw_input_target(ui, active) {
+                active
+            } else {
+                hit
+            }
+            // SDL timestamps let a platform backend coalesce aggressively
+            // without allowing an older queued sample to move a captured
+            // control backwards after a newer one was already observed.
+            if runtime_pointer_sample_is_current(event.timestamp_ns(),
+                pending_motion_timestamp_ns,) {
+                pending_motion_target = next
+                pending_motion_x = event.x()
+                pending_motion_y = event.y()
+                pending_motion_dx = pending_motion_dx + event.dx()
+                pending_motion_dy = pending_motion_dy + event.dy()
+                pending_motion_timestamp_ns = event.timestamp_ns()
+                pending_motion_buttons = event.buttons()
+                pending_motion_modifiers = event.modifiers()
+            }
+            let _cursor_changed = window.set_cursor(runtime_cursor_for_target(ui, next))
+            if next != hovered {
+                let previous_hovered = hovered
+                hovered = next
+                let mut targets = Vec[str]::new()
+                if previous_hovered != "" {
+                    targets.push(previous_hovered)
+                }
+                if hovered != "" {
+                    targets.push(hovered)
+                }
+                ui = runtime_update_interaction_targets(window, ui,
+                    window.stylesheet(), targets, hovered, active,
+                    interaction.focused(),)
             }
             interaction = interaction.pointer_move_to(next)
         } elif event.kind() == event_pointer_down() {
             let previous_focus = interaction.focused()
             let target = ui.hit(event.x(), event.y())
+            let previous_active = active
+            if previous_active != "" {
+                match runtime_current_control_commit(ui, previous_active,
+                    range_thumb,) {
+                    Some(previous_commit) => {
+                        let previous_value = previous_commit.value()
+                        let previous_start = previous_commit.range_start()
+                        let previous_end = previous_commit.range_end()
+                        current = current.runtime_update(previous_commit)
+                        current = current.runtime_update(
+                            AppEvent::action_event(previous_active),)
+                        model_updated = true
+                        ui = runtime_update_application_live_control[M](window,
+                            ui, window.stylesheet(), current,
+                            previous_active, previous_value, previous_start,
+                            previous_end, hovered, previous_active,
+                            interaction.focused(),)
+                    }
+                    None => {
+                    }
+                }
+                active = ""
+                interaction = interaction.pointer_cancel()
+                pending_control_target = ""
+            }
+            range_thumb = runtime_range_thumb(ui, target, event.x())
+            let _pointer_down_default = ui.dispatch_event(target,
+                UiEvent::pointer(ui_event_pointer_down(), target, event.x(), event.y(), event.dx(), event.dy()),)
             interaction = interaction.pointer_down_on(target, ui.find_widget(target))
-            if previous_focus != interaction.focused() {
-                if previous_focus != "" {
-                    let _unfocused = ui.patch_focus(previous_focus, false)
-                }
-                if interaction.focused() != "" {
-                    let _focused = ui.patch_focus(interaction.focused(), true)
+            if runtime_raw_input_target(ui, target) {
+                current = current.runtime_update(
+                    AppEvent::raw_pointer_event(6_u32, target, event),)
+                model_updated = true
+                if event.key() == 3_u32 &&
+                runtime_secondary_pointer_lock_target(ui, target) {
+                    let _relative_captured = window.set_relative_mouse_mode(true)
                 }
             }
-            active = interaction.active()
-            active_base = apply_runtime_state(ui, active, 0.82_f32)
-            if ui.is_dirty() {
-                ui = window.draw_reactive(ui)
+            // Establish capture before recording the preview. The preview is
+            // reduced with subsequent motion and applied once at the frame
+            // boundary, together with its dependent application fragment.
+            active = target
+            match runtime_control_change(ui, target, event.x(), false, range_thumb) {
+                Some(change) => {
+                    let control_value = change.value()
+                    let range_start = change.range_start()
+                    let range_end = change.range_end()
+                    let retained_control = match ui.find_widget(target) {
+                        Some(control) => {
+                            control.kind() == widget_slider() ||
+                            control.kind() == widget_range_slider()
+                        }
+                        None => {
+                            false
+                        }
+                    }
+                    if retained_control {
+                        pending_control_target = target
+                        pending_control_value = control_value
+                        pending_control_start = range_start
+                        pending_control_end = range_end
+                        pending_control_range = match ui.find_widget(target) {
+                            Some(control) => control.kind() == widget_range_slider()
+                            None => false
+                        }
+                    }
+                }
+                None => {
+                }
             }
+            if runtime_starts_with(target, "splitter-") {
+                current = current.runtime_update(AppEvent::pointer_event(
+                        6_u32, target, event.x(), event.y(),))
+                model_updated = true
+                ui = runtime_update_model(window, ui, window.stylesheet(),
+                    current.runtime_view(), hovered, active, interaction.focused(),)
+            }
+            match runtime_pointer_edit(window, ui, target,
+                event.x(), event.y(), false,) {
+                Option::Some(intent) => {
+                    let edit_target = intent.target()
+                    current = current.runtime_update(AppEvent::edit_event(intent))
+                    model_updated = true
+                    ui = runtime_patch_application_target[M](window, ui,
+                        window.stylesheet(), current, edit_target, hovered,
+                        active, interaction.focused(),)
+                }
+                Option::None => {
+                }
+            }
+            // `target` is the authoritative hit result for this press. Keep
+            // pointer capture in the runtime's scalar state so subsequent
+            // motion cannot lose it through an aggregate state round-trip.
+            let mut targets = Vec[str]::new()
+            if hovered != "" {
+                targets.push(hovered)
+            }
+            if previous_active != "" {
+                targets.push(previous_active)
+            }
+            if active != "" {
+                targets.push(active)
+            }
+            if previous_focus != "" {
+                targets.push(previous_focus)
+            }
+            if interaction.focused() != "" {
+                targets.push(interaction.focused())
+            }
+            ui = runtime_update_interaction_targets(window, ui,
+                window.stylesheet(), targets, hovered, active,
+                interaction.focused(),)
         } elif event.kind() == event_pointer_up() {
             let target = ui.hit(event.x(), event.y())
-            let action = interaction.release_target(target)
-            let _restored = restore_runtime_widget(ui, active, active_base)
+            if runtime_starts_with(interaction.active(), "splitter-") {
+                current = current.runtime_update(AppEvent::pointer_event(
+                        8_u32, interaction.active(), event.x(), event.y(),))
+                model_updated = true
+                ui = runtime_update_model(window, ui, window.stylesheet(),
+                    current.runtime_view(), hovered, active, interaction.focused(),)
+            }
+            let previous_active = active
+            if runtime_raw_input_target(ui, previous_active) {
+                current = current.runtime_update(
+                    AppEvent::raw_pointer_event(8_u32, previous_active, event),)
+                model_updated = true
+                if event.key() == 3_u32 &&
+                runtime_secondary_pointer_lock_target(ui, previous_active) {
+                    let _relative_released = window.set_relative_mouse_mode(false)
+                }
+            }
+            let captured_control = match ui.find_widget(previous_active) {
+                Some(control) => runtime_slider_control(control)
+                None => false
+            }
+            let action = runtime_release_action(ui, previous_active, target)
+            let release_target = if captured_control {
+                previous_active
+            } else {
+                target
+            }
+            let _pointer_up_default = ui.dispatch_event(release_target,
+                UiEvent::pointer(ui_event_pointer_up(), release_target,
+                    event.x(), event.y(), event.dx(), event.dy(),),)
+            let click_default = if action != "" {
+                ui.dispatch_event(action,
+                    UiEvent::pointer(ui_event_click(), action, event.x(), event.y(), 0.0_f32, 0.0_f32),)
+            } else {
+                true
+            }
             active = ""
-            active_base = Option[Widget]::None
             interaction = interaction.pointer_up_on(target)
-            if action != "" {
-                current = current.update(AppEvent::action_event(action))
-                ui = window.update_reactive(ui, current.view())
-                hovered = interaction.hovered()
-                hovered_base = apply_runtime_state(ui, hovered, 0.92_f32)
-            } elif ui.is_dirty() {
-                ui = window.draw_reactive(ui)
+            if action != "" && click_default {
+                let trace_action_start = perf_counter_ms()
+                let mut committed_value = 0.0_f32
+                let mut committed_range_start = 0.0_f32
+                let mut committed_range_end = 0.0_f32
+                let mut settle_range = false
+                match runtime_control_change(ui, action, event.x(), true, range_thumb) {
+                    Some(change) => {
+                        committed_value = change.value()
+                        committed_range_start = change.range_start()
+                        committed_range_end = change.range_end()
+                        settle_range = match ui.find_widget(action) {
+                            Some(control) => {
+                                control.kind() == widget_range_slider() &&
+                                control.range_ticks() >= 2_usize
+                            }
+                            None => {
+                                false
+                            }
+                        }
+                        current = current.runtime_update(change)
+                        model_updated = true
+                        if settle_range {
+                            let _settling = ui.transition_range(action,
+                                committed_range_start, committed_range_end,
+                                perf_counter_ms(), 90_u64,)
+                        }
+                    }
+                    None => {
+                    }
+                }
+                current = current.runtime_update(AppEvent::action_event(action))
+                let trace_action_updated = perf_counter_ms()
+                model_updated = true
+                match current.runtime_view_target(action) {
+                    Some(raw) => {
+                        let trace_action_view = perf_counter_ms()
+                        // Incremental applications explicitly declaring a target
+                        // fragment do not need a complete tree reconciliation on
+                        // every action. Slider releases retain their live control;
+                        // ordinary buttons replace the declared dependent fragment.
+                        // Materialize the target exactly once: application view
+                        // builders can be substantial in unoptimized builds.
+                        if !captured_control {
+                            ui = runtime_patch_model_fragment(window, ui,
+                                window.stylesheet(), raw, hovered, active,
+                                interaction.focused(),)
+                        } elif settle_range {
+                            let raw_id = raw.id()
+                            if raw_id != "" && raw_id != action {
+                                ui = runtime_update_model_widget(window, ui,
+                                    window.stylesheet(), raw, raw_id,
+                                    hovered, active,
+                                    interaction.focused(),)
+                            }
+                        } else {
+                            ui = runtime_update_application_live_control[M](window,
+                                ui, window.stylesheet(), current, action,
+                                committed_value, committed_range_start,
+                                committed_range_end, hovered, previous_active,
+                                interaction.focused(),)
+                        }
+                        let mut interaction_targets = Vec[str]::new()
+                        interaction_targets.push(action)
+                        interaction_targets.push(interaction.focused())
+                        interaction_targets.push(hovered)
+                        ui = runtime_update_interaction_targets(window, ui,
+                            window.stylesheet(), interaction_targets, hovered,
+                            active, interaction.focused(),)
+                        eprintln("LUMA_TRACE action=" + action + " update=" +
+                            Debug::fmt(trace_action_updated - trace_action_start) + " view=" +
+                            Debug::fmt(trace_action_view - trace_action_updated) + " patch=" +
+                            Debug::fmt(perf_counter_ms() - trace_action_view))
+                    }
+                    None => {
+                        ui = runtime_update_model(window, ui, window.stylesheet(),
+                            current.runtime_view(), hovered, active,
+                            interaction.focused(),)
+                        let previous_focus = interaction.focused()
+                        interaction = reconcile_declared_focus(ui, interaction)
+                        hovered = interaction.hovered()
+                        let mut interaction_targets = Vec[str]::new()
+                        interaction_targets.push(action)
+                        interaction_targets.push(previous_focus)
+                        interaction_targets.push(interaction.focused())
+                        interaction_targets.push(hovered)
+                        ui = runtime_patch_interaction_targets(window, ui,
+                            window.stylesheet(), interaction_targets, hovered,
+                            active, interaction.focused(),)
+                    }
+                }
+            } else {
+                let mut targets = Vec[str]::new()
+                if previous_active != "" {
+                    targets.push(previous_active)
+                }
+                if hovered != "" {
+                    targets.push(hovered)
+                }
+                ui = runtime_patch_interaction_targets(window, ui,
+                    window.stylesheet(), targets, hovered, active,
+                    interaction.focused(),)
+            }
+            range_thumb = 0_u32
+        } elif event.kind() == event_scroll() {
+            let target = ui.hit(event.x(), event.y())
+            let previous_scroll_y = runtime_default_scroll_y(ui, target)
+            let scroll_default = ui.dispatch_event(target,
+                UiEvent::pointer(ui_event_scroll(), target, event.x(), event.y(), event.wheel_x(), event.wheel_y()),)
+            if scroll_default {
+                current = current.runtime_update(AppEvent::scroll_event(target,
+                        event.wheel_x(), event.wheel_y(),))
+                model_updated = true
+            }
+            ui = runtime_update_model(window, ui, window.stylesheet(),
+                current.runtime_view(), hovered, active, interaction.focused(),)
+            if scroll_default {
+                // The application reconciliation above may replace the
+                // container's declarative style. Apply the retained viewport
+                // offset afterward so it survives model updates.
+                ui = runtime_apply_default_scroll(window, ui, target,
+                    event.wheel_y(), previous_scroll_y,)
+            }
+        } elif event.kind() == event_key_down() &&
+        options.requests_exit_key(event.key()) &&
+        !runtime_model_captures_application_key(
+            current.runtime_view(), event.key(),) {
+            current = current.runtime_update(AppEvent::close_event())
+            model_updated = true
+            ui = runtime_update_model(window, ui, window.stylesheet(),
+                current.runtime_view(), hovered, active, interaction.focused(),)
+            if current.runtime_can_close() {
+                break
             }
         } elif event.kind() == event_key_down() && event.key() == key_tab() {
-            let previous_focus = interaction.focused()
+            let _key_default = ui.dispatch_event(interaction.focused(),
+                UiEvent::keyboard(ui_event_key_down(), interaction.focused(), event.key(), event.modifiers()),)
             interaction = if event.shift() {
                 interaction.focus_previous(ui.layout().retained_widget())
             } else {
                 interaction.focus_next(ui.layout().retained_widget())
             }
-            if previous_focus != "" {
-                let _unfocused = ui.patch_focus(previous_focus, false)
+            // Keyboard focus is an accessibility-visible state, and Tab is a
+            // low-frequency structural navigation event. Reconcile from the
+            // declarative model so both the newly focused control and the
+            // previously focused control receive authoritative :focus styles.
+            // The old paint-only interaction snapshot can otherwise be absent
+            // after a retained fragment replacement and leave focus invisible.
+            ui.clear_interaction_bases()
+            ui = window.update_reactive(ui, runtime_styled_view(
+                    window.stylesheet(), current.runtime_view(), hovered,
+                    active, interaction.focused(),),)
+        } elif event.kind() == event_key_down() &&
+        (options.captures_application_key(event.key()) ||
+            runtime_model_captures_application_key(
+                current.runtime_view(), event.key(),)) {
+            let patch_target = runtime_model_application_key_target(
+                current.runtime_view(), event.key(),)
+            current = current.runtime_update(AppEvent::key_event(
+                    event.key(), event.shift(), event.control(), event.modifiers(),
+                    interaction.focused(),))
+            model_updated = true
+            ui = if patch_target != "" && patch_target != "true" {
+                runtime_patch_application_target[M](window, ui,
+                    window.stylesheet(), current, patch_target, hovered,
+                    active, interaction.focused(),)
+            } else {
+                runtime_update_model(window, ui, window.stylesheet(),
+                    current.runtime_view(), hovered, active,
+                    interaction.focused(),)
             }
-            if interaction.focused() != "" {
-                let _focused = ui.patch_focus(interaction.focused(), true)
-            }
-            if ui.is_dirty() {
-                ui = window.draw_reactive(ui)
+        } elif runtime_keyboard_control_target(ui,
+            interaction.focused(), event,) {
+            let target = interaction.focused()
+            let key_default = ui.dispatch_event(target,
+                UiEvent::keyboard(ui_event_key_down(), target,
+                    event.key(), event.modifiers(),),)
+            if key_default {
+                match runtime_keyboard_control_change(ui, target, event) {
+                    Some(change) => {
+                        current = current.runtime_update(change)
+                        current = current.runtime_update(
+                            AppEvent::action_event(target),)
+                        model_updated = true
+                        ui = runtime_update_model(window, ui,
+                            window.stylesheet(), current.runtime_view(),
+                            hovered, active, interaction.focused(),)
+                    }
+                    None => {
+                    }
+                }
             }
         } elif event.kind() == event_key_down() &&
         (event.key() == key_enter() || event.key() == 32_u32) {
-            let action = interaction.focused_action(ui.layout().retained_widget())
-            if action != "" {
-                current = current.update(AppEvent::action_event(action))
-                ui = window.update_reactive(ui, current.view())
+            let key_default = ui.dispatch_event(interaction.focused(),
+                UiEvent::keyboard(ui_event_key_down(), interaction.focused(), event.key(), event.modifiers()),)
+            let action = runtime_keyboard_activation_action(ui,
+                interaction.focused_action(ui.layout().retained_widget()),)
+            if action != "" && key_default {
+                let _click_default = ui.dispatch_event(action,
+                    UiEvent::new(ui_event_click(), action),)
+                match runtime_control_change(ui, action, 0.0_f32, true, 0_u32) {
+                    Some(change) => {
+                        current = current.runtime_update(change)
+                        model_updated = true
+                    }
+                    None => {
+                    }
+                }
+                current = current.runtime_update(AppEvent::action_event(action))
+                model_updated = true
+                ui = runtime_update_model(window, ui, window.stylesheet(),
+                    current.runtime_view(), hovered, active, interaction.focused(),)
+            } elif runtime_activation_falls_back_to_application_key(action,
+                event, key_default,) {
+                // Enter in a text field is not a control activation. Preserve
+                // it as an application command so address bars and dialogs
+                // can commit their current editor value.
+                current = current.runtime_update(AppEvent::key_event(
+                        event.key(), event.shift(), event.control(), event.modifiers(),
+                        interaction.focused(),))
+                model_updated = true
+                ui = runtime_update_model(window, ui, window.stylesheet(),
+                    current.runtime_view(), hovered, active,
+                    interaction.focused(),)
             }
+        } elif runtime_editor_reserves_printable_key(
+            ui.find_widget(interaction.focused()), event,) {
+            let _key_default = ui.dispatch_event(interaction.focused(),
+                UiEvent::keyboard(ui_event_key_down(), interaction.focused(),
+                    event.key(), event.modifiers(),),)
+            match runtime_printable_key_text(event) {
+                Some(text) => {
+                    let target = interaction.focused()
+                    current = current.runtime_update(AppEvent::edit_event(
+                            TextEditIntent::insert(target, text),))
+                    model_updated = true
+                    ui = runtime_patch_application_target[M](window, ui,
+                        window.stylesheet(), current, target, hovered, active,
+                        interaction.focused(),)
+                    pending_key_text = text
+                }
+                None => {
+                }
+            }
+        } elif event.kind() == event_key_down() {
+            let key_default = ui.dispatch_event(interaction.focused(),
+                UiEvent::keyboard(ui_event_key_down(), interaction.focused(), event.key(), event.modifiers()),)
+            if key_default {
+                current = current.runtime_update(AppEvent::key_event(
+                        event.key(), event.shift(), event.control(), event.modifiers(),
+                        interaction.focused(),))
+                model_updated = true
+            }
+            ui = runtime_update_model(window, ui, window.stylesheet(),
+                current.runtime_view(), hovered, active, interaction.focused(),)
+        } elif event.kind() == event_key_up() {
+            let _key_up_default = ui.dispatch_event(interaction.focused(),
+                UiEvent::keyboard(ui_event_key_up(), interaction.focused(), event.key(), event.modifiers()),)
+            if runtime_raw_input_target(ui, interaction.focused()) ||
+            runtime_view_captures_application_key(ui, event.key()) ||
+            options.captures_application_key(event.key()) {
+                current = current.runtime_update(AppEvent::key_up_event(
+                        event.key(), event.shift(), event.control(),
+                        event.modifiers(), interaction.focused(),))
+                model_updated = true
+            }
+        }
+        // Continuous pointer traffic may keep the native queue non-empty for
+        // longer than a frame. Flush exactly the newest sample at a bounded
+        // cadence instead of waiting for EVENT_NONE (which would starve the
+        // screen) or presenting every native event (which creates backlog).
+        let interaction_due =
+        (event.kind() == event_pointer_move() ||
+            event.kind() == event_pointer_down()) &&
+        (pending_control_target != "" || pending_motion_target != "") &&
+        perf_counter_ms() >= next_interaction_frame
+        if interaction_due {
+            if pending_control_target != "" {
+                let preview = if pending_control_range {
+                    AppEvent::range_event(pending_control_target,
+                        pending_control_start, pending_control_end,)
+                } else {
+                    AppEvent::control_event(pending_control_target,
+                        pending_control_value,)
+                }
+                current = current.runtime_update(preview)
+                model_updated = true
+                ui = runtime_update_application_live_control[M](window, ui,
+                    window.stylesheet(), current, pending_control_target,
+                    pending_control_value, pending_control_start,
+                    pending_control_end, hovered, active,
+                    interaction.focused(),)
+            }
+            if pending_motion_target != "" {
+                let _pointer_move_default = ui.dispatch_event(
+                    pending_motion_target,
+                    UiEvent::pointer(ui_event_pointer_move(),
+                        pending_motion_target, pending_motion_x,
+                        pending_motion_y, pending_motion_dx,
+                        pending_motion_dy,),)
+                if runtime_raw_input_target(ui, pending_motion_target) {
+                    current = current.runtime_update(AppEvent::raw_pointer_sample(
+                            7_u32, pending_motion_target, pending_motion_x,
+                            pending_motion_y, pending_motion_dx, pending_motion_dy,
+                            pending_motion_buttons, pending_motion_modifiers,
+                            pending_motion_timestamp_ns,))
+                    model_updated = true
+                }
+            }
+            pending_motion_target = ""
+            pending_motion_dx = 0.0_f32
+            pending_motion_dy = 0.0_f32
+            pending_motion_timestamp_ns = 0_u64
+            pending_motion_buttons = 0_u32
+            pending_motion_modifiers = 0_u32
+            pending_control_target = ""
+            next_interaction_frame = perf_counter_ms() + interaction_frame_ms
+        }
+        if model_updated {
+            if current.runtime_render_surface_id() != "" {
+                direct_frame_pending = true
+            }
+            model_interval = current.runtime_background_interval_ms()
+            let scheduled = if model_interval > 0_u32 {
+                model_interval
+            } else {
+                options.frame_interval_ms()
+            }
+            next_tick = perf_counter_ms() + scheduled as u64
+            model_updated = false
+        }
+        if ui.is_dirty() || direct_frame_pending {
+            let rebuild_retained_cache = ui.is_dirty()
+            let frames_before = window.presented_frames()
+            ui = runtime_present[M](window, ui, current,
+                perf_counter_ms() - started, rebuild_retained_cache,)
+            if window.presented_frames() > frames_before {
+                direct_frame_pending = false
+            }
+            next_interaction_frame = perf_counter_ms() + interaction_frame_ms
         }
     }
     let _destroyed = window.destroy()
     ret current
+}
+
+#attr(test)
+fn runtime_printable_editor_key_avoids_the_command_rebuild_path() -> bool {
+    ret runtime_editor_reserves_printable_key(
+        Option[Widget]::Some(Widget::input("field", "")),
+        Event::key_down(97_u32, 0_u32),)
+}
+
+#attr(test)
+fn printable_key_fallback_preserves_ascii_text() -> bool {
+    ret runtime_printable_key_text(Event::key_down(97_u32, 0_u32)).unwrap_or("") == "a"
+}
+
+#attr(test)
+fn runtime_enter_without_an_action_reaches_the_application() -> bool {
+    ret runtime_activation_falls_back_to_application_key("",
+        Event::key_down(key_enter(), 0_u32), true,)
+}
+
+#attr(test)
+fn application_options_capture_only_the_declared_key() -> bool {
+    let options = ApplicationOptions::event_driven().with_application_key(key_enter())
+    ret options.captures_application_key(key_enter()) &&
+    !options.captures_application_key(32_u32)
+}
+
+#attr(test)
+fn application_options_exit_key_is_explicit() -> bool {
+    let options = ApplicationOptions::event_driven().with_exit_key(key_escape())
+    ret options.requests_exit_key(key_escape()) &&
+    !options.requests_exit_key(key_enter())
+}
+
+#attr(test)
+fn retained_fragment_replacement_keeps_new_child_structure() -> bool {
+    let root = Widget::panel("root")
+    .with_child(Widget::panel("component")
+        .with_child(Widget::button("start", "Start")))
+    let replacement = Widget::panel("component")
+    .with_child(Widget::rich_text("word"))
+    .with_child(Widget::button("pause", "Pause"))
+    let next = runtime_replace_retained_fragment(root, "component", replacement)
+    ret next.find("start").is_none() && next.find("word").is_some() &&
+    next.find("pause").is_some()
+}
+
+#attr(test)
+fn scrollable_ancestor_prefers_the_nearest_declared_container() -> bool {
+    let root = Widget::panel("root")
+    .with_attribute("data-luma-scrollable", "true")
+    .with_child(Widget::panel("list")
+        .with_attribute("data-luma-scrollable", "true")
+        .with_child(Widget::button("row", "Row")))
+    ret runtime_scrollable_ancestor(root, "row") == "list" &&
+    runtime_scrollable_ancestor(root, "missing") == ""
+}
+
+#attr(test)
+fn application_key_event_preserves_the_focused_target() -> bool {
+    let event = AppEvent::key_event(key_enter(), false, false, 0_u32,
+        "search-field",)
+    ret event.is_key() && event.key() == key_enter() && event.target() == "search-field"
+}
+
+#attr(test)
+fn raw_pointer_event_preserves_motion_and_button_state() -> bool {
+    let event = AppEvent::raw_pointer_sample(7_u32, "viewport", 12.0_f32,
+        18.0_f32, - 3.0_f32, 4.5_f32, 4_u32, 192_u32, 77_u64,)
+    ret event.is_pointer_move() && event.target() == "viewport" &&
+    event.x() == 12.0_f32 && event.y() == 18.0_f32 &&
+    event.dx() == - 3.0_f32 && event.dy() == 4.5_f32 &&
+    event.buttons() == 4_u32 && event.control() &&
+    event.modifiers() == 192_u32 && event.timestamp_ns() == 77_u64
+}
+
+#attr(test)
+fn managed_key_release_is_distinct_from_key_press() -> bool {
+    let release = AppEvent::key_up_event(119_u32, false, false, 0_u32,
+        "viewport",)
+    ret release.is_key_up() && !release.is_key_down() && !release.is_key() &&
+    release.key() == 119_u32 && release.target() == "viewport"
+}
+
+#attr(test)
+fn raw_render_surface_declares_focus_and_pointer_lock() -> bool {
+    let surface = Widget::render_surface("viewport")
+    .with_secondary_pointer_lock()
+    ret surface.attribute("data-luma-raw-input").is_some() &&
+    surface.attribute("data-luma-secondary-pointer-lock").is_some()
+}
+
+#attr(test)
+fn managed_checkbox_activation_emits_checked_change() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::checkbox("updates", "Updates", false),
+            Rect::new(0.0_f32, 0.0_f32, 120.0_f32, 32.0_f32),))
+    match runtime_control_change(ui, "updates", 0.0_f32, true, 0_u32) {
+        Some(event) => {
+            ret event.is_control_change() && event.target() == "updates" && event.checked()
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn managed_slider_change_is_normalized_to_bounds() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::slider("volume", 0.0_f32),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 32.0_f32),))
+    match runtime_control_change(ui, "volume", 100.0_f32, false, 0_u32) {
+        Some(event) => {
+            ret event.is_control_change() && event.target() == "volume" &&
+            event.value() == 0.5_f32
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn managed_range_slider_preserves_ordered_endpoints() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::range_slider("levels", 0.2_f32, 0.8_f32),
+            Rect::new(0.0_f32, 0.0_f32, 100.0_f32, 40.0_f32),))
+    let lower = runtime_control_change(ui, "levels", 50.0_f32, false, 1_u32)
+    let upper = runtime_control_change(ui, "levels", 50.0_f32, false, 2_u32)
+    match lower {
+        Some(lower_event) => {
+            match upper {
+                Some(upper_event) => {
+                    ret lower_event.range_start() <= lower_event.range_end() &&
+                    upper_event.range_start() <= upper_event.range_end() &&
+                    lower_event.range_end() > 0.79_f32 && upper_event.range_start() < 0.21_f32
+                }
+                None => {
+                    ret false
+                }
+            }
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn ticked_range_slider_moves_continuously_and_commits_to_a_mark() -> bool {
+    let ruler = Widget::range_slider("levels", 0.0_f32, 1.0_f32)
+    .with_range_ticks(6_usize)
+    let preview = runtime_range_snap(ruler, 0.24_f32, false)
+    let committed = runtime_range_snap(ruler, 0.31_f32, true)
+    ret preview > 0.2_f32 && preview < 0.24_f32 &&
+    committed > 0.399_f32 && committed < 0.401_f32
+}
+
+#attr(test)
+fn range_settle_preserves_visual_value_during_model_reconcile() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::range_slider("levels", 0.24_f32, 0.76_f32)
+            .with_range_ticks(6_usize),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 40.0_f32),))
+    let _started = ui.transition_range("levels", 0.2_f32, 0.8_f32,
+        100_u64, 100_u64,)
+    let _change = ui.reconcile(
+        Widget::range_slider("levels", 0.2_f32, 0.8_f32)
+        .with_range_ticks(6_usize),)
+    let before = ui.find_widget("levels").unwrap_or(
+        Widget::range_slider("missing", 0.0_f32, 0.0_f32),)
+    let _advanced = ui.advance_transitions(200_u64)
+    let after = ui.find_widget("levels").unwrap_or(
+        Widget::range_slider("missing", 0.0_f32, 0.0_f32),)
+    ret before.range_start() > 0.239_f32 && before.range_start() < 0.241_f32 &&
+    after.range_start() > 0.199_f32 && after.range_start() < 0.201_f32 &&
+    after.range_end() > 0.799_f32 && after.range_end() < 0.801_f32
+}
+
+#attr(test)
+fn pointer_motion_reports_primary_button_state() -> bool {
+    ret Event::pointer_move(10.0_f32, 20.0_f32, 1.0_f32, 0.0_f32,
+        1_u32,).primary_down() &&
+    !Event::pointer_move(10.0_f32, 20.0_f32, 1.0_f32, 0.0_f32,
+        0_u32,).primary_down()
+}
+
+#attr(test)
+fn captured_drag_ignores_motion_button_mask() -> bool {
+    let captured = InteractionState::new().pointer_down_on("speed",
+        Option[Widget]::Some(Widget::slider("speed", 0.5_f32)),)
+    .pointer_move_to("outside")
+    let maskless = Event::pointer_move(50.0_f32, 20.0_f32,
+        1.0_f32, 0.0_f32, 0_u32,)
+    ret captured.active() == "speed" && !maskless.primary_down()
+}
+
+#attr(test)
+fn pointer_reducer_keeps_the_newest_native_sample() -> bool {
+    ret runtime_pointer_sample_is_current(220_u64, 200_u64) &&
+    runtime_pointer_sample_is_current(220_u64, 220_u64) &&
+    !runtime_pointer_sample_is_current(199_u64, 220_u64) &&
+    runtime_pointer_sample_is_current(0_u64, 220_u64) &&
+    Event::pointer_move(1.0_f32, 2.0_f32, 0.0_f32, 0.0_f32,
+        0_u32,).timestamp_ns() == 0_u64
+}
+
+#attr(test)
+fn pending_pointer_sample_schedules_its_own_frame_boundary() -> bool {
+    ret runtime_pending_interaction_timeout(100_u64, 108_u64) == 8_u32 &&
+    runtime_pending_interaction_timeout(108_u64, 108_u64) == 0_u32 &&
+    runtime_pending_interaction_timeout(109_u64, 108_u64) == 0_u32
+}
+
+#attr(test)
+fn direct_commands_win_a_same_deadline_tie() -> bool {
+    ret runtime_input_precedes_background(event_pointer_up()) &&
+    runtime_input_precedes_background(event_key_down()) &&
+    !runtime_input_precedes_background(event_none()) &&
+    !runtime_input_precedes_background(event_pointer_move())
+}
+
+#attr(test)
+fn retained_root_can_claim_navigation_before_a_focused_control() -> bool {
+    let root = Widget::panel("root")
+    .with_application_key_capture(key_left())
+    let mut ui = ReactiveUi::new(layout_widget(root,
+            Rect::new(0.0_f32, 0.0_f32, 100.0_f32, 100.0_f32),))
+    ret runtime_view_captures_application_key(ui, key_left()) &&
+    !runtime_view_captures_application_key(ui, key_right())
+}
+
+#attr(test)
+fn rapid_slider_changes_keep_the_newest_pointer_value() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::slider("speed", 0.5_f32),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 32.0_f32),))
+    match runtime_control_change(ui, "speed", 20.0_f32, false, 0_u32) {
+        Some(first) => {
+            ui = runtime_update_live_control(ui, "speed", first.value(),
+                first.range_start(), first.range_end(),)
+        }
+        None => {
+            ret false
+        }
+    }
+    match runtime_control_change(ui, "speed", 180.0_f32, false, 0_u32) {
+        Some(second) => {
+            ui = runtime_update_live_control(ui, "speed", second.value(),
+                second.range_start(), second.range_end(),)
+        }
+        None => {
+            ret false
+        }
+    }
+    match ui.find_widget("speed") {
+        Some(slider) => {
+            // The six-pixel render inset leaves 188 logical pixels of usable
+            // track, so x=180 maps to 174/188. The important contract is that
+            // the second sample wins immediately rather than the first one.
+            ret slider.value() > 0.925_f32 && slider.value() < 0.926_f32
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn incremental_interaction_base_tracks_the_latest_model_value() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::slider("speed", 0.1_f32),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 32.0_f32),))
+    let _captured = ui.interaction_base("speed")
+    ui.set_interaction_base(Widget::slider("speed", 0.7_f32))
+    match ui.interaction_base("speed") {
+        Some(base) => {
+            ret base.value() > 0.69_f32 && base.value() < 0.71_f32
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn captured_slider_release_commits_outside_its_bounds() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::slider("speed", 0.5_f32),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 32.0_f32),))
+    let captured = runtime_release_action(ui, "speed", "outside")
+    let ordinary = runtime_release_action(ui, "outside", "other")
+    ret captured == "speed" && ordinary == ""
+}
+
+#attr(test)
+fn collapsed_range_keeps_both_thumbs_reachable() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::range_slider("levels", 0.5_f32, 0.5_f32),
+            Rect::new(0.0_f32, 0.0_f32, 100.0_f32, 40.0_f32),))
+    let lower = runtime_range_thumb(ui, "levels", 30.0_f32)
+    let undecided = runtime_range_thumb(ui, "levels", 50.0_f32)
+    let upper = runtime_range_thumb(ui, "levels", 70.0_f32)
+    ret lower == 1_u32 && undecided == 3_u32 && upper == 2_u32
+}
+
+#attr(test)
+fn current_slider_commit_uses_the_retained_live_value() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::slider("speed", 0.73_f32),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 32.0_f32),))
+    match runtime_current_control_commit(ui, "speed", 0_u32) {
+        Some(event) => {
+            ret event.target() == "speed" && event.value() > 0.729_f32 &&
+            event.value() < 0.731_f32
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn ordinary_slider_supports_arrow_home_and_end_keys() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::slider("speed", 0.5_f32),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 32.0_f32),))
+    let right = runtime_keyboard_control_change(ui, "speed",
+        Event::key_down(key_right(), 0_u32),)
+    let home = runtime_keyboard_control_change(ui, "speed",
+        Event::key_down(key_home(), 0_u32),)
+    let end = runtime_keyboard_control_change(ui, "speed",
+        Event::key_down(key_end(), 0_u32),)
+    match right {
+        Some(right_event) => {
+            match home {
+                Some(home_event) => {
+                    match end {
+                        Some(end_event) => {
+                            ret right_event.value() > 0.509_f32 &&
+                            right_event.value() < 0.511_f32 &&
+                            home_event.value() == 0.0_f32 &&
+                            end_event.value() == 1.0_f32
+                        }
+                        None => {
+                            ret false
+                        }
+                    }
+                }
+                None => {
+                    ret false
+                }
+            }
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn range_keyboard_uses_lower_and_shifted_upper_thumb() -> bool {
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::range_slider("levels", 0.4_f32, 0.8_f32)
+            .with_range_ticks(6_usize),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 40.0_f32),))
+    let lower = runtime_keyboard_control_change(ui, "levels",
+        Event::key_down(key_left(), 0_u32),)
+    let upper = runtime_keyboard_control_change(ui, "levels",
+        Event::key_down(key_left(), 1_u32),)
+    match lower {
+        Some(lower_event) => {
+            match upper {
+                Some(upper_event) => {
+                    ret lower_event.range_start() > 0.199_f32 &&
+                    lower_event.range_start() < 0.201_f32 &&
+                    lower_event.range_end() > 0.799_f32 &&
+                    upper_event.range_start() > 0.399_f32 &&
+                    upper_event.range_end() > 0.599_f32 &&
+                    upper_event.range_end() < 0.601_f32
+                }
+                None => {
+                    ret false
+                }
+            }
+        }
+        None => {
+            ret false
+        }
+    }
+}
+
+#attr(test)
+fn enter_and_space_do_not_reset_a_focused_slider() -> bool {
+    let mut slider_ui = ReactiveUi::new(layout_widget(
+            Widget::slider("speed", 0.8_f32),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 32.0_f32),))
+    let mut button_ui = ReactiveUi::new(layout_widget(
+            Widget::button("apply", "Apply"),
+            Rect::new(0.0_f32, 0.0_f32, 100.0_f32, 32.0_f32),))
+    ret runtime_keyboard_activation_action(slider_ui, "speed") == "" &&
+    runtime_keyboard_activation_action(button_ui, "apply") == "apply"
 }

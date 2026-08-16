@@ -14,6 +14,14 @@ typedef struct {
     struct LumaVkUiTexture *texture;
 } LumaVkUiBatch;
 
+typedef struct {
+    uint64_t key;
+    LumaVkUiVertex *vertices;
+    uint32_t *indices;
+    LumaVkUiBatch *batches;
+    size_t vertex_count, index_count, batch_count;
+} LumaVkUiPatchSegment;
+
 typedef struct LumaVkUiUpload {
     GrapheneVkBuffer *staging;
     GrapheneVkSubmission *submission;
@@ -53,7 +61,15 @@ typedef struct LumaVkUiCompositor {
     size_t index_count, index_capacity;
     size_t batch_count, batch_capacity;
     size_t composition_split_batch;
+    size_t retained_base_vertex_count, retained_base_index_count;
+    size_t retained_base_batch_count;
     size_t retained_vertex_count, retained_index_count, retained_batch_count;
+    LumaVkUiPatchSegment *patches;
+    size_t patch_count, patch_capacity;
+    size_t patch_vertex_start, patch_index_start, patch_batch_start;
+    uint64_t patch_key;
+    uint64_t segmented_commit_count;
+    bool patch_recording;
     size_t retired_texture_count, retired_texture_capacity;
     bool retained_ready;
     bool force_new_batch;
@@ -65,9 +81,44 @@ typedef struct LumaVkUiCompositor {
     bool available;
 } LumaVkUiCompositor;
 
+static bool luma_vk_ui_geometry_bound(size_t handle, const float *vertices,
+    size_t vertex_count, size_t vertex_stride_floats,
+    size_t color_offset_floats, const int *indices, size_t index_count,
+    LumaVkUiTexture *texture);
+
+static void luma_vk_ui_patch_release(LumaVkUiPatchSegment *patch) {
+    if (patch == NULL) return;
+    free(patch->vertices);
+    free(patch->indices);
+    free(patch->batches);
+    memset(patch, 0, sizeof(*patch));
+}
+
+static void luma_vk_ui_patches_clear(LumaVkUiCompositor *ui) {
+    if (ui == NULL) return;
+    for (size_t i = 0; i < ui->patch_count; ++i)
+        luma_vk_ui_patch_release(&ui->patches[i]);
+    ui->patch_count = 0;
+}
+
+static bool luma_vk_ui_patch_reserve(LumaVkUiCompositor *ui, size_t count) {
+    if (count <= ui->patch_capacity) return true;
+    size_t capacity = ui->patch_capacity == 0 ? 16 : ui->patch_capacity;
+    while (capacity < count) capacity *= 2;
+    LumaVkUiPatchSegment *fresh = (LumaVkUiPatchSegment *)realloc(
+        ui->patches, capacity * sizeof(LumaVkUiPatchSegment));
+    if (fresh == NULL) return false;
+    memset(fresh + ui->patch_capacity, 0,
+        (capacity - ui->patch_capacity) * sizeof(LumaVkUiPatchSegment));
+    ui->patches = fresh;
+    ui->patch_capacity = capacity;
+    return true;
+}
+
 static void luma_vk_ui_error(LumaVkUiCompositor *ui, const char *message) {
     if (ui == NULL) return;
     snprintf(ui->error, sizeof(ui->error), "%s", message == NULL ? "Direct UI error" : message);
+    fprintf(stderr, "Luma Vulkan UI error: %s\n", ui->error);
 }
 
 static bool luma_vk_ui_reserve_batches(LumaVkUiCompositor *ui, size_t count) {
@@ -101,6 +152,60 @@ static bool luma_vk_ui_reserve_cpu(LumaVkUiCompositor *ui,
         ui->indices = fresh;
         ui->index_capacity = capacity;
     }
+    return true;
+}
+
+static uint64_t luma_vk_ui_patch_bounds_key(float x, float y,
+    float width, float height) {
+    uint32_t values[4];
+    memcpy(&values[0], &x, sizeof(float));
+    memcpy(&values[1], &y, sizeof(float));
+    memcpy(&values[2], &width, sizeof(float));
+    memcpy(&values[3], &height, sizeof(float));
+    uint64_t hash = 1469598103934665603ull;
+    for (size_t i = 0; i < 4; ++i) {
+        hash ^= values[i];
+        hash *= 1099511628211ull;
+    }
+    return hash == 0 ? 1 : hash;
+}
+
+static bool luma_vk_ui_flatten_patches(LumaVkUiCompositor *ui) {
+    size_t vertices = ui->retained_base_vertex_count;
+    size_t indices = ui->retained_base_index_count;
+    size_t batches = ui->retained_base_batch_count;
+    for (size_t i = 0; i < ui->patch_count; ++i) {
+        vertices += ui->patches[i].vertex_count;
+        indices += ui->patches[i].index_count;
+        batches += ui->patches[i].batch_count;
+    }
+    if (!luma_vk_ui_reserve_cpu(ui, vertices, indices) ||
+        !luma_vk_ui_reserve_batches(ui, batches)) return false;
+    ui->vertex_count = ui->retained_base_vertex_count;
+    ui->index_count = ui->retained_base_index_count;
+    ui->batch_count = ui->retained_base_batch_count;
+    for (size_t i = 0; i < ui->patch_count; ++i) {
+        LumaVkUiPatchSegment *patch = &ui->patches[i];
+        size_t vertex_base = ui->vertex_count;
+        size_t index_base = ui->index_count;
+        if (patch->vertex_count > 0)
+            memcpy(ui->vertices + vertex_base, patch->vertices,
+                patch->vertex_count * sizeof(LumaVkUiVertex));
+        for (size_t j = 0; j < patch->index_count; ++j)
+            ui->indices[index_base + j] =
+                (uint32_t)(vertex_base + patch->indices[j]);
+        for (size_t j = 0; j < patch->batch_count; ++j) {
+            LumaVkUiBatch batch = patch->batches[j];
+            batch.first_index += (uint32_t)index_base;
+            ui->batches[ui->batch_count + j] = batch;
+        }
+        ui->vertex_count += patch->vertex_count;
+        ui->index_count += patch->index_count;
+        ui->batch_count += patch->batch_count;
+    }
+    ui->retained_vertex_count = ui->vertex_count;
+    ui->retained_index_count = ui->index_count;
+    ui->retained_batch_count = ui->batch_count;
     return true;
 }
 
@@ -308,14 +413,17 @@ static bool luma_vk_ui_texture_flush(LumaVkUiTexture *texture) {
     GrapheneVkSubmission *submission = (GrapheneVkSubmission *)
         graphene_vk_encoder_submit((size_t)encoder);
     graphene_vk_encoder_destroy((size_t)encoder);
-    if (submission == NULL ||
-        !graphene_vk_submission_available((size_t)submission) ||
-        !luma_vk_ui_track_upload(texture, staging, submission)) {
-        if (submission != NULL)
-            graphene_vk_submission_destroy((size_t)submission);
-        graphene_vk_buffer_destroy((size_t)staging);
-        return false;
-    }
+    /* Atlas pixels are consumed by the frame recorded immediately after this
+     * flush. Complete that one aggregated dirty-region upload here instead of
+     * retaining a second asynchronous lifetime graph for every glyph update.
+     * Static image textures keep using the asynchronous upload path above. */
+    bool uploaded = submission != NULL &&
+        graphene_vk_submission_available((size_t)submission) &&
+        graphene_vk_submission_wait((size_t)submission, UINT64_MAX);
+    if (submission != NULL)
+        graphene_vk_submission_destroy((size_t)submission);
+    graphene_vk_buffer_destroy((size_t)staging);
+    if (!uploaded) return false;
     texture->atlas_dirty = false;
     return true;
 }
@@ -332,6 +440,21 @@ static bool luma_vk_ui_reserve_retired_textures(LumaVkUiCompositor *ui, size_t c
     return true;
 }
 
+static bool luma_vk_ui_texture_referenced(
+    const LumaVkUiCompositor *ui, const LumaVkUiTexture *texture) {
+    if (ui == NULL || texture == NULL) return false;
+    for (size_t i = 0; i < ui->batch_count; ++i) {
+        if (ui->batches[i].texture == texture) return true;
+    }
+    for (size_t i = 0; i < ui->patch_count; ++i) {
+        const LumaVkUiPatchSegment *patch = &ui->patches[i];
+        for (size_t j = 0; j < patch->batch_count; ++j) {
+            if (patch->batches[j].texture == texture) return true;
+        }
+    }
+    return false;
+}
+
 /* The corresponding frame fence has completed before this is called. */
 static void luma_vk_ui_collect_retired(LumaVkUiCompositor *ui, uint32_t slot) {
     if (ui == NULL || slot >= 2) return;
@@ -339,7 +462,8 @@ static void luma_vk_ui_collect_retired(LumaVkUiCompositor *ui, uint32_t slot) {
     for (size_t i = 0; i < ui->retired_texture_count; ++i) {
         LumaVkUiTexture *texture = ui->retired_textures[i];
         texture->retire_slots &= (uint8_t)~(1u << slot);
-        if (texture->retire_slots == 0)
+        if (texture->retire_slots == 0 &&
+            !luma_vk_ui_texture_referenced(ui, texture))
             luma_vk_ui_texture_release(texture);
         else
             ui->retired_textures[write++] = texture;
@@ -385,16 +509,16 @@ size_t luma_vk_ui_create(size_t device_handle, size_t swapchain_handle) {
     ui->vertex_shader = (GrapheneVkShader *)graphene_vk_shader_create(
         device_handle, luma_ui_vertex_spirv,
         sizeof(luma_ui_vertex_spirv) / sizeof(uint32_t),
-        sizeof(luma_ui_vertex_spirv) / sizeof(uint32_t), VK_SHADER_STAGE_VERTEX_BIT);
+        VK_SHADER_STAGE_VERTEX_BIT);
     ui->fragment_shader = (GrapheneVkShader *)graphene_vk_shader_create(
         device_handle, luma_ui_fragment_spirv,
         sizeof(luma_ui_fragment_spirv) / sizeof(uint32_t),
-        sizeof(luma_ui_fragment_spirv) / sizeof(uint32_t), VK_SHADER_STAGE_FRAGMENT_BIT);
+        VK_SHADER_STAGE_FRAGMENT_BIT);
     uint32_t bindings[1] = {0u}, types[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
     uint32_t stages[1] = {VK_SHADER_STAGE_FRAGMENT_BIT};
     ui->texture_layout = (GrapheneVkBindGroupLayout *)
         graphene_vk_bind_group_layout_create_entries(device_handle,
-            bindings, 1, 1, types, 1, 1, stages, 1, 1);
+            bindings, 1, types, 1, stages, 1);
     ui->sampler = (GrapheneVkSampler *)graphene_vk_sampler_create(device_handle);
     uint32_t locations[3] = {0u, 1u, 2u};
     uint32_t formats[3] = {103u, 109u, 103u};
@@ -402,13 +526,15 @@ size_t luma_vk_ui_create(size_t device_handle, size_t swapchain_handle) {
     ui->pipeline = (GrapheneVkPipeline *)graphene_vk_pipeline_create(
         device_handle, swapchain_handle, (size_t)ui->vertex_shader,
         (size_t)ui->fragment_shader, (size_t)ui->texture_layout,
-        false, VK_CULL_MODE_NONE, true, false, sizeof(LumaVkUiVertex),
-        locations, 3, 3, formats, 3, 3, offsets, 3, 3);
+        false, false, false, VK_CULL_MODE_NONE, true, false, false,
+        sizeof(LumaVkUiVertex),
+        locations, 3, formats, 3, offsets, 3);
     ui->load_pipeline = (GrapheneVkPipeline *)graphene_vk_pipeline_create(
         device_handle, swapchain_handle, (size_t)ui->vertex_shader,
         (size_t)ui->fragment_shader, (size_t)ui->texture_layout,
-        false, VK_CULL_MODE_NONE, true, true, sizeof(LumaVkUiVertex),
-        locations, 3, 3, formats, 3, 3, offsets, 3, 3);
+        false, false, false, VK_CULL_MODE_NONE, true, false, true,
+        sizeof(LumaVkUiVertex),
+        locations, 3, formats, 3, offsets, 3);
     if (ui->vertex_shader == NULL || !ui->vertex_shader->available ||
         ui->fragment_shader == NULL || !ui->fragment_shader->available ||
         ui->texture_layout == NULL || !ui->texture_layout->available ||
@@ -496,6 +622,8 @@ bool luma_vk_ui_begin(size_t handle, uint32_t clear_color) {
 bool luma_vk_ui_cache_begin(size_t handle, uint32_t clear_color) {
     LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
     if (!luma_vk_ui_begin(handle, clear_color)) return false;
+    luma_vk_ui_patches_clear(ui);
+    ui->patch_recording = false;
     ui->retained_ready = false;
     return true;
 }
@@ -503,11 +631,125 @@ bool luma_vk_ui_cache_begin(size_t handle, uint32_t clear_color) {
 bool luma_vk_ui_cache_end(size_t handle) {
     LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
     if (ui == NULL || !ui->available) return false;
+    if (ui->patch_recording) {
+        size_t vertex_count = ui->vertex_count - ui->patch_vertex_start;
+        size_t index_count = ui->index_count - ui->patch_index_start;
+        size_t batch_count = ui->batch_count - ui->patch_batch_start;
+        LumaVkUiPatchSegment patch = {0};
+        patch.key = ui->patch_key;
+        patch.vertex_count = vertex_count;
+        patch.index_count = index_count;
+        patch.batch_count = batch_count;
+        if (vertex_count > 0) {
+            patch.vertices = (LumaVkUiVertex *)malloc(
+                vertex_count * sizeof(LumaVkUiVertex));
+            if (patch.vertices == NULL) goto patch_failed;
+            memcpy(patch.vertices, ui->vertices + ui->patch_vertex_start,
+                vertex_count * sizeof(LumaVkUiVertex));
+        }
+        if (index_count > 0) {
+            patch.indices = (uint32_t *)malloc(
+                index_count * sizeof(uint32_t));
+            if (patch.indices == NULL) goto patch_failed;
+            for (size_t i = 0; i < index_count; ++i)
+                patch.indices[i] = ui->indices[ui->patch_index_start + i] -
+                    (uint32_t)ui->patch_vertex_start;
+        }
+        if (batch_count > 0) {
+            patch.batches = (LumaVkUiBatch *)malloc(
+                batch_count * sizeof(LumaVkUiBatch));
+            if (patch.batches == NULL) goto patch_failed;
+            for (size_t i = 0; i < batch_count; ++i) {
+                patch.batches[i] = ui->batches[ui->patch_batch_start + i];
+                patch.batches[i].first_index -=
+                    (uint32_t)ui->patch_index_start;
+            }
+        }
+        {
+            size_t destination = ui->patch_count;
+            for (size_t i = 0; i < ui->patch_count; ++i) {
+                if (ui->patches[i].key == patch.key) {
+                    destination = i;
+                    break;
+                }
+            }
+            if (destination == ui->patch_count &&
+                !luma_vk_ui_patch_reserve(ui, ui->patch_count + 1))
+                goto patch_failed;
+            if (destination < ui->patch_count)
+                luma_vk_ui_patch_release(&ui->patches[destination]);
+            else
+                ui->patch_count++;
+            ui->patches[destination] = patch;
+        }
+        ui->patch_recording = false;
+        ui->segmented_commit_count++;
+        if (!luma_vk_ui_flatten_patches(ui)) {
+            ui->retained_ready = false;
+            return false;
+        }
+        ui->retained_ready = true;
+        return true;
+patch_failed:
+        luma_vk_ui_patch_release(&patch);
+        ui->patch_recording = false;
+        ui->vertex_count = ui->retained_vertex_count;
+        ui->index_count = ui->retained_index_count;
+        ui->batch_count = ui->retained_batch_count;
+        return false;
+    }
+    ui->retained_base_vertex_count = ui->vertex_count;
+    ui->retained_base_index_count = ui->index_count;
+    ui->retained_base_batch_count = ui->batch_count;
     ui->retained_vertex_count = ui->vertex_count;
     ui->retained_index_count = ui->index_count;
     ui->retained_batch_count = ui->batch_count;
     ui->retained_ready = true;
     return true;
+}
+
+bool luma_vk_ui_cache_patch_begin(size_t handle, uint32_t clear_color,
+    float x, float y, float width, float height) {
+    LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
+    if (ui == NULL || !ui->available || !ui->retained_ready ||
+        ui->patch_recording || width <= 0.0f || height <= 0.0f) return false;
+    ui->vertex_count = ui->retained_vertex_count;
+    ui->index_count = ui->retained_index_count;
+    ui->batch_count = ui->retained_batch_count;
+    ui->patch_vertex_start = ui->vertex_count;
+    ui->patch_index_start = ui->index_count;
+    ui->patch_batch_start = ui->batch_count;
+    ui->patch_key = luma_vk_ui_patch_bounds_key(x, y, width, height);
+    ui->patch_recording = true;
+    ui->clip_x = x < 0.0f ? 0 : (int32_t)x;
+    ui->clip_y = y < 0.0f ? 0 : (int32_t)y;
+    ui->clip_width = (uint32_t)(width + 1.0f);
+    ui->clip_height = (uint32_t)(height + 1.0f);
+    float r = (float)((clear_color >> 24) & 255u) / 255.0f;
+    float g = (float)((clear_color >> 16) & 255u) / 255.0f;
+    float b = (float)((clear_color >> 8) & 255u) / 255.0f;
+    float a = (float)(clear_color & 255u) / 255.0f;
+    float vertices[4][8] = {
+        {x,y,r,g,b,a,0,0}, {x+width,y,r,g,b,a,1,0},
+        {x+width,y+height,r,g,b,a,1,1}, {x,y+height,r,g,b,a,0,1}
+    };
+    int indices[6] = {0,1,2,0,2,3};
+    if (!luma_vk_ui_geometry_bound(handle, &vertices[0][0], 4, 8, 2,
+            indices, 6, ui->white_texture)) {
+        ui->patch_recording = false;
+        return false;
+    }
+    return true;
+}
+
+uint64_t luma_vk_ui_segmented_commit_count(size_t handle) {
+    LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
+    return ui == NULL ? 0 : ui->segmented_commit_count;
+}
+
+uint32_t luma_vk_ui_patch_count(size_t handle) {
+    LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
+    return ui == NULL ? 0 : (uint32_t)ui->patch_count;
 }
 
 bool luma_vk_ui_cached_begin(size_t handle, uint32_t clear_color) {
@@ -721,14 +963,11 @@ bool luma_vk_ui_texture_destroy(size_t handle) {
         return false;
     texture->destroy_pending = true;
     texture->retire_slots = 3u;
-    for (size_t i = 0; i < ui->retained_batch_count; ++i) {
-        if (ui->batches[i].texture == texture) {
-            ui->retained_ready = false;
-            ui->retained_vertex_count = 0;
-            ui->retained_index_count = 0;
-            ui->retained_batch_count = 0;
-            break;
-        }
+    if (luma_vk_ui_texture_referenced(ui, texture)) {
+        ui->retained_ready = false;
+        ui->retained_vertex_count = 0;
+        ui->retained_index_count = 0;
+        ui->retained_batch_count = 0;
     }
     ui->retired_textures[ui->retired_texture_count++] = texture;
     return true;
@@ -775,6 +1014,8 @@ bool luma_vk_ui_texture_draw_region(size_t handle, size_t texture_handle,
 bool luma_vk_ui_composition_split(size_t handle) {
     LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
     if (ui == NULL || !ui->available) return false;
+    /* Keep retained UI batches before the borrowed scene pass; transient
+     * overlays recorded after this boundary are appended by frame_finish. */
     ui->composition_split_batch = ui->batch_count;
     ui->force_new_batch = true;
     return true;
@@ -814,8 +1055,17 @@ static bool luma_vk_ui_draw_range(LumaVkUiCompositor *ui,
                 (size_t)ui->vertex_buffers[slot]) &&
             graphene_vk_frame_bind_index_buffer((size_t)frame,
                 (size_t)ui->index_buffers[slot]);
+        VkViewport viewport = {0.0f, 0.0f,
+            (float)ui->swapchain->width, (float)ui->swapchain->height,
+            0.0f, 1.0f};
+        ui->swapchain->cmd_set_viewport(frame->command_buffer, 0, 1, &viewport);
         for (size_t i = first; i < end && rendered; ++i) {
             LumaVkUiBatch *batch = &ui->batches[i];
+            if (batch->texture == NULL) {
+                luma_vk_ui_error(ui, "Retained UI batch has no texture");
+                rendered = false;
+                break;
+            }
             luma_vk_ui_texture_collect_upload(batch->texture);
             float logical_width = ui->logical_width > 0.0f
                 ? ui->logical_width : (float)ui->swapchain->width;
@@ -837,17 +1087,18 @@ static bool luma_vk_ui_draw_range(LumaVkUiCompositor *ui,
                  scissor_bottom > (uint32_t)scissor_y
                     ? scissor_bottom - (uint32_t)scissor_y : 0}};
             ui->swapchain->cmd_set_scissor(frame->command_buffer, 0, 1, &scissor);
-            rendered = batch->texture != NULL && !batch->texture->destroy_pending &&
-                graphene_vk_frame_bind_group((size_t)frame,
+            rendered = graphene_vk_frame_bind_group((size_t)frame,
                 (size_t)batch->texture->group) &&
                 graphene_vk_frame_draw_indexed((size_t)frame,
                 batch->index_count, 1u, batch->first_index, 0, 0u);
+            if (!rendered)
+                luma_vk_ui_error(ui, frame->error);
         }
     }
     return rendered;
 }
 
-size_t luma_vk_ui_frame_acquire(size_t handle) {
+size_t luma_vk_ui_frame_prepare(size_t handle) {
     LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
     if (ui == NULL || !ui->available) return 0;
     GrapheneVkFrame *frame = (GrapheneVkFrame *)
@@ -858,16 +1109,34 @@ size_t luma_vk_ui_frame_acquire(size_t handle) {
         if (frame != NULL) graphene_vk_frame_destroy((size_t)frame);
         return 0;
     }
-    if (!luma_vk_ui_prepare_gpu(ui, frame) ||
-        !graphene_vk_frame_begin_render_pass((size_t)frame,
-            (size_t)ui->pipeline,
-            ui->clear[0], ui->clear[1], ui->clear[2], ui->clear[3]) ||
-        !luma_vk_ui_draw_range(ui, frame, 0, ui->composition_split_batch)) {
+    if (!luma_vk_ui_prepare_gpu(ui, frame)) {
         luma_vk_ui_error(ui, frame->error);
         graphene_vk_frame_destroy((size_t)frame);
         return 0;
     }
     return (size_t)frame;
+}
+
+bool luma_vk_ui_frame_begin_composition(size_t handle, size_t frame_handle) {
+    LumaVkUiCompositor *ui = (LumaVkUiCompositor *)handle;
+    GrapheneVkFrame *frame = (GrapheneVkFrame *)frame_handle;
+    if (ui == NULL || !ui->available || frame == NULL ||
+        !frame->recording || frame->in_render_pass || frame->complete ||
+        frame->owner != ui->swapchain) return false;
+    return graphene_vk_frame_begin_render_pass((size_t)frame,
+            (size_t)ui->pipeline,
+            ui->clear[0], ui->clear[1], ui->clear[2], ui->clear[3]) &&
+        luma_vk_ui_draw_range(ui, frame, 0, ui->composition_split_batch);
+}
+
+size_t luma_vk_ui_frame_acquire(size_t handle) {
+    size_t frame = luma_vk_ui_frame_prepare(handle);
+    if (frame == 0) return 0;
+    if (!luma_vk_ui_frame_begin_composition(handle, frame)) {
+        graphene_vk_frame_destroy(frame);
+        return 0;
+    }
+    return frame;
 }
 
 static bool luma_vk_ui_finish_frame(LumaVkUiCompositor *ui,
@@ -944,6 +1213,8 @@ bool luma_vk_ui_destroy(size_t handle) {
     free(ui->vertices);
     free(ui->indices);
     free(ui->batches);
+    luma_vk_ui_patches_clear(ui);
+    free(ui->patches);
     free(ui->retired_textures);
     free(ui);
     return true;

@@ -1,0 +1,249 @@
+//! Reusable keyboard state and shortcut dispatch for native applications.
+
+import core::option::Option
+import core::vec::Vec
+import refrain::application::{Event, event_key_down, event_key_up,}
+
+pub fn shortcut_triggered() -> u32 {
+    ret 1_u32
+}
+
+pub fn shortcut_released() -> u32 {
+    ret 2_u32
+}
+
+pub struct Shortcut {
+    id: str
+    key: u32
+    modifiers: u32
+    global: bool
+    repeat: bool
+}
+
+impl for Shortcut {
+    pub fn new(id: str, key: u32, modifiers: u32) -> Self {
+        ret Self {
+            id, key, modifiers, false, false
+        }
+    }
+
+    pub fn with_global(self: Self, global: bool) -> Self {
+        ret Self {
+            self.id, self.key, self.modifiers, global, self.repeat
+        }
+    }
+
+    pub fn with_repeat(self: Self, repeat: bool) -> Self {
+        ret Self {
+            self.id, self.key, self.modifiers, self.global, repeat
+        }
+    }
+
+    pub fn id(self: Self) -> str {
+        ret self.id
+    }
+
+    pub fn key(self: Self) -> u32 {
+        ret self.key
+    }
+
+    pub fn modifiers(self: Self) -> u32 {
+        ret self.modifiers
+    }
+
+    pub fn global(self: Self) -> bool {
+        ret self.global
+    }
+
+    pub fn repeat(self: Self) -> bool {
+        ret self.repeat
+    }
+}
+
+fn key_list_contains(values: Vec[u32], key: u32) -> bool {
+    let mut index = 0_usize
+    while index < values.len() {
+        match values.get(index) {
+            Option::Some(value) => {
+                if value == key {
+                    ret true
+                }
+            }
+            Option::None => {
+            }
+        }
+        index = index + 1_usize
+    }
+    ret false
+}
+
+fn key_list_without(values: Vec[u32], key: u32) -> Vec[u32] {
+    let mut result = Vec[u32]::new()
+    let mut index = 0_usize
+    while index < values.len() {
+        match values.get(index) {
+            Option::Some(value) => {
+                if value != key {
+                    result.push(value)
+                }
+            }
+            Option::None => {
+            }
+        }
+        index = index + 1_usize
+    }
+    ret result
+}
+
+fn modifiers_match(required: u32, actual: u32) -> bool {
+    ret(actual & required) == required
+}
+
+pub struct ShortcutRegistry {
+    bindings: Vec[Shortcut]
+    down: Vec[u32]
+    pressed: Vec[u32]
+    released: Vec[u32]
+    events: Vec[u32]
+    modifiers: u32
+}
+
+impl for ShortcutRegistry {
+    pub fn new() -> Self {
+        ret Self {
+            Vec[Shortcut]::new(), Vec[u32]::new(), Vec[u32]::new(), Vec[u32]::new(),
+            Vec[u32]::new(), 0_u32
+        }
+    }
+
+    /// Clears per-frame edge events while preserving currently held keys.
+    pub fn begin_frame(self: mut Self) ->() {
+        self.pressed = Vec[u32]::new()
+        self.released = Vec[u32]::new()
+        self.events = Vec[u32]::new()
+        ret()
+    }
+
+    /// Feeds one native event into the registry. Repeated key-down events do
+    /// not create another pressed edge, but remain visible to repeat-enabled
+    /// shortcuts through `action_triggered`.
+    pub fn handle(self: mut Self, event: Event) ->() {
+        if event.kind() == event_key_down() {
+            self.modifiers = event.modifiers()
+            self.events.push(event.key())
+            if !key_list_contains(self.down, event.key()) {
+                self.down.push(event.key())
+                self.pressed.push(event.key())
+            }
+        } elif event.kind() == event_key_up() {
+            self.modifiers = event.modifiers()
+            if key_list_contains(self.down, event.key()) {
+                self.down = key_list_without(self.down, event.key())
+                self.released.push(event.key())
+            }
+        }
+        ret()
+    }
+
+    pub fn bind(self: mut Self, shortcut: Shortcut) ->() {
+        self.bindings.push(shortcut)
+        ret()
+    }
+
+    pub fn unbind(self: mut Self, id: str) -> bool {
+        let mut removed = false
+        let mut next = Vec[Shortcut]::new()
+        let mut index = 0_usize
+        while index < self.bindings.len() {
+            match self.bindings.get(index) {
+                Option::Some(existing) => {
+                    if existing.id() == id {
+                        removed = true
+                    } else {
+                        next.push(existing)
+                    }
+                }
+                Option::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        self.bindings = next
+        ret removed
+    }
+
+    pub fn clear(self: mut Self) ->() {
+        self.down = Vec[u32]::new()
+        self.pressed = Vec[u32]::new()
+        self.released = Vec[u32]::new()
+        self.events = Vec[u32]::new()
+        self.modifiers = 0_u32
+        ret()
+    }
+
+    pub fn is_down(self: Self, key: u32) -> bool {
+        ret key_list_contains(self.down, key)
+    }
+
+    pub fn was_pressed(self: Self, key: u32) -> bool {
+        ret key_list_contains(self.pressed, key)
+    }
+
+    pub fn was_released(self: Self, key: u32) -> bool {
+        ret key_list_contains(self.released, key)
+    }
+
+    pub fn action_down(self: Self, id: str) -> bool {
+        let mut index = 0_usize
+        while index < self.bindings.len() {
+            match self.bindings.get(index) {
+                Option::Some(binding) => {
+                    if binding.id() == id && self.is_down(binding.key()) &&
+                    modifiers_match(binding.modifiers(), self.modifiers) {
+                        ret true
+                    }
+                }
+                Option::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        ret false
+    }
+
+    pub fn action_triggered(self: Self, id: str) -> bool {
+        let mut index = 0_usize
+        while index < self.bindings.len() {
+            match self.bindings.get(index) {
+                Option::Some(binding) => {
+                    if binding.id() == id && key_list_contains(self.events, binding.key()) &&
+                    modifiers_match(binding.modifiers(), self.modifiers) &&
+                    (binding.repeat() || self.was_pressed(binding.key())) {
+                        ret true
+                    }
+                }
+                Option::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        ret false
+    }
+
+    pub fn action_released(self: Self, id: str) -> bool {
+        let mut index = 0_usize
+        while index < self.bindings.len() {
+            match self.bindings.get(index) {
+                Option::Some(binding) => {
+                    if binding.id() == id && self.was_released(binding.key()) {
+                        ret true
+                    }
+                }
+                Option::None => {
+                }
+            }
+            index = index + 1_usize
+        }
+        ret false
+    }
+}

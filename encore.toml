@@ -1,11 +1,14 @@
 [project]
 name = "luma"
-version = "0.1.1"
+version = "0.2.0"
 description = "Cross-platform native UI toolkit"
+repository = "https://github.com/encore-ecosystem/Luma"
+encore = ">=0.2.1, <0.3.0"
 readme = "README.md"
 licence = "MIT"
 build = "build.enq"
 dependencies = [
+    "index@std@^1.0.1",
     "index@color@^0.1.0",
     "index@geometry@^0.1.0",
     "workspace@ui_native",

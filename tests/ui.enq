@@ -1,12 +1,15 @@
-import core::io::println
 import core::option::Option
-import core::os::cwd
 import core::vec::Vec
+import std::io::println
+import std::os::cwd
 import luma:: {
     ButtonAnimation, Color, FilePicker, FilePickerIcons, FlexItem, FontManager, IconAsset, IconManager,
-    Insets, InteractionState, LinearGradient, ReactiveUi, Rect, Style, StyleSheet, SvgDocument, TextEditor,
+    Insets, InteractionState, LinearGradient, ReactiveUi, Rect, RichText, Span, Style, StyleSheet,
+    SvgDocument, TextEditIntent,
+    TextEditor,
     Theme, Widget, WidgetLayout, apply_css, css_color, css_number, css_style, easing_linear, flex_layout,
-    horizontal, interpolate_style, layout_widget, text_center, text_end, vertical, widget_icon, widget_icon_button
+    horizontal, interpolate_style, layout_widget, text_center, text_end, vertical, widget_icon,
+    widget_icon_button, widget_rich_text
 }
 
 fn test_case(name: str, passed: bool) -> bool {
@@ -90,6 +93,18 @@ fn layout_contract() -> bool {
             ret false
         }
     }
+}
+
+fn rich_text_contract() -> bool {
+    let text = RichText::new("word")
+        .with_text_anchor_child("anchor")
+        .with_child(Span::new("prefix", "gu"))
+        .with_child(Span::new("anchor", "a"))
+        .with_child(Span::new("suffix", "rd"))
+    let layout = layout_widget(text, Rect::new(0.0_f32, 0.0_f32, 240.0_f32, 60.0_f32))
+    ret text.kind() == widget_rich_text() && text.text() == "guard" &&
+        text.text_anchor_child() == "anchor" && text.children().len() == 3_usize &&
+        layout.children().len() == 0_usize
 }
 
 fn flex_shrink_contract() -> bool {
@@ -257,9 +272,12 @@ fn standard_widgets_contract() -> bool {
     let checkbox = Widget::checkbox("terms", "Accept", true)
     let input = Widget::input("name", "Encore").with_focus(true)
     let slider = Widget::slider("volume", 1.5_f32)
+    let range = Widget::range_slider("levels", 0.8_f32, 0.2_f32).with_range_ticks(6_usize)
     let progress = Widget::progress( - 1.0_f32)
     ret checkbox.checked() && checkbox.id() == "terms" && input.focused() && !input.checked() &&
-    slider.value() == 1.0_f32 && progress.value() == 0.0_f32
+    slider.value() == 1.0_f32 && range.range_start() > 0.19_f32 && range.range_start() < 0.21_f32 &&
+    range.range_end() > 0.79_f32 && range.range_end() < 0.81_f32 && range.range_ticks() == 6_usize &&
+    progress.value() == 0.0_f32
 }
 
 fn disabled_widget_contract() -> bool {
@@ -318,6 +336,21 @@ fn text_editor_contract() -> bool {
     dragged.selection_start() == 2_usize && dragged.selection_end() == 6_usize
 }
 
+fn managed_text_edit_contract() -> bool {
+    let original = TextEditor::new("Luma").with_cursor(4_usize)
+    let inserted = TextEditIntent::insert("title", " UI").apply(original)
+    let selected = TextEditIntent::move_left("title", true).apply(inserted)
+    let cut = TextEditIntent::cut("title").apply(selected)
+    let pasted = TextEditIntent::paste("title", "!").apply(cut)
+    let placed = TextEditIntent::place_cursor("title", 2_usize).apply(pasted)
+    let dragged = TextEditIntent::extend_to("title", 5_usize).apply(placed)
+    ret TextEditIntent::insert("title", "x").target() == "title" &&
+    inserted.value() == "Luma UI" && selected.selected_text() == "I" &&
+    cut.value() == "Luma U" && pasted.value() == "Luma U!" &&
+    placed.cursor() == 2_usize && dragged.selected_text() == "ma " &&
+    TextEditIntent::copy("title").apply(pasted).value() == pasted.value()
+}
+
 fn widget_bounds_lookup_contract() -> bool {
     let mut root = Widget::panel("root")
     root.push(Widget::slider("volume", 0.5_f32))
@@ -344,6 +377,16 @@ fn css_style_contract() -> bool {
     style.layout().max_height() == 60.0_f32 && style.layout().overflow_hidden() && style.gap() == 6.0_f32
     &&
     style.font_size() == 18.0_f32 && style.font_weight() == 700_u32 && style.opacity() == 0.5_f32
+}
+
+fn css_relative_font_size_contract() -> bool {
+    let base = Style::default().with_font_size(20.0_f32)
+    let percent = apply_css(base, "font-size: 125%;")
+    let em = apply_css(base, "font-size: 1.5em;")
+    let rem = apply_css(base, "font-size: 2rem;")
+    let viewport = apply_css(base, "font-size: 5vw;")
+    ret percent.font_size() == 25.0_f32 && em.font_size() == 30.0_f32 &&
+    rem.font_size() == 32.0_f32 && viewport.font_size() == 20.0_f32
 }
 
 fn css_box_layout_contract() -> bool {
@@ -1610,6 +1653,13 @@ fn scroll_layout_contract() -> bool {
     }
 }
 
+fn text_wrap_widget_contract() -> bool {
+    let wrapped = Widget::label("A paragraph that should wrap").with_text_wrap(true)
+    let plain = Widget::label("A label")
+    ret wrapped.text_wrap() && !plain.text_wrap() &&
+    wrapped.attribute("data-luma-text-wrap").unwrap_or("") == "true"
+}
+
 fn color_picker_contract() -> bool {
     let color = css_color("#cf4848")
     let picker = Widget::color_picker("accent", "Accent", color)
@@ -1645,7 +1695,7 @@ fn svg_view_box_origin_contract() -> bool {
     let document = SvgDocument::parse(
         "<svg viewBox=\"10 -5 20 30\"><path d=\"M10 -5h20v30\"/></svg>")
     ret document.valid() && document.min_x() == 10.0_f32 &&
-    document.min_y() == -5.0_f32 && document.width() == 20.0_f32 &&
+    document.min_y() == - 5.0_f32 && document.width() == 20.0_f32 &&
     document.height() == 30.0_f32 && document.lines().len() == 2_usize
 }
 
@@ -1687,6 +1737,9 @@ fn main() -> u32 {
         ret 1_u32
     }
     if !test_case("layout_contract", layout_contract()) {
+        ret 1_u32
+    }
+    if !test_case("rich_text_contract", rich_text_contract()) {
         ret 1_u32
     }
     if !test_case("flex_shrink_contract", flex_shrink_contract()) {
@@ -1735,6 +1788,9 @@ fn main() -> u32 {
     if !test_case("text_editor_contract", text_editor_contract()) {
         ret 1_u32
     }
+    if !test_case("managed_text_edit_contract", managed_text_edit_contract()) {
+        ret 1_u32
+    }
     if !test_case("widget_bounds_lookup_contract", widget_bounds_lookup_contract()) {
         ret 1_u32
     }
@@ -1742,6 +1798,9 @@ fn main() -> u32 {
         ret 1_u32
     }
     if !test_case("css_style_contract", css_style_contract()) {
+        ret 1_u32
+    }
+    if !test_case("css_relative_font_size_contract", css_relative_font_size_contract()) {
         ret 1_u32
     }
     if !test_case("css_box_layout_contract", css_box_layout_contract()) {
@@ -1875,6 +1934,9 @@ fn main() -> u32 {
         ret 1_u32
     }
     if !test_case("scroll_layout_contract", scroll_layout_contract()) {
+        ret 1_u32
+    }
+    if !test_case("text_wrap_widget_contract", text_wrap_widget_contract()) {
         ret 1_u32
     }
     if !test_case("color_picker_contract", color_picker_contract()) {

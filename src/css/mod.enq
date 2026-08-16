@@ -1,27 +1,17 @@
 //! CSS declarations, stylesheets, selectors, variables, and cascade support.
 
-import color:: {
-    Color, black, transparent, white
-}
+import color::{Color, black, transparent, white}
+import core::fmt::Debug
 import core::option::Option
+import core::result::Result
 import core::vec::Vec
 import geometry::Insets
-import refrain::layout:: {
-    align_center, align_end, align_start, align_stretch, horizontal,
-    justify_center, justify_end, justify_space_around, justify_space_between, justify_space_evenly, justify_start,
-    vertical
-}
-import refrain::style:: {
-    LinearGradient, Style, align_content_center, align_content_end, align_content_space_around,
-    align_content_space_between, align_content_space_evenly, align_content_start, align_content_stretch,
-    text_center, text_end, text_start
-}
-import refrain::widget:: {
-    Widget, widget_button, widget_checkbox, widget_color_picker, widget_color_swatch,
-    widget_heading, widget_input, widget_label, widget_link, widget_panel, widget_progress, widget_radio,
-    widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_textarea, widget_icon,
-    widget_icon_button, widget_icon_card
-}
+import refrain::layout::{align_center, align_end, align_start, align_stretch, horizontal, justify_center, justify_end, justify_space_around, justify_space_between, justify_space_evenly, justify_start, vertical}
+import refrain::style::{LinearGradient, Style, TransitionStyle, align_content_center, align_content_end, align_content_space_around, align_content_space_between, align_content_space_evenly, align_content_start, align_content_stretch, text_center, text_end, text_start}
+import refrain::widget::{Widget, widget_button, widget_checkbox, widget_color_picker, widget_color_swatch, widget_heading, widget_input, widget_label, widget_link, widget_panel, widget_progress, widget_radio, widget_range_slider, widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_textarea, widget_icon, widget_icon_button, widget_icon_card, widget_image}
+import std::os::{file_exists, read_file}
+
+extern fn luma_default_css_source() -> str
 
 pub struct StyleRule {
     selector: str
@@ -46,9 +36,75 @@ struct SelectorCombinator {
     kind: usize
 }
 
+struct ComputedStyleCacheEntry {
+    key: str
+    declarations: str
+}
+
+/// A bounded cache shared by every copy of one stylesheet value. It caches
+/// the resolved declaration sequence, not a final `Style`, so inheritance and
+/// application-authored base styles remain correct on every use.
+struct ComputedStyleCache {
+    entries: Vec[ComputedStyleCacheEntry]
+    hits: u64
+    misses: u64
+}
+
+impl for ComputedStyleCache {
+    fn new() -> ComputedStyleCache < H > {
+        ret ComputedStyleCache < H > {
+            Vec[ComputedStyleCacheEntry]::new(), 0_u64, 0_u64
+        }
+    }
+
+    fn get(self: Self &, key: str) -> Option[str] {
+        let mut index = 0_usize
+        while index < self.entries.len() {
+            match self.entries.get(index) {
+                Option::Some(entry) => {
+                    if entry.key == key {
+                        self.hits += 1_u64
+                        ret Option[str]::Some(entry.declarations)
+                    }
+                }
+                Option::None => {
+                }
+            }
+            index += 1_usize
+        }
+        self.misses += 1_u64
+        ret Option[str]::None
+    }
+
+    fn put(self: Self &, key: str, declarations: str) ->() {
+        // Bound retained memory for applications that generate unstable IDs.
+        // Clearing is deliberately coarse and rare; normal retained trees keep
+        // a small, hot set of selector states.
+        if self.entries.len() >= 2048_usize {
+            self.entries = Vec[ComputedStyleCacheEntry]::new()
+        }
+        self.entries.push(ComputedStyleCacheEntry {
+                key, declarations
+            }
+            ,
+        )
+        ret()
+    }
+
+    fn hit_count(self: Self &) -> u64 {
+        ret self.hits
+    }
+    fn miss_count(self: Self &) -> u64 {
+        ret self.misses
+    }
+}
+
 pub struct StyleSheet {
     rules: Vec[StyleRule]
     maximum_specificity: usize
+    revision: u64
+    source_path: str
+    cache: ComputedStyleCache < H >
 }
 
 impl for StyleSheet {
@@ -79,8 +135,87 @@ impl for StyleSheet {
             }
         }
         ret StyleSheet {
-            rules, maximum_specificity
+            rules, maximum_specificity, stylesheet_revision(source), "",
+            ComputedStyleCache::new()
         }
+    }
+
+    /// Returns Luma's embedded user-agent stylesheet. Applications may layer
+    /// their own file over it without relying on the process working directory.
+    pub fn default() -> StyleSheet {
+        ret StyleSheet::parse(luma_default_css_source())
+    }
+
+    pub fn try_parse(source: str) -> Result[StyleSheet, str] {
+        if !css_balanced(source) {
+            ret Result[StyleSheet, str]::Err("unclosed CSS rule or quoted value")
+        }
+        ret Result[StyleSheet, str]::Ok(StyleSheet::parse(source))
+    }
+
+    pub fn from_file(path: str) -> Result[StyleSheet, str] {
+        if !file_exists(path) {
+            ret Result[StyleSheet, str]::Err("stylesheet file does not exist: " + path)
+        }
+        match StyleSheet::try_parse(read_file(path)) {
+            Result::Ok(sheet) => {
+                ret Result[StyleSheet, str]::Ok(StyleSheet {
+                        sheet.rules, sheet.maximum_specificity,
+                        sheet.revision, path, ComputedStyleCache::new()
+                    }
+                    ,)
+            }
+            Result::Err(message) => {
+                ret Result[StyleSheet, str]::Err(message)
+            }
+        }
+        ret Result[StyleSheet, str]::Err("cannot load stylesheet: " + path)
+    }
+
+    /// Layers `other` after this stylesheet, preserving normal source order.
+    pub fn merge(self: Self, other: StyleSheet) -> StyleSheet {
+        let mut rules = Vec[StyleRule]::new()
+        rules.extend(self.rules)
+        rules.extend(other.rules)
+        ret StyleSheet {
+            rules,
+            if self.maximum_specificity > other.maximum_specificity {
+                self.maximum_specificity
+            } else {
+                other.maximum_specificity
+            }
+            ,
+            self.revision ^(other.revision * 1099511628211_u64), other.source_path,
+            ComputedStyleCache::new()
+        }
+    }
+
+    pub fn reload(self: Self) -> StyleSheet {
+        if self.source_path == "" {
+            ret self
+        }
+        match StyleSheet::from_file(self.source_path) {
+            Result::Ok(sheet) => {
+                ret StyleSheet::default().merge(sheet)
+            }
+            Result::Err(_) => {
+                ret self
+            }
+        }
+        ret self
+    }
+
+    pub fn revision(self: Self) -> u64 {
+        ret self.revision
+    }
+    pub fn source_path(self: Self) -> str {
+        ret self.source_path
+    }
+    pub fn cache_hits(self: Self) -> u64 {
+        ret self.cache.hit_count()
+    }
+    pub fn cache_misses(self: Self) -> u64 {
+        ret self.cache.miss_count()
     }
 
     pub fn style(self: Self, widget: Widget, hovered: bool, active: bool, focused: bool) -> Style {
@@ -107,6 +242,48 @@ impl for StyleSheet {
     fn maximum_specificity(self: Self) -> usize {
         ret self.maximum_specificity
     }
+}
+
+fn stylesheet_revision(source: str) -> u64 {
+    let mut hash = 1469598103934665603_u64
+    let mut index = 0_usize
+    while index < source.len() {
+        hash =(hash ^(source.byte_at(index) as u64)) * 1099511628211_u64
+        index += 1_usize
+    }
+    ret hash
+}
+
+fn css_balanced(source: str) -> bool {
+    let mut depth = 0_i32
+    let mut quote = ""
+    let mut escaped = false
+    let mut index = 0_usize
+    while index < source.char_len() {
+        let current = source.slice(index, 1_usize)
+        if quote != "" {
+            if escaped {
+                escaped = false
+            } elif current == "\\" {
+                escaped = true
+            } elif current == quote {
+                quote = ""
+            }
+        } else {
+            if current == "\"" || current == "'" {
+                quote = current
+            } elif current == "{" {
+                depth += 1_i32
+            } elif current == "}" {
+                depth -= 1_i32
+                if depth < 0_i32 {
+                    ret false
+                }
+            }
+        }
+        index += 1_usize
+    }
+    ret depth == 0_i32 && quote == ""
 }
 
 fn rule_open(value: str, start: usize) -> usize {
@@ -195,28 +372,85 @@ fn compute_style(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorNode]
     child_index: usize, sibling_count: usize,
     hovered: bool, active: bool, focused: bool, focus_within: bool, variables: Vec[CssVariable],) ->
 Style {
-    let mut result = widget.style()
+    if widget.has_explicit_style() {
+        ret widget.style()
+    }
+    let key = computed_style_cache_key(sheet, widget, ancestors, siblings, child_index,
+        sibling_count, hovered, active, focused, focus_within, variables,)
+    match sheet.cache.get(key) {
+        Option::Some(declarations) => {
+            ret apply_css(widget.style(), declarations)
+        }
+        Option::None => {
+        }
+    }
+    let mut declarations = ""
+    let mut matched_declarations = Vec[str]::new()
+    let mut matched_specificities = Vec[usize]::new()
+    let mut index = 0_usize
+    while index < sheet.rules.len() {
+        match sheet.rules.get(index) {
+            Option[StyleRule]::Some(rule) => {
+                if selector_tree_matches(rule.selector, widget, ancestors,
+                    ancestors.len(), siblings, child_index, sibling_count, hovered, active, focused,
+                    focus_within,) {
+                    matched_declarations.push(rule.declarations)
+                    matched_specificities.push(rule.specificity)
+                }
+            }
+            Option[StyleRule]::None => {
+            }
+        }
+        index = index + 1_usize
+    }
     let mut score = 0_usize
     let maximum = sheet.maximum_specificity()
     while score <= maximum {
-        let mut index = 0_usize
-        while index < sheet.rules.len() {
-            match sheet.rules.get(index) {
-                Option[StyleRule]::Some(rule) => {
-                    if rule.specificity == score && selector_tree_matches(rule.selector, widget, ancestors,
-                        ancestors.len(), siblings, child_index, sibling_count, hovered, active, focused,
-                        focus_within,) {
-                        result = apply_css(result, resolve_variables(rule.declarations, variables))
+        let mut matched_index = 0_usize
+        while matched_index < matched_declarations.len() {
+            match matched_specificities.get(matched_index) {
+                Option[usize]::Some(specificity) => {
+                    if specificity == score {
+                        if declarations != "" {
+                            declarations = declarations + ";"
+                        }
+                        match matched_declarations.get(matched_index) {
+                            Option[str]::Some(value) => {
+                                declarations = declarations + resolve_variables(value, variables)
+                            }
+                            Option[str]::None => {
+                            }
+                        }
                     }
                 }
-                Option[StyleRule]::None => {
+                Option[usize]::None => {
                 }
             }
-            index = index + 1_usize
+            matched_index = matched_index + 1_usize
         }
         score = score + 1_usize
     }
-    ret result
+    sheet.cache.put(key, declarations)
+    ret apply_css(widget.style(), declarations)
+}
+
+fn computed_style_cache_key(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorNode],
+    siblings: Vec[Widget], child_index: usize, sibling_count: usize, hovered: bool, active: bool,
+    focused: bool, focus_within: bool, variables: Vec[CssVariable],) -> str {
+    let mut key = Debug::fmt(sheet.revision) + "#" + widget.selector_signature() + "#" +
+    Debug::fmt(child_index) + "/" + Debug::fmt(sibling_count) + "#" + Debug::fmt(hovered) +
+    Debug::fmt(active) + Debug::fmt(focused) + Debug::fmt(focus_within)
+    for ancestor in ancestors {
+        key = key + "#a:" + ancestor.widget.selector_signature() + ":" + Debug::fmt(ancestor.index) +
+        "/" + Debug::fmt(ancestor.count)
+    }
+    for sibling in siblings {
+        key = key + "#s:" + sibling.selector_signature()
+    }
+    for variable in variables {
+        key = key + "#v:" + variable.name + "=" + variable.value
+    }
+    ret key
 }
 
 fn compute_variables(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorNode], siblings: Vec[Widget],
@@ -224,23 +458,45 @@ fn compute_variables(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorN
     active: bool, focused: bool, focus_within: bool, inherited: Vec[CssVariable],) -> Vec[CssVariable]
 {
     let mut result = copy_variables(inherited)
+    let mut matched_declarations = Vec[str]::new()
+    let mut matched_specificities = Vec[usize]::new()
+    let mut index = 0_usize
+    while index < sheet.rules.len() {
+        match sheet.rules.get(index) {
+            Option[StyleRule]::Some(rule) => {
+                if selector_tree_matches(rule.selector, widget, ancestors,
+                    ancestors.len(), siblings, child_index, sibling_count, hovered, active, focused,
+                    focus_within,) {
+                    matched_declarations.push(rule.declarations)
+                    matched_specificities.push(rule.specificity)
+                }
+            }
+            Option[StyleRule]::None => {
+            }
+        }
+        index = index + 1_usize
+    }
     let mut score = 0_usize
     let maximum = sheet.maximum_specificity()
     while score <= maximum {
-        let mut index = 0_usize
-        while index < sheet.rules.len() {
-            match sheet.rules.get(index) {
-                Option[StyleRule]::Some(rule) => {
-                    if rule.specificity == score && selector_tree_matches(rule.selector, widget, ancestors,
-                        ancestors.len(), siblings, child_index, sibling_count, hovered, active, focused,
-                        focus_within,) {
-                        collect_variables(result, rule.declarations)
+        let mut matched_index = 0_usize
+        while matched_index < matched_declarations.len() {
+            match matched_specificities.get(matched_index) {
+                Option[usize]::Some(specificity) => {
+                    if specificity == score {
+                        match matched_declarations.get(matched_index) {
+                            Option[str]::Some(value) => {
+                                collect_variables(result, value)
+                            }
+                            Option[str]::None => {
+                            }
+                        }
                     }
                 }
-                Option[StyleRule]::None => {
+                Option[usize]::None => {
                 }
             }
-            index = index + 1_usize
+            matched_index = matched_index + 1_usize
         }
         score = score + 1_usize
     }
@@ -268,7 +524,7 @@ fn apply_stylesheet_node(sheet: StyleSheet, widget: Widget, hovered_id: str, act
     siblings: Vec[Widget], child_index: usize, sibling_count: usize,) -> Widget {
     let inherited = match parent {
         Option[Style]::Some(parent_style) => {
-            widget.with_style(widget.style().inherit_text(parent_style))
+            widget.with_computed_style(widget.style().inherit_text(parent_style))
         }
         Option[Style]::None => {
             widget
@@ -281,7 +537,7 @@ fn apply_stylesheet_node(sheet: StyleSheet, widget: Widget, hovered_id: str, act
     let focus_within = focused_id != "" && widget_contains_id(inherited, focused_id)
     let variables = compute_variables(sheet, inherited, ancestors, siblings, child_index, sibling_count,
         hovered, active, focused, focus_within, inherited_variables,)
-    let styled = inherited.with_style(compute_style(sheet, inherited, ancestors, siblings, child_index,
+    let styled = inherited.with_computed_style(compute_style(sheet, inherited, ancestors, siblings, child_index,
             sibling_count,
             hovered, active, focused, focus_within, variables,))
     let source = styled.children()
@@ -360,6 +616,31 @@ fn apply_declaration(style: Style, declaration: str) -> Style {
     }
     if property == "color" {
         ret style.with_foreground(css_color(value))
+    }
+    if property == "accent-color" {
+        ret if value == "auto" {
+            style
+        } else {
+            style.with_accent_color(css_color(value))
+        }
+    }
+    if property == "cursor" {
+        ret style.with_pointer_cursor(css_cursor(value))
+    }
+    if property == "transition" {
+        ret style.with_transition(css_transition(value))
+    }
+    if property == "transition-property" {
+        ret style.with_transition(style.transition().with_properties(value))
+    }
+    if property == "transition-duration" {
+        ret style.with_transition(style.transition().with_durations(value))
+    }
+    if property == "transition-delay" {
+        ret style.with_transition(style.transition().with_delays(value))
+    }
+    if property == "transition-timing-function" {
+        ret style.with_transition(style.transition().with_easings(value))
     }
     if property == "border-color" {
         ret style.with_border(style.border_width(), css_color(value))
@@ -661,7 +942,7 @@ fn apply_declaration(style: Style, declaration: str) -> Style {
         ret style.with_font_family(css_font_family(value))
     }
     if property == "font-size" {
-        ret style.with_font_size(css_number(value))
+        ret style.with_font_size(css_font_size(style, value))
     }
     if property == "font-weight" {
         ret style.with_font_weight(css_number(value) as u32)
@@ -700,6 +981,105 @@ fn apply_declaration(style: Style, declaration: str) -> Style {
         ret style.with_opacity(css_number(value))
     }
     ret style
+}
+
+fn css_cursor(value: str) -> u32 {
+    let input = trim(value)
+    if input == "text" {
+        ret 1_u32
+    }
+    if input == "crosshair" {
+        ret 3_u32
+    }
+    if input == "ew-resize" || input == "col-resize" {
+        ret 7_u32
+    }
+    if input == "ns-resize" || input == "row-resize" {
+        ret 8_u32
+    }
+    if input == "move" || input == "grab" || input == "grabbing" {
+        ret 9_u32
+    }
+    if input == "not-allowed" {
+        ret 10_u32
+    }
+    if input == "pointer" {
+        ret 11_u32
+    }
+    ret 0_u32
+}
+
+fn css_transition(value: str) -> TransitionStyle {
+    if trim(value) == "none" {
+        ret TransitionStyle::none()
+    }
+    let items = css_comma_values(value)
+    let mut properties = ""
+    let mut durations = ""
+    let mut delays = ""
+    let mut easings = ""
+    let mut index = 0_usize
+    while index < items.len() {
+        match items.get(index) {
+            Some(item) => {
+                let tokens = css_tokens(item)
+                let mut property = "all"
+                let mut duration = "0ms"
+                let mut delay = "0ms"
+                let mut easing = "ease"
+                let mut time_count = 0_usize
+                for token in tokens {
+                    if css_time_token(token) {
+                        if time_count == 0_usize {
+                            duration = token
+                        } else {
+                            delay = token
+                        }
+                        time_count += 1_usize
+                    } elif token == "linear" || token == "ease" || token == "ease-in" ||
+                    token == "ease-out" || token == "ease-in-out" || starts_with(token, "cubic-bezier(")
+                    {
+                        easing = token
+                    } elif token != "normal" && token != "allow-discrete" {
+                        property = token
+                    }
+                }
+                if index > 0_usize {
+                    properties = properties + ","
+                    durations = durations + ","
+                    delays = delays + ","
+                    easings = easings + ","
+                }
+                properties = properties + property
+                durations = durations + duration
+                delays = delays + delay
+                easings = easings + easing
+            }
+            None => {
+            }
+        }
+        index += 1_usize
+    }
+    ret TransitionStyle::new(properties, durations, delays, easings)
+}
+
+fn css_time_token(value: str) -> bool {
+    ret ends_with(value, "ms") || ends_with(value, "s")
+}
+
+fn css_comma_values(value: str) -> Vec[str] {
+    let mut result = Vec[str]::new()
+    let mut remaining = trim(value)
+    while remaining != "" {
+        let comma = top_level_comma(remaining)
+        if comma == remaining.char_len() {
+            result.push(trim(remaining))
+            break
+        }
+        result.push(trim(remaining.slice(0_usize, comma)))
+        remaining = trim(remaining.slice(comma + 1_usize, remaining.char_len() - comma - 1_usize))
+    }
+    ret result
 }
 
 fn css_linear_gradient(style: Style, value: str) -> Style {
@@ -859,6 +1239,31 @@ fn css_font_family(value: str) -> str {
         }
     }
     ret family
+}
+
+fn css_font_size(style: Style, value: str) -> f32 {
+    let input = trim(value)
+    let inherited = if style.font_size() > 0.0_f32 {
+        style.font_size()
+    } else {
+        16.0_f32
+    }
+    if ends_with(input, "%") {
+        ret inherited * css_number(input) / 100.0_f32
+    }
+    if ends_with(input, "rem") {
+        ret 16.0_f32 * css_number(input)
+    }
+    if ends_with(input, "em") {
+        ret inherited * css_number(input)
+    }
+    // Viewport-relative font sizes require a layout viewport. Silently
+    // preserving the inherited value is safer than treating `5vw` as 5px.
+    if ends_with(input, "vw") || ends_with(input, "vh") ||
+    ends_with(input, "vmin") || ends_with(input, "vmax") {
+        ret inherited
+    }
+    ret css_number(input)
 }
 
 fn css_dimension(value: str) -> f32 {
@@ -2613,7 +3018,8 @@ fn widget_has_attribute(widget: Widget, name: str) -> bool {
 fn form_control(widget: Widget) -> bool {
     let kind = widget.kind()
     ret kind == widget_input() || kind == widget_textarea() || kind == widget_checkbox() ||
-    kind == widget_radio() || kind == widget_select() || kind == widget_slider() || kind == widget_color_picker()
+    kind == widget_radio() || kind == widget_select() || kind == widget_slider() ||
+    kind == widget_range_slider() || kind == widget_color_picker()
 }
 
 fn read_write_control(widget: Widget) -> bool {
@@ -2743,6 +3149,9 @@ fn has_class(classes: str, expected: str) -> bool {
 }
 
 fn widget_type(widget: Widget) -> str {
+    if widget.tag() != "" && widget.tag() != "widget" {
+        ret widget.tag()
+    }
     let kind = widget.kind()
     if kind == widget_panel() {
         ret "div"
@@ -2774,7 +3183,7 @@ fn widget_type(widget: Widget) -> str {
     if kind == widget_select() {
         ret "select"
     }
-    if kind == widget_slider() {
+    if kind == widget_slider() || kind == widget_range_slider() {
         ret "input"
     }
     if kind == widget_progress() {
@@ -2797,6 +3206,9 @@ fn widget_type(widget: Widget) -> str {
     }
     if kind == widget_icon() {
         ret "svg"
+    }
+    if kind == widget_image() {
+        ret "img"
     }
     if kind == widget_icon_button() {
         ret "button"

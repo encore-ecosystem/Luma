@@ -1,0 +1,167 @@
+//! Typed HTML-like builders. These are ordinary Encore values; they do not
+//! parse HTML strings and require no UI-specific EHIR instruction.
+
+import refrain::widget::Widget
+
+pub struct Html {
+}
+pub struct Body {
+}
+pub struct Main {
+}
+pub struct Section {
+}
+pub struct Nav {
+}
+pub struct Header {
+}
+pub struct Footer {
+}
+pub struct Span {
+}
+/// Inline text whose direct `Span` children are shaped as one continuous run.
+pub struct RichText {
+}
+pub struct Label {
+}
+pub struct Heading {
+}
+pub struct Button {
+}
+pub struct Input {
+}
+pub struct Textarea {
+}
+pub struct Slider {
+}
+pub struct RangeSlider {
+}
+pub struct Progress {
+}
+pub struct Select {
+}
+/// Semantic output element. The qualified name avoids colliding with process
+/// result types in Encore's current LLVM type namespace.
+pub struct HtmlOutput {
+}
+pub struct Link {
+}
+pub struct Image {
+}
+
+impl for Html {
+    pub fn new() -> Widget {
+        ret Widget::panel("html-root").with_tag("html")
+    }
+    pub fn div(id: str) -> Widget {
+        ret Widget::panel(id).with_tag("div")
+    }
+}
+impl for Body {
+    pub fn new(id: str) -> Widget {
+        ret Widget::panel(id).with_tag("body")
+    }
+}
+impl for Main {
+    pub fn new(id: str) -> Widget {
+        ret Widget::panel(id).with_tag("main")
+    }
+}
+impl for Section {
+    pub fn new(id: str) -> Widget {
+        ret Widget::panel(id).with_tag("section")
+    }
+}
+impl for Nav {
+    pub fn new(id: str) -> Widget {
+        ret Widget::panel(id).with_tag("nav")
+    }
+}
+impl for Header {
+    pub fn new(id: str) -> Widget {
+        ret Widget::panel(id).with_tag("header")
+    }
+}
+impl for Footer {
+    pub fn new(id: str) -> Widget {
+        ret Widget::panel(id).with_tag("footer")
+    }
+}
+impl for Span {
+    pub fn new(id: str, text: str) -> Widget {
+        ret Widget::label(text).with_id(id).with_tag("span")
+    }
+}
+impl for RichText {
+    pub fn new(id: str) -> Widget {
+        ret Widget::rich_text(id)
+    }
+}
+impl for Label {
+    pub fn new(id: str, text: str) -> Widget {
+        ret Widget::label(text).with_id(id).with_tag("label")
+    }
+}
+impl for Heading {
+    pub fn new(id: str, text: str) -> Widget {
+        ret Widget::heading(text).with_id(id).with_tag("h1")
+    }
+}
+impl for Button {
+    pub fn new(id: str, text: str) -> Widget {
+        ret Widget::button(id, text).with_tag("button")
+    }
+}
+impl for Input {
+    pub fn new(id: str, value: str) -> Widget {
+        ret Widget::input(id, value).with_tag("input")
+    }
+}
+impl for Textarea {
+    pub fn new(id: str, value: str) -> Widget {
+        ret Widget::textarea(id, value).with_tag("textarea")
+    }
+}
+impl for Slider {
+    pub fn new(id: str, value: f32) -> Widget {
+        ret Widget::slider(id, value).with_tag("input")
+    }
+}
+impl for RangeSlider {
+    pub fn new(id: str, start: f32, end: f32) -> Widget {
+        ret Widget::range_slider(id, start, end).with_tag("input")
+    }
+    /// Creates a range slider with evenly spaced marks rendered on its track.
+    pub fn with_ticks(id: str, start: f32, end: f32, count: usize) -> Widget {
+        ret Widget::range_slider(id, start, end).with_tag("input")
+        .with_range_ticks(count)
+    }
+}
+impl for Progress {
+    pub fn new(id: str, value: f32) -> Widget {
+        ret Widget::progress(value).with_id(id).with_tag("progress")
+    }
+    pub fn countdown(id: str, duration_ms: u64, cycle: u64) -> Widget {
+        ret Widget::countdown(id, duration_ms, cycle).with_tag("progress")
+    }
+}
+impl for Select {
+    pub fn new(id: str, value: str) -> Widget {
+        ret Widget::select(id, value).with_tag("select")
+    }
+}
+impl for HtmlOutput {
+    pub fn new(id: str, text: str) -> Widget {
+        ret Widget::label(text).with_id(id).with_tag("output")
+    }
+}
+impl for Link {
+    pub fn new(id: str, text: str) -> Widget {
+        ret Widget::link(id, text).with_tag("a")
+    }
+}
+impl for Image {
+    pub fn new(id: str, rgba_payload: str) -> Widget {
+        ret Widget::image(id, rgba_payload)
+    }
+}

@@ -1,0 +1,112 @@
+//! Default Luma preset with no application stylesheet or typed theme.
+
+import core::fmt::Debug
+import luma:: {
+    AppEvent, Application, Button, Heading, Html, Label, Main, TextEditor,
+    Widget, Window, run_application
+}
+
+struct DefaultPreset {
+    count: u32
+    updates: bool
+    motion: bool
+    volume: f32
+    name: TextEditor
+    notes: TextEditor
+}
+
+impl for DefaultPreset {
+    fn new() -> Self {
+        ret Self {
+            0_u32, true, true, 0.64_f32,
+            TextEditor::new("Encore application"),
+            TextEditor::new("The default layout, controls, focus and motion come from Luma.")
+        }
+    }
+}
+
+impl Application for DefaultPreset {
+    fn view(self: Self) -> Widget {
+        let mut controls = Html::div("controls").with_classes("luma-stack luma-card")
+        controls = controls.with_child(Heading::new("title", "Luma default preset")
+            .with_text_wrap(true))
+        .with_child(Label::new("description",
+                "Ready to use without application CSS",).with_classes("muted")
+            .with_text_wrap(true))
+        .with_child(Widget::input("name", self.name.value())
+            .with_selection(self.name.selection_start(), self.name.selection_end()))
+        .with_child(Widget::textarea("notes", self.notes.value())
+            .with_selection(self.notes.selection_start(), self.notes.selection_end()))
+        .with_child(Widget::checkbox("updates", "Enable updates", self.updates))
+        .with_child(Widget::toggle("motion", "Smooth transitions", self.motion))
+        .with_child(Widget::slider("volume", self.volume))
+        .with_child(Widget::progress(0.72_f32))
+        .with_child(Label::new("state", "Updates: " +
+                if self.updates { "on" } else { "off" } + " · Motion: " +
+                if self.motion { "on" } else { "off" } + " · Slider: " +
+                Debug::fmt((self.volume * 100.0_f32) as u32) + "%",)
+            .with_classes("muted"))
+
+        let actions = Html::div("actions").with_classes("luma-row luma-actions")
+        .with_child(Button::new("increment", "Count: " + Debug::fmt(self.count))
+            .with_classes("primary"))
+        .with_child(Button::new("secondary", "Secondary"))
+        .with_child(Button::new("disabled", "Disabled").with_disabled(true))
+        controls = controls.with_child(actions)
+
+        ret Html::new().with_child(
+            Main::new("main").with_classes("luma-stack").with_child(controls),)
+    }
+
+    fn update(self: Self, event: AppEvent) -> Self {
+        if event.is_control_change() {
+            if event.target() == "updates" {
+                ret Self { self.count, event.checked(), self.motion, self.volume,
+                    self.name, self.notes }
+            }
+            if event.target() == "motion" {
+                ret Self { self.count, self.updates, event.checked(), self.volume,
+                    self.name, self.notes }
+            }
+            if event.target() == "volume" {
+                ret Self { self.count, self.updates, self.motion, event.value(),
+                    self.name, self.notes }
+            }
+        }
+        if event.is_text_edit() {
+            if event.target() == "name" {
+                ret Self { self.count, self.updates, self.motion, self.volume,
+                    event.text_edit().apply(self.name), self.notes }
+            }
+            if event.target() == "notes" {
+                ret Self { self.count, self.updates, self.motion, self.volume,
+                    self.name, event.text_edit().apply(self.notes) }
+            }
+        }
+        if event.is_action() && event.action() == "increment" {
+            ret Self {
+                self.count + 1_u32, self.updates, self.motion, self.volume,
+                self.name, self.notes
+            }
+        }
+        ret self
+    }
+    fn can_close(self: Self) -> bool {
+        ret true
+    }
+    fn background_interval_ms(self: Self) -> u32 {
+        ret 0_u32
+    }
+    fn background_revision(self: Self) -> u64 {
+        ret 0_u64
+    }
+}
+
+fn main() -> u32 {
+    let window = Window::create("Luma default preset", 720_u32, 640_u32)
+    if !window.available() {
+        ret 1_u32
+    }
+    let _final = run_application(window, DefaultPreset::new())
+    ret 0_u32
+}
