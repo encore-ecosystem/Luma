@@ -12,11 +12,13 @@ dependencies = [
     "index@color@^0.1.0",
     "index@geometry@^0.1.0",
     "workspace@ui_native",
-    "index@vulkan_native@^0.1.0",
+    "workspace@vulkan_native",
+    "workspace@metal_native",
+    "workspace@graphics_native",
 ]
 
 [publish]
-exclude = ["workspace/vulkan_native/**"]
+exclude = ["workspace/vulkan_native/**", "workspace/metal_native/**", "workspace/graphics_native/**"]
 
 [features]
 default = ["fonts"]

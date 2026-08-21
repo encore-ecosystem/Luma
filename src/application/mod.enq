@@ -6,6 +6,7 @@ import core::option::Option
 import core::result::Result
 import core::vec::Vec
 import geometry::Rect
+import mod::direct_backend::{direct_context_create, direct_context_available, direct_context_error, direct_context_destroy, direct_context_instance, direct_context_physical_device, direct_adapter_name, direct_window_attach, direct_window_available, direct_window_error, direct_window_destroy, direct_device_create_features, direct_device_available, direct_device_error, direct_device_destroy, direct_device_handle, direct_device_queue_family, direct_device_requested_features, direct_device_enabled_features, direct_swapchain_create, direct_swapchain_available, direct_swapchain_error, direct_swapchain_destroy, native_frame_slot, direct_ui_create, direct_ui_available, direct_ui_error, direct_ui_destroy}
 import refrain::css::StyleSheet
 import refrain::display::{DisplayCommand, DisplayList, RetainedDisplayList}
 import refrain::style::{Style, text_center, text_end}
@@ -13,7 +14,6 @@ import refrain::svg::{SvgDocument, SvgLine}
 import refrain::widget::{ReactiveUi, Widget, WidgetLayout, inherit_widget_styles, layout_widget, widget_button, widget_checkbox, widget_heading, widget_color_channel, widget_color_picker, widget_color_swatch, widget_icon, widget_icon_button, widget_icon_card, widget_image, widget_input, widget_label, widget_link, widget_progress, widget_radio, widget_range_slider, widget_render_surface, widget_rich_text, widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_terminal, widget_textarea}
 import std::time::{perf_counter_ms}
 import ui_native::{native_backend_error, native_backend_name, native_renderer_name, native_renderer_device_name, native_begin, native_create_with_renderer, native_circle, native_clip, native_clipboard_set, native_clipboard_text, native_destroy, native_end, native_event_buttons, native_event_dx, native_event_dy, native_event_key, native_event_modifiers, native_event_text, native_event_timestamp_ns, native_event_wheel_x, native_event_wheel_y, native_event_x, native_event_y, native_fill_rect, native_font_clear, native_font_load, native_font_register, native_font_select, native_font_style, native_line, native_open, native_poll, native_set_cursor, native_set_relative_mouse_mode, native_set_window_minimum_size, native_wait, native_round_rect, native_stroke_rect, native_terminal, native_text, native_styled_text, native_text_wrapped, native_image_rgba, native_text_height, native_text_index, native_text_width, native_vector_line, native_vector_path_begin, native_vector_path_point, native_vector_path_stroke, native_width, native_height, native_pixel_width, native_pixel_height, native_pixel_density, native_present_count, native_read_pixel, native_layout_cache_begin, native_layout_cache_patch_begin, native_layout_cache_end, native_cached_frame_begin, native_layout_cache_ready, native_overlay_cache_begin, native_overlay_cache_end, native_overlay_cache_draw, native_platform_handle, native_vulkan_instance, native_vulkan_physical_device, native_vulkan_device, native_vulkan_graphics_queue_family, native_external_vulkan_image_bind, native_external_image_draw, native_external_vulkan_images_clear, native_set_present_mode, native_backend_set_error, native_direct_compositor_bind, native_direct_resources_release, native_direct_frame_acquire, native_direct_frame_prepare, native_direct_frame_begin_composition, native_direct_frame_finish, native_direct_composition_split}
-import vulkan_native::{direct_context_create, direct_context_available, direct_context_error, direct_context_destroy, direct_context_instance, direct_context_physical_device, direct_adapter_name, direct_window_attach, direct_window_available, direct_window_error, direct_window_destroy, direct_device_create_features, direct_device_available, direct_device_error, direct_device_destroy, direct_device_handle, direct_device_queue_family, direct_device_requested_features, direct_device_enabled_features, direct_swapchain_create, direct_swapchain_available, direct_swapchain_error, direct_swapchain_destroy, native_frame_slot, direct_ui_create, direct_ui_available, direct_ui_error, direct_ui_destroy}
 
 pub fn event_none() -> u32 {
     ret 0_u32
@@ -195,6 +195,8 @@ pub struct Window {
 
 pub enum RendererKind {
     Auto
+    /// Luma-owned Metal device, CAMetalLayer and frame graph on macOS.
+    DirectMetal
     /// Luma-owned Vulkan instance, device, swapchain and frame graph.
     DirectVulkan
     /// SDL's GPU renderer. Kept as the compatibility and reference backend.
@@ -247,6 +249,45 @@ pub struct VulkanInterop {
 /// Luma retains ownership and is the only component allowed to submit,
 /// present, or destroy it.
 pub struct VulkanFrameInterop {
+    frame: usize
+    swapchain: usize
+    slot: u32
+    pixel_width: u32
+    pixel_height: u32
+}
+
+/// Opaque Metal handles owned by Luma. Embedded renderers borrow the exact
+/// device and target but never submit, present, or destroy them.
+pub struct MetalInterop {
+    instance: usize
+    device: usize
+    swapchain: usize
+    render_device: usize
+}
+
+/// One short-lived Metal frame borrowed from Luma's direct compositor.
+pub struct MetalFrameInterop {
+    frame: usize
+    swapchain: usize
+    slot: u32
+    pixel_width: u32
+    pixel_height: u32
+}
+
+/// Backend-neutral handles for an embedded renderer using Luma's selected
+/// direct graphics backend. The Vulkan- and Metal-specific accessors remain
+/// available when a caller needs platform API details.
+pub struct DirectGraphicsInterop {
+    instance: usize
+    physical_device: usize
+    device: usize
+    swapchain: usize
+    render_device: usize
+}
+
+/// One short-lived frame borrowed from Luma's selected direct compositor.
+/// Luma remains the sole owner allowed to submit or present it.
+pub struct DirectFrameInterop {
     frame: usize
     swapchain: usize
     slot: u32
@@ -374,6 +415,9 @@ impl for RendererKind {
             RendererKind::Auto => {
                 ret 0_u32
             }
+            RendererKind::DirectMetal => {
+                ret 3_u32
+            }
             RendererKind::DirectVulkan => {
                 ret 3_u32
             }
@@ -385,6 +429,16 @@ impl for RendererKind {
             }
         }
     }
+}
+
+#cfg(target_os = "macos")
+fn direct_backend_is_metal() -> bool {
+    ret true
+}
+
+#cfg(not(target_os = "macos"))
+fn direct_backend_is_metal() -> bool {
+    ret false
 }
 
 impl for PresentMode {
@@ -604,6 +658,123 @@ impl for VulkanFrameInterop {
     }
 }
 
+impl for MetalInterop {
+    fn new(instance: usize, device: usize, swapchain: usize,
+        render_device: usize,) -> Self {
+        ret Self {
+            instance, device, swapchain, render_device
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.instance != 0_usize && self.device != 0_usize &&
+        self.swapchain != 0_usize && self.render_device != 0_usize
+    }
+    pub fn instance(self: Self) -> usize {
+        ret self.instance
+    }
+    pub fn device(self: Self) -> usize {
+        ret self.device
+    }
+    pub fn swapchain(self: Self) -> usize {
+        ret self.swapchain
+    }
+    pub fn render_device(self: Self) -> usize {
+        ret self.render_device
+    }
+}
+
+impl for MetalFrameInterop {
+    fn new(frame: usize, swapchain: usize, pixel_width: u32,
+        pixel_height: u32,) -> Self {
+        ret Self {
+            frame, swapchain,
+            if frame == 0_usize {
+                0_u32
+            } else {
+                native_frame_slot(frame)
+            }
+            ,
+            pixel_width, pixel_height
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.frame != 0_usize && self.swapchain != 0_usize &&
+        self.pixel_width > 0_u32 && self.pixel_height > 0_u32
+    }
+    pub fn frame(self: Self) -> usize {
+        ret self.frame
+    }
+    pub fn swapchain(self: Self) -> usize {
+        ret self.swapchain
+    }
+    pub fn slot(self: Self) -> u32 {
+        ret self.slot
+    }
+    pub fn pixel_width(self: Self) -> u32 {
+        ret self.pixel_width
+    }
+    pub fn pixel_height(self: Self) -> u32 {
+        ret self.pixel_height
+    }
+}
+
+impl for DirectGraphicsInterop {
+    fn new(instance: usize, physical_device: usize, device: usize,
+        swapchain: usize, render_device: usize,) -> Self {
+        ret Self {
+            instance, physical_device, device, swapchain, render_device
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.instance != 0_usize && self.physical_device != 0_usize &&
+        self.device != 0_usize && self.swapchain != 0_usize &&
+        self.render_device != 0_usize
+    }
+    pub fn instance(self: Self) -> usize {
+        ret self.instance
+    }
+    pub fn physical_device(self: Self) -> usize {
+        ret self.physical_device
+    }
+    pub fn device(self: Self) -> usize {
+        ret self.device
+    }
+    pub fn swapchain(self: Self) -> usize {
+        ret self.swapchain
+    }
+    pub fn render_device(self: Self) -> usize {
+        ret self.render_device
+    }
+}
+
+impl for DirectFrameInterop {
+    fn new(frame: usize, swapchain: usize, slot: u32,
+        pixel_width: u32, pixel_height: u32,) -> Self {
+        ret Self {
+            frame, swapchain, slot, pixel_width, pixel_height
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.frame != 0_usize && self.swapchain != 0_usize &&
+        self.pixel_width > 0_u32 && self.pixel_height > 0_u32
+    }
+    pub fn frame(self: Self) -> usize {
+        ret self.frame
+    }
+    pub fn swapchain(self: Self) -> usize {
+        ret self.swapchain
+    }
+    pub fn slot(self: Self) -> u32 {
+        ret self.slot
+    }
+    pub fn pixel_width(self: Self) -> u32 {
+        ret self.pixel_width
+    }
+    pub fn pixel_height(self: Self) -> u32 {
+        ret self.pixel_height
+    }
+}
+
 impl for ExternalVulkanImage {
     pub fn new(image: u64, width: u32, height: u32, layout: u32) -> Self {
         ret Self {
@@ -743,9 +914,8 @@ impl for Window {
     pub fn create(title: str, width: u32, height: u32) -> Window {
         ret Window::create_with_renderer(title, width, height, RendererKind::Auto)
     }
-    /// Creates a window with an explicit rendering policy. `Auto` selects the
-    /// Luma-owned Direct Vulkan backend; initialization errors are returned
-    /// without selecting another renderer.
+    /// Creates a window with an explicit rendering policy. `Auto` selects
+    /// Direct Metal on macOS and Direct Vulkan on other desktop targets.
     pub fn create_with_renderer(title: str, width: u32, height: u32,
         renderer: RendererKind,) -> Window {
         ret Window::create_with_renderer_features(title, width, height,
@@ -757,10 +927,13 @@ impl for Window {
         renderer: RendererKind, features: VulkanFeatureRequest,) -> Window {
         match renderer {
             RendererKind::Auto => {
-                ret create_direct_vulkan_window(title, width, height, features)
+                ret create_direct_window(title, width, height, features)
+            }
+            RendererKind::DirectMetal => {
+                ret create_requested_metal_window(title, width, height, features)
             }
             RendererKind::DirectVulkan => {
-                ret create_direct_vulkan_window(title, width, height, features)
+                ret create_requested_vulkan_window(title, width, height, features)
             }
             _ => {
             }
@@ -891,7 +1064,8 @@ impl for Window {
         ret RendererInfo::with_device(backend, device)
     }
     pub fn vulkan_interop(self: Self) -> VulkanInterop {
-        if self.direct_context != 0_usize && self.direct_device != 0_usize {
+        if !direct_backend_is_metal() && self.direct_context != 0_usize &&
+        self.direct_device != 0_usize {
             ret VulkanInterop::new(direct_context_instance(self.direct_context),
                 direct_context_physical_device(self.direct_context, 0_usize),
                 direct_device_handle(self.direct_device),
@@ -912,6 +1086,27 @@ impl for Window {
             native_vulkan_device(self.handle),
             native_vulkan_graphics_queue_family(self.handle), 0_usize, 0_usize,
             VulkanFeatures::none(), VulkanFeatures::none(),)
+    }
+    pub fn metal_interop(self: Self) -> MetalInterop {
+        if direct_backend_is_metal() && self.direct_context != 0_usize &&
+        self.direct_device != 0_usize && self.direct_swapchain != 0_usize {
+            ret MetalInterop::new(direct_context_instance(self.direct_context),
+                direct_device_handle(self.direct_device), self.direct_swapchain,
+                self.direct_device,)
+        }
+        ret MetalInterop::new(0_usize, 0_usize, 0_usize, 0_usize)
+    }
+    /// Returns the common ownership handles needed by an embedded renderer,
+    /// independent of whether Luma selected Vulkan or Metal.
+    pub fn direct_graphics_interop(self: Self) -> DirectGraphicsInterop {
+        if direct_backend_is_metal() {
+            let interop = self.metal_interop()
+            ret DirectGraphicsInterop::new(interop.instance(), interop.device(),
+                interop.device(), interop.swapchain(), interop.render_device(),)
+        }
+        let interop = self.vulkan_interop()
+        ret DirectGraphicsInterop::new(interop.instance(), interop.physical_device(),
+            interop.device(), interop.swapchain(), interop.render_device(),)
     }
     /// Wraps an offscreen VkImage created on `vulkan_interop().device()`.
     /// No pixel upload occurs. The producer must synchronize its queue and
@@ -1545,7 +1740,8 @@ impl for Window {
     /// borrower; Luma later appends these UI batches and remains the sole
     /// submit/present owner.
     pub fn begin_vulkan_frame(self: Self, frame: PreparedFrame) -> VulkanFrameInterop {
-        if self.handle == 0_usize || self.direct_swapchain == 0_usize ||
+        if direct_backend_is_metal() || self.handle == 0_usize ||
+        self.direct_swapchain == 0_usize ||
         self.direct_compositor == 0_usize {
             ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
         }
@@ -1601,7 +1797,8 @@ impl for Window {
     pub fn prepare_cached_vulkan_frame(self: Self,
         overlay_layouts: Vec[WidgetLayout], cached_overlays: bool,) ->
     VulkanFrameInterop {
-        if self.handle == 0_usize || self.direct_swapchain == 0_usize ||
+        if direct_backend_is_metal() || self.handle == 0_usize ||
+        self.direct_swapchain == 0_usize ||
         self.direct_compositor == 0_usize ||
         !native_cached_frame_begin(self.handle, self.background.packed()) {
             ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
@@ -1623,12 +1820,134 @@ impl for Window {
     /// Starts Luma's UI composition after all external compute work has been
     /// recorded into the prepared frame.
     pub fn begin_vulkan_composition(self: Self, frame: VulkanFrameInterop) -> bool {
-        ret frame.valid() && frame.swapchain() == self.direct_swapchain &&
+        ret !direct_backend_is_metal() && frame.valid() &&
+        frame.swapchain() == self.direct_swapchain &&
         native_direct_frame_begin_composition(self.handle, frame.frame())
     }
     /// Appends Luma's UI pass with color-load semantics, then submits and
     /// presents the borrowed frame exactly once.
     pub fn present_vulkan_frame(self: Self, frame: VulkanFrameInterop) -> bool {
+        ret !direct_backend_is_metal() && frame.valid() &&
+        frame.swapchain() == self.direct_swapchain &&
+        native_direct_frame_finish(self.handle, frame.frame())
+    }
+    /// Records retained UI and lends Graphene the active direct-Metal command
+    /// buffer. Luma remains the sole submit and presentation owner.
+    pub fn begin_metal_frame(self: Self, frame: PreparedFrame) -> MetalFrameInterop {
+        if !direct_backend_is_metal() || self.handle == 0_usize ||
+        self.direct_swapchain == 0_usize || self.direct_compositor == 0_usize {
+            ret MetalFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        let begun = if frame.cached {
+            native_cached_frame_begin(self.handle, self.background.packed())
+        } else {
+            native_begin(self.handle, self.background.packed())
+        }
+        if !begun {
+            ret MetalFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if !frame.cached {
+            let mut excluded = frame.overlays
+            for slot in frame.surfaces {
+                excluded.push(slot.id)
+            }
+            render_layout_filtered(self.handle, frame.layout,
+                Option[Rect]::None, excluded,)
+        }
+        if !native_direct_composition_split(self.handle) {
+            ret MetalFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if frame.cached_overlays {
+            let _overlay = native_overlay_cache_draw(self.handle)
+        } elif frame.overlay_layouts.len() > 0_usize {
+            for overlay in frame.overlay_layouts {
+                render_layout(self.handle, overlay, Option[Rect]::None)
+            }
+        } else {
+            for overlay in frame.overlays {
+                let _drawn = render_layout_target(self.handle, frame.layout,
+                    overlay, Option[Rect]::None,)
+            }
+        }
+        let borrowed = native_direct_frame_acquire(self.handle)
+        ret MetalFrameInterop::new(borrowed, self.direct_swapchain,
+            self.pixel_width(), self.pixel_height(),)
+    }
+    pub fn begin_cached_metal_frame(self: Self,
+        overlay_layouts: Vec[WidgetLayout], cached_overlays: bool,) ->
+    MetalFrameInterop {
+        let frame = self.prepare_cached_metal_frame(overlay_layouts, cached_overlays)
+        if !frame.valid() || !self.begin_metal_composition(frame) {
+            ret MetalFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        ret frame
+    }
+    pub fn prepare_cached_metal_frame(self: Self,
+        overlay_layouts: Vec[WidgetLayout], cached_overlays: bool,) ->
+    MetalFrameInterop {
+        if !direct_backend_is_metal() || self.handle == 0_usize ||
+        self.direct_swapchain == 0_usize || self.direct_compositor == 0_usize ||
+        !native_cached_frame_begin(self.handle, self.background.packed()) {
+            ret MetalFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if !native_direct_composition_split(self.handle) {
+            ret MetalFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
+        }
+        if cached_overlays {
+            let _overlay = native_overlay_cache_draw(self.handle)
+        } else {
+            for overlay in overlay_layouts {
+                render_layout(self.handle, overlay, Option[Rect]::None)
+            }
+        }
+        let borrowed = native_direct_frame_prepare(self.handle)
+        ret MetalFrameInterop::new(borrowed, self.direct_swapchain,
+            self.pixel_width(), self.pixel_height(),)
+    }
+    pub fn begin_metal_composition(self: Self, frame: MetalFrameInterop) -> bool {
+        ret direct_backend_is_metal() && frame.valid() &&
+        frame.swapchain() == self.direct_swapchain &&
+        native_direct_frame_begin_composition(self.handle, frame.frame())
+    }
+    pub fn present_metal_frame(self: Self, frame: MetalFrameInterop) -> bool {
+        ret direct_backend_is_metal() && frame.valid() &&
+        frame.swapchain() == self.direct_swapchain &&
+        native_direct_frame_finish(self.handle, frame.frame())
+    }
+    /// Records a prepared UI transaction and borrows the active native frame
+    /// using the backend selected when the window was created.
+    pub fn begin_direct_frame(self: Self, frame: PreparedFrame) -> DirectFrameInterop {
+        if direct_backend_is_metal() {
+            let borrowed = self.begin_metal_frame(frame)
+            ret DirectFrameInterop::new(borrowed.frame(), borrowed.swapchain(),
+                borrowed.slot(), borrowed.pixel_width(), borrowed.pixel_height(),)
+        }
+        let borrowed = self.begin_vulkan_frame(frame)
+        ret DirectFrameInterop::new(borrowed.frame(), borrowed.swapchain(),
+            borrowed.slot(), borrowed.pixel_width(), borrowed.pixel_height(),)
+    }
+    /// Prepares retained UI and borrows a native command buffer before its
+    /// render pass, allowing external compute work to be recorded first.
+    pub fn prepare_cached_direct_frame(self: Self,
+        overlay_layouts: Vec[WidgetLayout], cached_overlays: bool,) ->
+    DirectFrameInterop {
+        if direct_backend_is_metal() {
+            let borrowed = self.prepare_cached_metal_frame(overlay_layouts, cached_overlays)
+            ret DirectFrameInterop::new(borrowed.frame(), borrowed.swapchain(),
+                borrowed.slot(), borrowed.pixel_width(), borrowed.pixel_height(),)
+        }
+        let borrowed = self.prepare_cached_vulkan_frame(overlay_layouts, cached_overlays)
+        ret DirectFrameInterop::new(borrowed.frame(), borrowed.swapchain(),
+            borrowed.slot(), borrowed.pixel_width(), borrowed.pixel_height(),)
+    }
+    /// Starts the selected backend's UI composition after external compute.
+    pub fn begin_direct_composition(self: Self, frame: DirectFrameInterop) -> bool {
+        ret frame.valid() && frame.swapchain() == self.direct_swapchain &&
+        native_direct_frame_begin_composition(self.handle, frame.frame())
+    }
+    /// Finishes UI recording and performs the selected backend's sole submit
+    /// and presentation operation for this frame.
+    pub fn present_direct_frame(self: Self, frame: DirectFrameInterop) -> bool {
         ret frame.valid() && frame.swapchain() == self.direct_swapchain &&
         native_direct_frame_finish(self.handle, frame.frame())
     }
@@ -1899,7 +2218,7 @@ fn failed_direct_window(handle: usize, context: usize, window: usize,
     }
 }
 
-fn create_direct_vulkan_window(title: str, width: u32, height: u32,
+fn create_direct_window(title: str, width: u32, height: u32,
     features: VulkanFeatureRequest,) -> Window {
     let handle = native_create_with_renderer(title, width, height, 3_u32)
     if handle == 0_usize {
@@ -1939,6 +2258,44 @@ fn create_direct_vulkan_window(title: str, width: u32, height: u32,
         handle, width, height, white(), context, window, device, swapchain, compositor,
         StyleSheet::default()
     }
+}
+
+fn unavailable_direct_window(message: str, width: u32, height: u32) -> Window {
+    native_backend_set_error(message)
+    ret Window {
+        0_usize, width, height, white(), 0_usize, 0_usize, 0_usize,
+        0_usize, 0_usize, StyleSheet::default()
+    }
+}
+
+#cfg(target_os = "macos")
+fn create_requested_metal_window(title: str, width: u32, height: u32,
+    features: VulkanFeatureRequest,) -> Window {
+    ret create_direct_window(title, width, height, features)
+}
+
+#cfg(not(target_os = "macos"))
+fn create_requested_metal_window(title: str, width: u32, height: u32,
+    features: VulkanFeatureRequest,) -> Window {
+    let _title = title
+    let _features = features
+    ret unavailable_direct_window(
+        "Direct Metal is available only on macOS", width, height,)
+}
+
+#cfg(target_os = "macos")
+fn create_requested_vulkan_window(title: str, width: u32, height: u32,
+    features: VulkanFeatureRequest,) -> Window {
+    let _title = title
+    let _features = features
+    ret unavailable_direct_window(
+        "Direct Vulkan is not selected on macOS; request DirectMetal", width, height,)
+}
+
+#cfg(not(target_os = "macos"))
+fn create_requested_vulkan_window(title: str, width: u32, height: u32,
+    features: VulkanFeatureRequest,) -> Window {
+    ret create_direct_window(title, width, height, features)
 }
 
 fn surface_edge_floor(value: f32) -> u32 {

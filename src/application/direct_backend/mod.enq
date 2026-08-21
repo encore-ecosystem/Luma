@@ -1,0 +1,230 @@
+//! Target-selected direct rendering adapter used by the window layer.
+
+import vulkan_native::{vulkan_direct_context_create, vulkan_direct_context_available, vulkan_direct_context_error, vulkan_direct_context_destroy, vulkan_direct_context_instance, vulkan_direct_context_physical_device, vulkan_direct_adapter_name, vulkan_direct_window_attach, vulkan_direct_window_available, vulkan_direct_window_error, vulkan_direct_window_destroy, vulkan_direct_device_create_features, vulkan_direct_device_available, vulkan_direct_device_error, vulkan_direct_device_destroy, vulkan_direct_device_handle, vulkan_direct_device_queue_family, vulkan_direct_device_requested_features, vulkan_direct_device_enabled_features, vulkan_direct_swapchain_create, vulkan_direct_swapchain_available, vulkan_direct_swapchain_error, vulkan_direct_swapchain_destroy, vulkan_direct_frame_slot, vulkan_direct_ui_create, vulkan_direct_ui_available, vulkan_direct_ui_error, vulkan_direct_ui_destroy}
+
+import metal_native::{metal_direct_context_create, metal_direct_context_available, metal_direct_context_error, metal_direct_context_destroy, metal_direct_context_instance, metal_direct_context_physical_device, metal_direct_adapter_name, metal_direct_window_attach, metal_direct_window_available, metal_direct_window_error, metal_direct_window_destroy, metal_direct_device_create_features, metal_direct_device_available, metal_direct_device_error, metal_direct_device_destroy, metal_direct_device_handle, metal_direct_device_queue_family, metal_direct_device_requested_features, metal_direct_device_enabled_features, metal_direct_swapchain_create, metal_direct_swapchain_available, metal_direct_swapchain_error, metal_direct_swapchain_destroy, metal_direct_frame_slot, metal_direct_ui_create, metal_direct_ui_available, metal_direct_ui_error, metal_direct_ui_destroy}
+
+#cfg(target_os = "macos")
+pub fn direct_context_create() -> usize {
+    ret metal_direct_context_create()
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_context_create() -> usize {
+    ret vulkan_direct_context_create()
+}
+#cfg(target_os = "macos")
+pub fn direct_context_available(handle: usize) -> bool {
+    ret metal_direct_context_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_context_available(handle: usize) -> bool {
+    ret vulkan_direct_context_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_context_error(handle: usize) -> str {
+    ret metal_direct_context_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_context_error(handle: usize) -> str {
+    ret vulkan_direct_context_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_context_destroy(handle: usize) -> bool {
+    ret metal_direct_context_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_context_destroy(handle: usize) -> bool {
+    ret vulkan_direct_context_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_context_instance(handle: usize) -> usize {
+    ret metal_direct_context_instance(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_context_instance(handle: usize) -> usize {
+    ret vulkan_direct_context_instance(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_context_physical_device(handle: usize, index: usize) -> usize {
+    ret metal_direct_context_physical_device(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_context_physical_device(handle: usize, index: usize) -> usize {
+    ret vulkan_direct_context_physical_device(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn direct_adapter_name(handle: usize, index: usize) -> str {
+    ret metal_direct_adapter_name(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_adapter_name(handle: usize, index: usize) -> str {
+    ret vulkan_direct_adapter_name(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn direct_window_attach(context: usize, platform: usize, width: u32, height: u32) -> usize {
+    ret metal_direct_window_attach(context, platform, width, height)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_window_attach(context: usize, platform: usize, width: u32, height: u32) -> usize {
+    ret vulkan_direct_window_attach(context, platform, width, height)
+}
+#cfg(target_os = "macos")
+pub fn direct_window_available(handle: usize) -> bool {
+    ret metal_direct_window_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_window_available(handle: usize) -> bool {
+    ret vulkan_direct_window_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_window_error(handle: usize) -> str {
+    ret metal_direct_window_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_window_error(handle: usize) -> str {
+    ret vulkan_direct_window_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_window_destroy(handle: usize) -> bool {
+    ret metal_direct_window_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_window_destroy(handle: usize) -> bool {
+    ret vulkan_direct_window_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_create_features(context: usize, window: usize, required: u32, optional: u32) -> usize {
+    ret metal_direct_device_create_features(context, window, required, optional)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_create_features(context: usize, window: usize, required: u32, optional: u32) -> usize {
+    ret vulkan_direct_device_create_features(context, window, required, optional)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_available(handle: usize) -> bool {
+    ret metal_direct_device_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_available(handle: usize) -> bool {
+    ret vulkan_direct_device_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_error(handle: usize) -> str {
+    ret metal_direct_device_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_error(handle: usize) -> str {
+    ret vulkan_direct_device_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_destroy(handle: usize) -> bool {
+    ret metal_direct_device_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_destroy(handle: usize) -> bool {
+    ret vulkan_direct_device_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_handle(handle: usize) -> usize {
+    ret metal_direct_device_handle(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_handle(handle: usize) -> usize {
+    ret vulkan_direct_device_handle(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_queue_family(handle: usize) -> u32 {
+    ret metal_direct_device_queue_family(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_queue_family(handle: usize) -> u32 {
+    ret vulkan_direct_device_queue_family(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_requested_features(handle: usize) -> u32 {
+    ret metal_direct_device_requested_features(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_requested_features(handle: usize) -> u32 {
+    ret vulkan_direct_device_requested_features(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_device_enabled_features(handle: usize) -> u32 {
+    ret metal_direct_device_enabled_features(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_device_enabled_features(handle: usize) -> u32 {
+    ret vulkan_direct_device_enabled_features(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_swapchain_create(device: usize, window: usize) -> usize {
+    ret metal_direct_swapchain_create(device, window)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_swapchain_create(device: usize, window: usize) -> usize {
+    ret vulkan_direct_swapchain_create(device, window)
+}
+#cfg(target_os = "macos")
+pub fn direct_swapchain_available(handle: usize) -> bool {
+    ret metal_direct_swapchain_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_swapchain_available(handle: usize) -> bool {
+    ret vulkan_direct_swapchain_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_swapchain_error(handle: usize) -> str {
+    ret metal_direct_swapchain_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_swapchain_error(handle: usize) -> str {
+    ret vulkan_direct_swapchain_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_swapchain_destroy(handle: usize) -> bool {
+    ret metal_direct_swapchain_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_swapchain_destroy(handle: usize) -> bool {
+    ret vulkan_direct_swapchain_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_slot(handle: usize) -> u32 {
+    ret metal_direct_frame_slot(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_slot(handle: usize) -> u32 {
+    ret vulkan_direct_frame_slot(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_ui_create(device: usize, swapchain: usize) -> usize {
+    ret metal_direct_ui_create(device, swapchain)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_ui_create(device: usize, swapchain: usize) -> usize {
+    ret vulkan_direct_ui_create(device, swapchain)
+}
+#cfg(target_os = "macos")
+pub fn direct_ui_available(handle: usize) -> bool {
+    ret metal_direct_ui_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_ui_available(handle: usize) -> bool {
+    ret vulkan_direct_ui_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_ui_error(handle: usize) -> str {
+    ret metal_direct_ui_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_ui_error(handle: usize) -> str {
+    ret vulkan_direct_ui_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn direct_ui_destroy(handle: usize) -> bool {
+    ret metal_direct_ui_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn direct_ui_destroy(handle: usize) -> bool {
+    ret vulkan_direct_ui_destroy(handle)
+}

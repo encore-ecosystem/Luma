@@ -10,7 +10,7 @@ Luma is designed around four layers:
 1. `Application` maps state and high-level actions to a `Widget` tree.
 2. `WidgetLayout` retains geometry and hit-testing data.
 3. `ReactiveUi` reconciles trees and redraws only invalidated subtrees.
-4. `Window` owns rendering, presentation, and external Vulkan composition.
+4. `Window` owns rendering, presentation, and native scene composition.
 
 The normal `Window::create` path uses the renderer selected by SDL3. On a
 supported desktop this is normally Vulkan, Metal, Direct3D, or OpenGL. Use

@@ -72,11 +72,13 @@ path index and never calls the application view.
 
 Editors and engines that render into a retained `Widget::render_surface` can
 implement `DirectRenderApplication`. The managed runtime then owns input,
-layout, Vulkan composition, submission and presentation while the application
+layout, native composition, submission and presentation while the application
 records pre-composition compute work and its surface graphics pass directly
-into the borrowed frame. `with_secondary_pointer_lock` provides reusable
-RMB-look semantics; raw surface input preserves key releases, relative motion,
-button state, modifiers and native timestamps.
+into the borrowed frame. Direct rendering selects Vulkan on Linux and Metal on
+macOS at compile time; both paths preserve one submission per composed frame.
+`with_secondary_pointer_lock` provides reusable RMB-look semantics; raw surface
+input preserves key releases, relative motion, button state, modifiers and
+native timestamps.
 
 ## Typed HTML, CSS, and closure events
 
@@ -144,6 +146,13 @@ encore format --check
 encore check
 encore lint
 encore test
+```
+
+On macOS, the direct backend contract can be exercised against the installed
+Metal runtime without any shader toolchain:
+
+```sh
+workspace/metal_native/tests/run_backend_contract.sh
 ```
 
 Run the interactive catalog from `demo/`:

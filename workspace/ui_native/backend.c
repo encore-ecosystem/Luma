@@ -24,6 +24,31 @@ typedef struct { size_t ref_count; size_t len; char data[]; } encore_str_object;
 typedef struct { encore_str_object *object; } encore_str;
 
 extern void *encore_str_from_cstr(const char *value);
+#if defined(__APPLE__)
+#define luma_vk_ui_begin luma_metal_ui_begin
+#define luma_vk_ui_cache_begin luma_metal_ui_cache_begin
+#define luma_vk_ui_cache_patch_begin luma_metal_ui_cache_patch_begin
+#define luma_vk_ui_cache_end luma_metal_ui_cache_end
+#define luma_vk_ui_cached_begin luma_metal_ui_cached_begin
+#define luma_vk_ui_cache_ready luma_metal_ui_cache_ready
+#define luma_vk_ui_set_logical_extent luma_metal_ui_set_logical_extent
+#define luma_vk_ui_set_present_mode luma_metal_ui_set_present_mode
+#define luma_vk_ui_geometry luma_metal_ui_geometry
+#define luma_vk_ui_clip luma_metal_ui_clip
+#define luma_vk_ui_end luma_metal_ui_end
+#define luma_vk_ui_frame_acquire luma_metal_ui_frame_acquire
+#define luma_vk_ui_frame_prepare luma_metal_ui_frame_prepare
+#define luma_vk_ui_frame_begin_composition luma_metal_ui_frame_begin_composition
+#define luma_vk_ui_frame_finish luma_metal_ui_frame_finish
+#define luma_vk_ui_composition_split luma_metal_ui_composition_split
+#define luma_vk_ui_texture_create luma_metal_ui_texture_create
+#define luma_vk_ui_texture_create_empty luma_metal_ui_texture_create_empty
+#define luma_vk_ui_texture_update luma_metal_ui_texture_update
+#define luma_vk_ui_texture_destroy luma_metal_ui_texture_destroy
+#define luma_vk_ui_texture_draw luma_metal_ui_texture_draw
+#define luma_vk_ui_texture_draw_region luma_metal_ui_texture_draw_region
+#define luma_vk_ui_external_texture_create luma_metal_ui_external_texture_create
+#endif
 extern bool luma_vk_ui_begin(size_t handle, uint32_t clear_color);
 extern bool luma_vk_ui_cache_begin(size_t handle, uint32_t clear_color);
 extern bool luma_vk_ui_cache_patch_begin(size_t handle, uint32_t clear_color,
@@ -513,7 +538,7 @@ static void ui_set_error(const char *message) {
 
 void luma_backend_set_error(encore_str message) {
     char *value = ui_to_cstr(message);
-    ui_set_error(value == NULL ? "Direct Vulkan initialization failed" : value);
+    ui_set_error(value == NULL ? "Direct graphics initialization failed" : value);
     free(value);
 }
 
@@ -920,8 +945,17 @@ size_t luma_window_create_with_renderer(encore_str title, uint32_t width, uint32
     }
     bool created = false;
     state->renderer_kind = renderer_kind;
+    /* Zero is reserved for standalone text textures. Atlas pages must start
+       at a nonzero generation so draw callers select their packed region. */
+    state->text_atlas_generation = 1;
     uint64_t window_flags = 0x8u | 0x20u | 0x2000u;
-    if (renderer_kind == 3u) window_flags |= 0x10000000ull;
+    if (renderer_kind == 3u) {
+#if defined(__APPLE__)
+        window_flags |= 0x20000000ull;
+#else
+        window_flags |= 0x10000000ull;
+#endif
+    }
     state->window = g_sdl.CreateWindow(name, (int)width, (int)height, window_flags);
     if (state->window != NULL) {
         if (renderer_kind == 3u) {
@@ -3133,7 +3167,11 @@ bool luma_window_set_present_mode(size_t handle, uint32_t mode) {
     if (state != NULL && state->renderer_kind == 3u && mode <= 1u) {
         bool configured = luma_vk_ui_set_present_mode(state->direct_compositor, mode);
         if (!configured)
+#if defined(__APPLE__)
+            ui_set_error("Unable to set direct Metal presentation mode");
+#else
             ui_set_error("Unable to set direct Vulkan presentation mode");
+#endif
         return configured;
     }
     if (state == NULL || state->renderer == NULL || mode > 1u) {
@@ -3150,13 +3188,25 @@ bool luma_window_set_present_mode(size_t handle, uint32_t mode) {
 encore_str luma_backend_name(void) { return ui_string(g_sdl.ready ? "SDL3" : "unavailable"); }
 encore_str luma_renderer_name(size_t handle) {
     UiWindow *state = ui_window(handle);
-    if (state != NULL && state->renderer_kind == 3u) return ui_string("direct-vulkan");
+    if (state != NULL && state->renderer_kind == 3u) {
+#if defined(__APPLE__)
+        return ui_string("direct-metal");
+#else
+        return ui_string("direct-vulkan");
+#endif
+    }
     if (state == NULL || state->renderer == NULL || g_sdl.GetRendererName == NULL) return ui_string("unavailable");
     return ui_string(g_sdl.GetRendererName(state->renderer));
 }
 encore_str luma_renderer_device_name(size_t handle) {
     UiWindow *state = ui_window(handle);
-    if (state != NULL && state->renderer_kind == 3u) return ui_string("direct-vulkan");
+    if (state != NULL && state->renderer_kind == 3u) {
+#if defined(__APPLE__)
+        return ui_string("direct-metal");
+#else
+        return ui_string("direct-vulkan");
+#endif
+    }
     if (state == NULL || state->renderer == NULL || g_sdl.GetRendererName == NULL)
         return ui_string("unavailable");
     const char *renderer = g_sdl.GetRendererName(state->renderer);

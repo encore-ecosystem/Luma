@@ -1,0 +1,10 @@
+import core::testing::assert
+import metal_native::{native_available, native_create, native_destroy}
+
+#attr(test)
+fn creates_system_device() -> bool {
+    let instance = native_create(false, false, false)
+    let available = native_available(instance)
+    let destroyed = native_destroy(instance)
+    ret assert(available && destroyed)
+}
