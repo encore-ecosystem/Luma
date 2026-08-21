@@ -33,3 +33,17 @@ Luma owns the window and presentation. An embedded renderer borrows
 passes them to `CompositeFrame::with_external_vulkan_image`. Luma composes the
 retained base, external image, and transient overlays on one graphics queue.
 There is no CPU readback, upload, second swapchain, or per-frame fence wait.
+
+## Direct native composition
+
+`RendererKind::DirectVulkan` is the Linux direct renderer and
+`RendererKind::DirectMetal` is the Apple Silicon macOS direct renderer. Use
+`Window::direct_graphics_interop` and the backend-neutral direct-frame methods
+when an embedded renderer supports both platforms. Luma records retained base
+UI, application compute and scene work, then transient overlays into one native
+frame and performs exactly one submit/present.
+
+Metal shaders are precompiled application artifacts. The runtime does not
+invoke shaderc, SPIRV-Cross, or Apple's Metal compiler. Applications that ask
+for DirectMetal on a non-macOS target, or DirectVulkan on macOS, fail fast
+instead of silently selecting a different renderer.

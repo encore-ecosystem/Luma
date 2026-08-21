@@ -1,0 +1,14 @@
+import core::option::Option
+import core::os
+
+fn main() -> u32 {
+    match os::argv(1_usize) {
+        Option[str]::Some(path) => {
+            let payload = "{\n  \"native\": {\n    \"libraries\": [{\"name\":\"luma_metal_native\",\"path\":\"backend.m\"}],\n    \"search_paths\": [],\n    \"frameworks\": [\"Foundation\",\"Metal\",\"QuartzCore\"],\n    \"link_args\": []\n  }\n}\n"
+            ret os::write_file(path, payload) as u32
+        }
+        Option[str]::None => {
+            ret 2_u32
+        }
+    }
+}

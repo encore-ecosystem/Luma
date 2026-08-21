@@ -1,0 +1,1510 @@
+//! Compile-time selected low-level graphics API.
+//!
+//! Vulkan remains the implementation on non-macOS targets. macOS resolves
+//! the same resource and frame contract to the native Metal package.
+
+import metal_native::{metal_native_create, metal_native_borrow, metal_native_destroy, metal_native_available, metal_native_error, metal_native_api_version, metal_native_instance, metal_native_physical_device, metal_native_adapter_count, metal_native_adapter_name, metal_native_adapter_vendor, metal_native_adapter_device, metal_native_adapter_kind, metal_native_adapter_api_version, metal_native_adapter_tier, metal_native_adapter_ray_query, metal_native_adapter_ray_pipeline, metal_native_adapter_mesh_shader, metal_native_device_create, metal_native_device_create_features, metal_native_device_borrow, metal_native_present_device_create, metal_native_present_device_create_features, metal_native_device_destroy, metal_native_device_available, metal_native_device_error, metal_native_device_queue_family, metal_native_device_handle, metal_native_device_graphics, metal_native_device_compute, metal_native_device_requested_features, metal_native_device_enabled_features, metal_native_shader_create, metal_native_shader_available, metal_native_shader_error, metal_native_shader_stage, metal_native_shader_destroy, metal_native_bind_group_layout_create, metal_native_bind_group_layout_create_entries, metal_native_bind_group_layout_available, metal_native_bind_group_layout_error, metal_native_bind_group_layout_destroy, metal_native_bind_group_create, metal_native_storage_bind_group_create, metal_native_storage_bind_group_create_many, metal_native_buffer_bind_group_create_many, metal_native_buffer_texture_bind_group_create_many, metal_native_ray_query_bind_group_create, metal_native_scene_bind_group_create, metal_native_bind_group_available, metal_native_bind_group_error, metal_native_bind_group_destroy, metal_native_bind_group_update_buffer, metal_native_sampler_create, metal_native_sampler_create_repeat, metal_native_sampler_available, metal_native_sampler_error, metal_native_sampler_destroy, metal_native_material_bind_group_create, metal_native_pipeline_create, metal_native_pipeline_create_depth_state, metal_native_pipeline_create_configured, metal_native_pipeline_available, metal_native_pipeline_error, metal_native_pipeline_destroy, metal_native_compute_pipeline_create, metal_native_compute_pipeline_available, metal_native_compute_pipeline_error, metal_native_compute_pipeline_destroy, metal_native_encoder_create, metal_native_encoder_available, metal_native_encoder_error, metal_native_encoder_submit_wait, metal_native_encoder_destroy, metal_native_encoder_submit, metal_native_encoder_bind_compute_pipeline, metal_native_encoder_bind_compute_group, metal_native_encoder_dispatch, metal_native_encoder_storage_host_barrier, metal_native_encoder_transfer_host_barrier, metal_native_encoder_transfer_geometry_barrier, metal_native_encoder_copy_buffer, metal_native_submission_complete, metal_native_submission_available, metal_native_submission_wait, metal_native_submission_error, metal_native_submission_destroy, metal_native_buffer_create, metal_native_buffer_available, metal_native_buffer_error, metal_native_buffer_size, metal_native_buffer_host_visible, metal_native_buffer_write_u32, metal_native_buffer_write_f32, metal_native_buffer_write_u32s, metal_native_buffer_write_f32s, metal_native_buffer_read_u32, metal_native_buffer_read_f32, metal_native_buffer_destroy, metal_native_blas_create_triangles, metal_native_tlas_create_instances, metal_native_acceleration_structure_available, metal_native_acceleration_structure_error, metal_native_acceleration_structure_destroy, metal_native_texture_create, metal_native_texture_available, metal_native_texture_error, metal_native_texture_width, metal_native_texture_height, metal_native_texture_mip_levels, metal_native_texture_format, metal_native_texture_layout, metal_native_texture_destroy, metal_native_window_create, metal_native_window_attach, metal_native_window_available, metal_native_window_error, metal_native_window_open, metal_native_window_poll, metal_native_window_width, metal_native_window_height, metal_native_window_key_down, metal_native_window_mouse_x, metal_native_window_mouse_y, metal_native_window_mouse_dx, metal_native_window_mouse_dy, metal_native_window_mouse_down, metal_native_window_destroy, metal_native_swapchain_create, metal_native_offscreen_create, metal_native_shared_offscreen_create, metal_native_swapchain_available, metal_native_swapchain_set_present_mode, metal_native_swapchain_error, metal_native_swapchain_width, metal_native_swapchain_height, metal_native_swapchain_frames_in_flight, metal_native_swapchain_pixels, metal_native_swapchain_pitch, metal_native_swapchain_external_image, metal_native_swapchain_external_layout, metal_native_swapchain_clear, metal_native_swapchain_draw_pipeline, metal_native_swapchain_draw_indexed, metal_native_swapchain_draw_indexed_bound, metal_native_swapchain_destroy, metal_native_swapchain_last_frame_complete, metal_native_swapchain_destroy_retired, metal_native_frame_acquire, metal_native_frame_available, metal_native_frame_slot, metal_native_frame_error, metal_native_frame_begin_render_pass, metal_native_frame_dispatch_compute, metal_native_frame_compute_barrier, metal_native_frame_fill_buffer, metal_native_frame_transfer_storage_barrier, metal_native_frame_fragment_storage_barrier, metal_native_frame_copy_buffer, metal_native_frame_bind_group, metal_native_frame_bind_pipeline, metal_native_frame_bind_vertex_buffer, metal_native_frame_bind_index_buffer, metal_native_frame_draw_indexed, metal_native_frame_draw_indexed_indirect_count, metal_native_frame_draw_mesh_tasks, metal_native_frame_draw_mesh_tasks_indirect, metal_native_frame_end_render_pass, metal_native_frame_set_viewport, metal_native_frame_upload_ui, metal_native_frame_present, metal_native_frame_destroy, metal_native_encoder_transition_texture, metal_native_encoder_copy_buffer_to_texture}
+import vulkan_native::{vulkan_native_create, vulkan_native_borrow, vulkan_native_destroy, vulkan_native_available, vulkan_native_error, vulkan_native_api_version, vulkan_native_instance, vulkan_native_physical_device, vulkan_native_adapter_count, vulkan_native_adapter_name, vulkan_native_adapter_vendor, vulkan_native_adapter_device, vulkan_native_adapter_kind, vulkan_native_adapter_api_version, vulkan_native_adapter_tier, vulkan_native_adapter_ray_query, vulkan_native_adapter_ray_pipeline, vulkan_native_adapter_mesh_shader, vulkan_native_device_create, vulkan_native_device_create_features, vulkan_native_device_borrow, vulkan_native_present_device_create, vulkan_native_present_device_create_features, vulkan_native_device_destroy, vulkan_native_device_available, vulkan_native_device_error, vulkan_native_device_queue_family, vulkan_native_device_handle, vulkan_native_device_graphics, vulkan_native_device_compute, vulkan_native_device_requested_features, vulkan_native_device_enabled_features, vulkan_native_shader_create, vulkan_native_shader_available, vulkan_native_shader_error, vulkan_native_shader_stage, vulkan_native_shader_destroy, vulkan_native_bind_group_layout_create, vulkan_native_bind_group_layout_create_entries, vulkan_native_bind_group_layout_available, vulkan_native_bind_group_layout_error, vulkan_native_bind_group_layout_destroy, vulkan_native_bind_group_create, vulkan_native_storage_bind_group_create, vulkan_native_storage_bind_group_create_many, vulkan_native_buffer_bind_group_create_many, vulkan_native_buffer_texture_bind_group_create_many, vulkan_native_ray_query_bind_group_create, vulkan_native_scene_bind_group_create, vulkan_native_bind_group_available, vulkan_native_bind_group_error, vulkan_native_bind_group_destroy, vulkan_native_bind_group_update_buffer, vulkan_native_sampler_create, vulkan_native_sampler_create_repeat, vulkan_native_sampler_available, vulkan_native_sampler_error, vulkan_native_sampler_destroy, vulkan_native_material_bind_group_create, vulkan_native_pipeline_create, vulkan_native_pipeline_create_depth_state, vulkan_native_pipeline_create_configured, vulkan_native_pipeline_available, vulkan_native_pipeline_error, vulkan_native_pipeline_destroy, vulkan_native_compute_pipeline_create, vulkan_native_compute_pipeline_available, vulkan_native_compute_pipeline_error, vulkan_native_compute_pipeline_destroy, vulkan_native_encoder_create, vulkan_native_encoder_available, vulkan_native_encoder_error, vulkan_native_encoder_submit_wait, vulkan_native_encoder_destroy, vulkan_native_encoder_submit, vulkan_native_encoder_bind_compute_pipeline, vulkan_native_encoder_bind_compute_group, vulkan_native_encoder_dispatch, vulkan_native_encoder_storage_host_barrier, vulkan_native_encoder_transfer_host_barrier, vulkan_native_encoder_transfer_geometry_barrier, vulkan_native_encoder_copy_buffer, vulkan_native_submission_complete, vulkan_native_submission_available, vulkan_native_submission_wait, vulkan_native_submission_error, vulkan_native_submission_destroy, vulkan_native_buffer_create, vulkan_native_buffer_available, vulkan_native_buffer_error, vulkan_native_buffer_size, vulkan_native_buffer_host_visible, vulkan_native_buffer_write_u32, vulkan_native_buffer_write_f32, vulkan_native_buffer_write_u32s, vulkan_native_buffer_write_f32s, vulkan_native_buffer_read_u32, vulkan_native_buffer_read_f32, vulkan_native_buffer_destroy, vulkan_native_blas_create_triangles, vulkan_native_tlas_create_instances, vulkan_native_acceleration_structure_available, vulkan_native_acceleration_structure_error, vulkan_native_acceleration_structure_destroy, vulkan_native_texture_create, vulkan_native_texture_available, vulkan_native_texture_error, vulkan_native_texture_width, vulkan_native_texture_height, vulkan_native_texture_mip_levels, vulkan_native_texture_format, vulkan_native_texture_layout, vulkan_native_texture_destroy, vulkan_native_window_create, vulkan_native_window_attach, vulkan_native_window_available, vulkan_native_window_error, vulkan_native_window_open, vulkan_native_window_poll, vulkan_native_window_width, vulkan_native_window_height, vulkan_native_window_key_down, vulkan_native_window_mouse_x, vulkan_native_window_mouse_y, vulkan_native_window_mouse_dx, vulkan_native_window_mouse_dy, vulkan_native_window_mouse_down, vulkan_native_window_destroy, vulkan_native_swapchain_create, vulkan_native_offscreen_create, vulkan_native_shared_offscreen_create, vulkan_native_swapchain_available, vulkan_native_swapchain_set_present_mode, vulkan_native_swapchain_error, vulkan_native_swapchain_width, vulkan_native_swapchain_height, vulkan_native_swapchain_frames_in_flight, vulkan_native_swapchain_pixels, vulkan_native_swapchain_pitch, vulkan_native_swapchain_external_image, vulkan_native_swapchain_external_layout, vulkan_native_swapchain_clear, vulkan_native_swapchain_draw_pipeline, vulkan_native_swapchain_draw_indexed, vulkan_native_swapchain_draw_indexed_bound, vulkan_native_swapchain_destroy, vulkan_native_swapchain_last_frame_complete, vulkan_native_swapchain_destroy_retired, vulkan_native_frame_acquire, vulkan_native_frame_available, vulkan_native_frame_slot, vulkan_native_frame_error, vulkan_native_frame_begin_render_pass, vulkan_native_frame_dispatch_compute, vulkan_native_frame_compute_barrier, vulkan_native_frame_fill_buffer, vulkan_native_frame_transfer_storage_barrier, vulkan_native_frame_fragment_storage_barrier, vulkan_native_frame_copy_buffer, vulkan_native_frame_bind_group, vulkan_native_frame_bind_pipeline, vulkan_native_frame_bind_vertex_buffer, vulkan_native_frame_bind_index_buffer, vulkan_native_frame_draw_indexed, vulkan_native_frame_draw_indexed_indirect_count, vulkan_native_frame_draw_mesh_tasks, vulkan_native_frame_draw_mesh_tasks_indirect, vulkan_native_frame_end_render_pass, vulkan_native_frame_set_viewport, vulkan_native_frame_upload_ui, vulkan_native_frame_present, vulkan_native_frame_destroy, vulkan_native_encoder_transition_texture, vulkan_native_encoder_copy_buffer_to_texture}
+
+#cfg(target_os = "macos")
+pub fn native_create(debug: bool, window_support: bool, external_window: bool) -> usize {
+    ret metal_native_create(debug, window_support, external_window)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_create(debug: bool, window_support: bool, external_window: bool) -> usize {
+    ret vulkan_native_create(debug, window_support, external_window)
+}
+#cfg(target_os = "macos")
+pub fn native_borrow(instance: usize, physical_device: usize) -> usize {
+    ret metal_native_borrow(instance, physical_device)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_borrow(instance: usize, physical_device: usize) -> usize {
+    ret vulkan_native_borrow(instance, physical_device)
+}
+#cfg(target_os = "macos")
+pub fn native_destroy(handle: usize) -> bool {
+    ret metal_native_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_destroy(handle: usize) -> bool {
+    ret vulkan_native_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_available(handle: usize) -> bool {
+    ret metal_native_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_available(handle: usize) -> bool {
+    ret vulkan_native_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_error(handle: usize) -> str {
+    ret metal_native_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_error(handle: usize) -> str {
+    ret vulkan_native_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_api_version(handle: usize) -> u32 {
+    ret metal_native_api_version(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_api_version(handle: usize) -> u32 {
+    ret vulkan_native_api_version(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_instance(handle: usize) -> usize {
+    ret metal_native_instance(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_instance(handle: usize) -> usize {
+    ret vulkan_native_instance(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_physical_device(handle: usize, index: usize) -> usize {
+    ret metal_native_physical_device(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_physical_device(handle: usize, index: usize) -> usize {
+    ret vulkan_native_physical_device(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_count(handle: usize) -> usize {
+    ret metal_native_adapter_count(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_count(handle: usize) -> usize {
+    ret vulkan_native_adapter_count(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_name(handle: usize, index: usize) -> str {
+    ret metal_native_adapter_name(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_name(handle: usize, index: usize) -> str {
+    ret vulkan_native_adapter_name(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_vendor(handle: usize, index: usize) -> u32 {
+    ret metal_native_adapter_vendor(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_vendor(handle: usize, index: usize) -> u32 {
+    ret vulkan_native_adapter_vendor(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_device(handle: usize, index: usize) -> u32 {
+    ret metal_native_adapter_device(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_device(handle: usize, index: usize) -> u32 {
+    ret vulkan_native_adapter_device(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_kind(handle: usize, index: usize) -> u32 {
+    ret metal_native_adapter_kind(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_kind(handle: usize, index: usize) -> u32 {
+    ret vulkan_native_adapter_kind(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_api_version(handle: usize, index: usize) -> u32 {
+    ret metal_native_adapter_api_version(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_api_version(handle: usize, index: usize) -> u32 {
+    ret vulkan_native_adapter_api_version(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_tier(handle: usize, index: usize) -> u32 {
+    ret metal_native_adapter_tier(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_tier(handle: usize, index: usize) -> u32 {
+    ret vulkan_native_adapter_tier(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_ray_query(handle: usize, index: usize) -> bool {
+    ret metal_native_adapter_ray_query(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_ray_query(handle: usize, index: usize) -> bool {
+    ret vulkan_native_adapter_ray_query(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_ray_pipeline(handle: usize, index: usize) -> bool {
+    ret metal_native_adapter_ray_pipeline(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_ray_pipeline(handle: usize, index: usize) -> bool {
+    ret vulkan_native_adapter_ray_pipeline(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_adapter_mesh_shader(handle: usize, index: usize) -> bool {
+    ret metal_native_adapter_mesh_shader(handle, index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_adapter_mesh_shader(handle: usize, index: usize) -> bool {
+    ret vulkan_native_adapter_mesh_shader(handle, index)
+}
+#cfg(target_os = "macos")
+pub fn native_device_create(handle: usize, adapter_index: usize) -> usize {
+    ret metal_native_device_create(handle, adapter_index)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_create(handle: usize, adapter_index: usize) -> usize {
+    ret vulkan_native_device_create(handle, adapter_index)
+}
+#cfg(target_os = "macos")
+pub fn native_device_create_features(handle: usize, adapter_index: usize,
+    required_features: u32, optional_features: u32,) -> usize {
+    ret metal_native_device_create_features(handle, adapter_index, required_features, optional_features)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_create_features(handle: usize, adapter_index: usize,
+    required_features: u32, optional_features: u32,) -> usize {
+    ret vulkan_native_device_create_features(handle, adapter_index, required_features, optional_features)
+}
+#cfg(target_os = "macos")
+pub fn native_device_borrow(handle: usize, device: usize, queue_family: u32) -> usize {
+    ret metal_native_device_borrow(handle, device, queue_family)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_borrow(handle: usize, device: usize, queue_family: u32) -> usize {
+    ret vulkan_native_device_borrow(handle, device, queue_family)
+}
+#cfg(target_os = "macos")
+pub fn native_present_device_create(handle: usize, adapter_index: usize, window: usize) -> usize {
+    ret metal_native_present_device_create(handle, adapter_index, window)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_present_device_create(handle: usize, adapter_index: usize, window: usize) -> usize {
+    ret vulkan_native_present_device_create(handle, adapter_index, window)
+}
+#cfg(target_os = "macos")
+pub fn native_present_device_create_features(handle: usize,
+    adapter_index: usize, window: usize, required_features: u32,
+    optional_features: u32,) -> usize {
+    ret metal_native_present_device_create_features(handle, adapter_index, window, required_features, optional_features)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_present_device_create_features(handle: usize,
+    adapter_index: usize, window: usize, required_features: u32,
+    optional_features: u32,) -> usize {
+    ret vulkan_native_present_device_create_features(handle, adapter_index, window, required_features, optional_features)
+}
+#cfg(target_os = "macos")
+pub fn native_device_destroy(handle: usize) -> bool {
+    ret metal_native_device_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_destroy(handle: usize) -> bool {
+    ret vulkan_native_device_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_available(handle: usize) -> bool {
+    ret metal_native_device_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_available(handle: usize) -> bool {
+    ret vulkan_native_device_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_error(handle: usize) -> str {
+    ret metal_native_device_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_error(handle: usize) -> str {
+    ret vulkan_native_device_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_queue_family(handle: usize) -> u32 {
+    ret metal_native_device_queue_family(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_queue_family(handle: usize) -> u32 {
+    ret vulkan_native_device_queue_family(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_handle(handle: usize) -> usize {
+    ret metal_native_device_handle(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_handle(handle: usize) -> usize {
+    ret vulkan_native_device_handle(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_graphics(handle: usize) -> bool {
+    ret metal_native_device_graphics(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_graphics(handle: usize) -> bool {
+    ret vulkan_native_device_graphics(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_compute(handle: usize) -> bool {
+    ret metal_native_device_compute(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_compute(handle: usize) -> bool {
+    ret vulkan_native_device_compute(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_requested_features(handle: usize) -> u32 {
+    ret metal_native_device_requested_features(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_requested_features(handle: usize) -> u32 {
+    ret vulkan_native_device_requested_features(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_device_enabled_features(handle: usize) -> u32 {
+    ret metal_native_device_enabled_features(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_device_enabled_features(handle: usize) -> u32 {
+    ret vulkan_native_device_enabled_features(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_shader_create(device: usize, words: Vec[u32], stage: u32) -> usize {
+    ret metal_native_shader_create(device, words, stage)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_shader_create(device: usize, words: Vec[u32], stage: u32) -> usize {
+    ret vulkan_native_shader_create(device, words, stage)
+}
+#cfg(target_os = "macos")
+pub fn native_shader_available(handle: usize) -> bool {
+    ret metal_native_shader_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_shader_available(handle: usize) -> bool {
+    ret vulkan_native_shader_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_shader_error(handle: usize) -> str {
+    ret metal_native_shader_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_shader_error(handle: usize) -> str {
+    ret vulkan_native_shader_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_shader_stage(handle: usize) -> u32 {
+    ret metal_native_shader_stage(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_shader_stage(handle: usize) -> u32 {
+    ret vulkan_native_shader_stage(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_shader_destroy(handle: usize) -> bool {
+    ret metal_native_shader_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_shader_destroy(handle: usize) -> bool {
+    ret vulkan_native_shader_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_layout_create(device: usize, binding: u32, stage: u32) -> usize {
+    ret metal_native_bind_group_layout_create(device, binding, stage)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_layout_create(device: usize, binding: u32, stage: u32) -> usize {
+    ret vulkan_native_bind_group_layout_create(device, binding, stage)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_layout_create_entries(device: usize, bindings: Vec[u32], types: Vec[u32], stages:
+    Vec[u32],) -> usize {
+    ret metal_native_bind_group_layout_create_entries(device, bindings, types, stages)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_layout_create_entries(device: usize, bindings: Vec[u32], types: Vec[u32], stages:
+    Vec[u32],) -> usize {
+    ret vulkan_native_bind_group_layout_create_entries(device, bindings, types, stages)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_layout_available(handle: usize) -> bool {
+    ret metal_native_bind_group_layout_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_layout_available(handle: usize) -> bool {
+    ret vulkan_native_bind_group_layout_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_layout_error(handle: usize) -> str {
+    ret metal_native_bind_group_layout_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_layout_error(handle: usize) -> str {
+    ret vulkan_native_bind_group_layout_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_layout_destroy(handle: usize) -> bool {
+    ret metal_native_bind_group_layout_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_layout_destroy(handle: usize) -> bool {
+    ret vulkan_native_bind_group_layout_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_create(device: usize, layout: usize, buffer: usize, offset: u64, range: u64)
+-> usize {
+    ret metal_native_bind_group_create(device, layout, buffer, offset, range)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_create(device: usize, layout: usize, buffer: usize, offset: u64, range: u64)
+-> usize {
+    ret vulkan_native_bind_group_create(device, layout, buffer, offset, range)
+}
+#cfg(target_os = "macos")
+pub fn native_storage_bind_group_create(device: usize, layout: usize, buffer: usize, offset: u64, range:
+    u64,) -> usize {
+    ret metal_native_storage_bind_group_create(device, layout, buffer, offset, range)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_storage_bind_group_create(device: usize, layout: usize, buffer: usize, offset: u64, range:
+    u64,) -> usize {
+    ret vulkan_native_storage_bind_group_create(device, layout, buffer, offset, range)
+}
+#cfg(target_os = "macos")
+pub fn native_storage_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],) -> usize {
+    ret metal_native_storage_bind_group_create_many(device, layout, bindings, buffers, offsets, ranges)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_storage_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],) -> usize {
+    ret vulkan_native_storage_bind_group_create_many(device, layout, bindings, buffers, offsets, ranges)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],) -> usize {
+    ret metal_native_buffer_bind_group_create_many(device, layout, bindings, buffers, offsets, ranges)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],) -> usize {
+    ret vulkan_native_buffer_bind_group_create_many(device, layout, bindings, buffers, offsets, ranges)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_texture_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],
+    texture_binding: u32, texture: usize, sampler: usize,) -> usize {
+    ret metal_native_buffer_texture_bind_group_create_many(device, layout, bindings, buffers, offsets, ranges, texture_binding, texture, sampler)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_texture_bind_group_create_many(device: usize, layout: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64], ranges: Vec[u64],
+    texture_binding: u32, texture: usize, sampler: usize,) -> usize {
+    ret vulkan_native_buffer_texture_bind_group_create_many(device, layout, bindings, buffers, offsets, ranges, texture_binding, texture, sampler)
+}
+#cfg(target_os = "macos")
+pub fn native_ray_query_bind_group_create(device: usize, layout: usize,
+    acceleration_binding: u32, acceleration: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64],
+    ranges: Vec[u64],) -> usize {
+    ret metal_native_ray_query_bind_group_create(device, layout, acceleration_binding, acceleration, bindings, buffers, offsets, ranges)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_ray_query_bind_group_create(device: usize, layout: usize,
+    acceleration_binding: u32, acceleration: usize,
+    bindings: Vec[u32], buffers: Vec[usize], offsets: Vec[u64],
+    ranges: Vec[u64],) -> usize {
+    ret vulkan_native_ray_query_bind_group_create(device, layout, acceleration_binding, acceleration, bindings, buffers, offsets, ranges)
+}
+#cfg(target_os = "macos")
+pub fn native_scene_bind_group_create(device: usize, layout: usize,
+    uniform_binding: u32, uniform_buffer: usize, uniform_range: u64,
+    storage_binding: u32, storage_buffer: usize, storage_range: u64,) -> usize {
+    ret metal_native_scene_bind_group_create(device, layout, uniform_binding, uniform_buffer, uniform_range, storage_binding, storage_buffer, storage_range)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_scene_bind_group_create(device: usize, layout: usize,
+    uniform_binding: u32, uniform_buffer: usize, uniform_range: u64,
+    storage_binding: u32, storage_buffer: usize, storage_range: u64,) -> usize {
+    ret vulkan_native_scene_bind_group_create(device, layout, uniform_binding, uniform_buffer, uniform_range, storage_binding, storage_buffer, storage_range)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_available(handle: usize) -> bool {
+    ret metal_native_bind_group_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_available(handle: usize) -> bool {
+    ret vulkan_native_bind_group_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_error(handle: usize) -> str {
+    ret metal_native_bind_group_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_error(handle: usize) -> str {
+    ret vulkan_native_bind_group_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_destroy(handle: usize) -> bool {
+    ret metal_native_bind_group_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_destroy(handle: usize) -> bool {
+    ret vulkan_native_bind_group_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_bind_group_update_buffer(
+    handle: usize, binding: u32, buffer: usize,
+    offset: u64, range: u64,) -> bool {
+    ret metal_native_bind_group_update_buffer(handle, binding, buffer, offset, range)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_bind_group_update_buffer(
+    handle: usize, binding: u32, buffer: usize,
+    offset: u64, range: u64,) -> bool {
+    ret vulkan_native_bind_group_update_buffer(handle, binding, buffer, offset, range)
+}
+#cfg(target_os = "macos")
+pub fn native_sampler_create(device: usize) -> usize {
+    ret metal_native_sampler_create(device)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_sampler_create(device: usize) -> usize {
+    ret vulkan_native_sampler_create(device)
+}
+#cfg(target_os = "macos")
+pub fn native_sampler_create_repeat(device: usize) -> usize {
+    ret metal_native_sampler_create_repeat(device)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_sampler_create_repeat(device: usize) -> usize {
+    ret vulkan_native_sampler_create_repeat(device)
+}
+#cfg(target_os = "macos")
+pub fn native_sampler_available(handle: usize) -> bool {
+    ret metal_native_sampler_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_sampler_available(handle: usize) -> bool {
+    ret vulkan_native_sampler_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_sampler_error(handle: usize) -> str {
+    ret metal_native_sampler_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_sampler_error(handle: usize) -> str {
+    ret vulkan_native_sampler_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_sampler_destroy(handle: usize) -> bool {
+    ret metal_native_sampler_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_sampler_destroy(handle: usize) -> bool {
+    ret vulkan_native_sampler_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_material_bind_group_create(device: usize, layout: usize, uniform_binding: u32,
+    buffer: usize, offset: u64, range: u64, texture_binding: u32, texture: usize, sampler: usize,) ->
+usize {
+    ret metal_native_material_bind_group_create(device, layout, uniform_binding, buffer, offset, range, texture_binding, texture, sampler)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_material_bind_group_create(device: usize, layout: usize, uniform_binding: u32,
+    buffer: usize, offset: u64, range: u64, texture_binding: u32, texture: usize, sampler: usize,) ->
+usize {
+    ret vulkan_native_material_bind_group_create(device, layout, uniform_binding, buffer, offset, range, texture_binding, texture, sampler)
+}
+#cfg(target_os = "macos")
+pub fn native_pipeline_create(device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_test: bool, cull_mode: u32, alpha_blend: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32], offsets: Vec[u32],) -> usize {
+    ret metal_native_pipeline_create(device, swapchain, vertex, fragment, bind_group_layout, depth_test, cull_mode, alpha_blend, vertex_stride, locations, formats, offsets)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_pipeline_create(device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_test: bool, cull_mode: u32, alpha_blend: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32], offsets: Vec[u32],) -> usize {
+    ret vulkan_native_pipeline_create(device, swapchain, vertex, fragment, bind_group_layout, depth_test, cull_mode, alpha_blend, vertex_stride, locations, formats, offsets)
+}
+#cfg(target_os = "macos")
+pub fn native_pipeline_create_depth_state(
+    device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_attachment: bool,
+    depth_test: bool, depth_write: bool,
+    cull_mode: u32, alpha_blend: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32],
+    offsets: Vec[u32],) -> usize {
+    ret metal_native_pipeline_create_depth_state(device, swapchain, vertex, fragment, bind_group_layout, depth_attachment, depth_test, depth_write, cull_mode, alpha_blend, vertex_stride, locations, formats, offsets)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_pipeline_create_depth_state(
+    device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_attachment: bool,
+    depth_test: bool, depth_write: bool,
+    cull_mode: u32, alpha_blend: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32],
+    offsets: Vec[u32],) -> usize {
+    ret vulkan_native_pipeline_create_depth_state(device, swapchain, vertex, fragment, bind_group_layout, depth_attachment, depth_test, depth_write, cull_mode, alpha_blend, vertex_stride, locations, formats, offsets)
+}
+#cfg(target_os = "macos")
+pub fn native_pipeline_create_configured(
+    device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_attachment: bool,
+    depth_test: bool, depth_write: bool,
+    cull_mode: u32, alpha_blend: bool, additive_blend: bool,
+    load_color: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32],
+    offsets: Vec[u32],) -> usize {
+    ret metal_native_pipeline_create_configured(device, swapchain, vertex, fragment, bind_group_layout, depth_attachment, depth_test, depth_write, cull_mode, alpha_blend, additive_blend, load_color, vertex_stride, locations, formats, offsets)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_pipeline_create_configured(
+    device: usize, swapchain: usize, vertex: usize, fragment: usize,
+    bind_group_layout: usize, depth_attachment: bool,
+    depth_test: bool, depth_write: bool,
+    cull_mode: u32, alpha_blend: bool, additive_blend: bool,
+    load_color: bool,
+    vertex_stride: u32, locations: Vec[u32], formats: Vec[u32],
+    offsets: Vec[u32],) -> usize {
+    ret vulkan_native_pipeline_create_configured(device, swapchain, vertex, fragment, bind_group_layout, depth_attachment, depth_test, depth_write, cull_mode, alpha_blend, additive_blend, load_color, vertex_stride, locations, formats, offsets)
+}
+#cfg(target_os = "macos")
+pub fn native_pipeline_available(handle: usize) -> bool {
+    ret metal_native_pipeline_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_pipeline_available(handle: usize) -> bool {
+    ret vulkan_native_pipeline_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_pipeline_error(handle: usize) -> str {
+    ret metal_native_pipeline_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_pipeline_error(handle: usize) -> str {
+    ret vulkan_native_pipeline_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_pipeline_destroy(handle: usize) -> bool {
+    ret metal_native_pipeline_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_pipeline_destroy(handle: usize) -> bool {
+    ret vulkan_native_pipeline_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_compute_pipeline_create(device: usize, shader: usize, layout: usize) -> usize {
+    ret metal_native_compute_pipeline_create(device, shader, layout)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_compute_pipeline_create(device: usize, shader: usize, layout: usize) -> usize {
+    ret vulkan_native_compute_pipeline_create(device, shader, layout)
+}
+#cfg(target_os = "macos")
+pub fn native_compute_pipeline_available(handle: usize) -> bool {
+    ret metal_native_compute_pipeline_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_compute_pipeline_available(handle: usize) -> bool {
+    ret vulkan_native_compute_pipeline_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_compute_pipeline_error(handle: usize) -> str {
+    ret metal_native_compute_pipeline_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_compute_pipeline_error(handle: usize) -> str {
+    ret vulkan_native_compute_pipeline_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_compute_pipeline_destroy(handle: usize) -> bool {
+    ret metal_native_compute_pipeline_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_compute_pipeline_destroy(handle: usize) -> bool {
+    ret vulkan_native_compute_pipeline_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_create(device: usize) -> usize {
+    ret metal_native_encoder_create(device)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_create(device: usize) -> usize {
+    ret vulkan_native_encoder_create(device)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_available(handle: usize) -> bool {
+    ret metal_native_encoder_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_available(handle: usize) -> bool {
+    ret vulkan_native_encoder_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_error(handle: usize) -> str {
+    ret metal_native_encoder_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_error(handle: usize) -> str {
+    ret vulkan_native_encoder_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_submit_wait(handle: usize) -> bool {
+    ret metal_native_encoder_submit_wait(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_submit_wait(handle: usize) -> bool {
+    ret vulkan_native_encoder_submit_wait(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_destroy(handle: usize) -> bool {
+    ret metal_native_encoder_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_destroy(handle: usize) -> bool {
+    ret vulkan_native_encoder_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_submit(handle: usize) -> usize {
+    ret metal_native_encoder_submit(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_submit(handle: usize) -> usize {
+    ret vulkan_native_encoder_submit(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_bind_compute_pipeline(encoder: usize, pipeline: usize) -> bool {
+    ret metal_native_encoder_bind_compute_pipeline(encoder, pipeline)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_bind_compute_pipeline(encoder: usize, pipeline: usize) -> bool {
+    ret vulkan_native_encoder_bind_compute_pipeline(encoder, pipeline)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_bind_compute_group(encoder: usize, pipeline: usize, group: usize) -> bool {
+    ret metal_native_encoder_bind_compute_group(encoder, pipeline, group)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_bind_compute_group(encoder: usize, pipeline: usize, group: usize) -> bool {
+    ret vulkan_native_encoder_bind_compute_group(encoder, pipeline, group)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_dispatch(encoder: usize, x: u32, y: u32, z: u32) -> bool {
+    ret metal_native_encoder_dispatch(encoder, x, y, z)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_dispatch(encoder: usize, x: u32, y: u32, z: u32) -> bool {
+    ret vulkan_native_encoder_dispatch(encoder, x, y, z)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_storage_host_barrier(encoder: usize) -> bool {
+    ret metal_native_encoder_storage_host_barrier(encoder)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_storage_host_barrier(encoder: usize) -> bool {
+    ret vulkan_native_encoder_storage_host_barrier(encoder)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_transfer_host_barrier(encoder: usize) -> bool {
+    ret metal_native_encoder_transfer_host_barrier(encoder)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_transfer_host_barrier(encoder: usize) -> bool {
+    ret vulkan_native_encoder_transfer_host_barrier(encoder)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_transfer_geometry_barrier(encoder: usize) -> bool {
+    ret metal_native_encoder_transfer_geometry_barrier(encoder)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_transfer_geometry_barrier(encoder: usize) -> bool {
+    ret vulkan_native_encoder_transfer_geometry_barrier(encoder)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_copy_buffer(encoder: usize, source: usize, destination: usize,
+    source_offset: u64, destination_offset: u64, size: u64,) -> bool {
+    ret metal_native_encoder_copy_buffer(encoder, source, destination, source_offset, destination_offset, size)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_copy_buffer(encoder: usize, source: usize, destination: usize,
+    source_offset: u64, destination_offset: u64, size: u64,) -> bool {
+    ret vulkan_native_encoder_copy_buffer(encoder, source, destination, source_offset, destination_offset, size)
+}
+#cfg(target_os = "macos")
+pub fn native_submission_complete(handle: usize) -> bool {
+    ret metal_native_submission_complete(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_submission_complete(handle: usize) -> bool {
+    ret vulkan_native_submission_complete(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_submission_available(handle: usize) -> bool {
+    ret metal_native_submission_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_submission_available(handle: usize) -> bool {
+    ret vulkan_native_submission_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_submission_wait(handle: usize, timeout_ns: u64) -> bool {
+    ret metal_native_submission_wait(handle, timeout_ns)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_submission_wait(handle: usize, timeout_ns: u64) -> bool {
+    ret vulkan_native_submission_wait(handle, timeout_ns)
+}
+#cfg(target_os = "macos")
+pub fn native_submission_error(handle: usize) -> str {
+    ret metal_native_submission_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_submission_error(handle: usize) -> str {
+    ret vulkan_native_submission_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_submission_destroy(handle: usize) -> bool {
+    ret metal_native_submission_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_submission_destroy(handle: usize) -> bool {
+    ret vulkan_native_submission_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_create(device: usize, size: u64, usage: u32, host_visible: bool) -> usize {
+    ret metal_native_buffer_create(device, size, usage, host_visible)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_create(device: usize, size: u64, usage: u32, host_visible: bool) -> usize {
+    ret vulkan_native_buffer_create(device, size, usage, host_visible)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_available(handle: usize) -> bool {
+    ret metal_native_buffer_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_available(handle: usize) -> bool {
+    ret vulkan_native_buffer_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_error(handle: usize) -> str {
+    ret metal_native_buffer_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_error(handle: usize) -> str {
+    ret vulkan_native_buffer_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_size(handle: usize) -> u64 {
+    ret metal_native_buffer_size(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_size(handle: usize) -> u64 {
+    ret vulkan_native_buffer_size(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_host_visible(handle: usize) -> bool {
+    ret metal_native_buffer_host_visible(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_host_visible(handle: usize) -> bool {
+    ret vulkan_native_buffer_host_visible(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_write_u32(handle: usize, offset: u64, value: u32) -> bool {
+    ret metal_native_buffer_write_u32(handle, offset, value)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_write_u32(handle: usize, offset: u64, value: u32) -> bool {
+    ret vulkan_native_buffer_write_u32(handle, offset, value)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_write_f32(handle: usize, offset: u64, value: f32) -> bool {
+    ret metal_native_buffer_write_f32(handle, offset, value)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_write_f32(handle: usize, offset: u64, value: f32) -> bool {
+    ret vulkan_native_buffer_write_f32(handle, offset, value)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_write_u32s(handle: usize, offset: u64, values: Vec[u32]) -> bool {
+    ret metal_native_buffer_write_u32s(handle, offset, values)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_write_u32s(handle: usize, offset: u64, values: Vec[u32]) -> bool {
+    ret vulkan_native_buffer_write_u32s(handle, offset, values)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_write_f32s(handle: usize, offset: u64, values: Vec[f32]) -> bool {
+    ret metal_native_buffer_write_f32s(handle, offset, values)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_write_f32s(handle: usize, offset: u64, values: Vec[f32]) -> bool {
+    ret vulkan_native_buffer_write_f32s(handle, offset, values)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_read_u32(handle: usize, offset: u64) -> u32 {
+    ret metal_native_buffer_read_u32(handle, offset)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_read_u32(handle: usize, offset: u64) -> u32 {
+    ret vulkan_native_buffer_read_u32(handle, offset)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_read_f32(handle: usize, offset: u64) -> f32 {
+    ret metal_native_buffer_read_f32(handle, offset)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_read_f32(handle: usize, offset: u64) -> f32 {
+    ret vulkan_native_buffer_read_f32(handle, offset)
+}
+#cfg(target_os = "macos")
+pub fn native_buffer_destroy(handle: usize) -> bool {
+    ret metal_native_buffer_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_buffer_destroy(handle: usize) -> bool {
+    ret vulkan_native_buffer_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_blas_create_triangles(device: usize,
+    vertices: usize, vertex_stride: u64, vertex_count: u32,
+    indices: usize, index_count: u32,) -> usize {
+    ret metal_native_blas_create_triangles(device, vertices, vertex_stride, vertex_count, indices, index_count)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_blas_create_triangles(device: usize,
+    vertices: usize, vertex_stride: u64, vertex_count: u32,
+    indices: usize, index_count: u32,) -> usize {
+    ret vulkan_native_blas_create_triangles(device, vertices, vertex_stride, vertex_count, indices, index_count)
+}
+#cfg(target_os = "macos")
+pub fn native_tlas_create_instances(device: usize,
+    blas: Vec[usize], transforms: Vec[f32],) -> usize {
+    ret metal_native_tlas_create_instances(device, blas, transforms)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_tlas_create_instances(device: usize,
+    blas: Vec[usize], transforms: Vec[f32],) -> usize {
+    ret vulkan_native_tlas_create_instances(device, blas, transforms)
+}
+#cfg(target_os = "macos")
+pub fn native_acceleration_structure_available(handle: usize) -> bool {
+    ret metal_native_acceleration_structure_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_acceleration_structure_available(handle: usize) -> bool {
+    ret vulkan_native_acceleration_structure_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_acceleration_structure_error(handle: usize) -> str {
+    ret metal_native_acceleration_structure_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_acceleration_structure_error(handle: usize) -> str {
+    ret vulkan_native_acceleration_structure_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_acceleration_structure_destroy(handle: usize) -> bool {
+    ret metal_native_acceleration_structure_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_acceleration_structure_destroy(handle: usize) -> bool {
+    ret vulkan_native_acceleration_structure_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_create(device: usize, width: u32, height: u32, mip_levels: u32, format: u32, usage:
+    u32,) -> usize {
+    ret metal_native_texture_create(device, width, height, mip_levels, format, usage)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_create(device: usize, width: u32, height: u32, mip_levels: u32, format: u32, usage:
+    u32,) -> usize {
+    ret vulkan_native_texture_create(device, width, height, mip_levels, format, usage)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_available(handle: usize) -> bool {
+    ret metal_native_texture_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_available(handle: usize) -> bool {
+    ret vulkan_native_texture_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_error(handle: usize) -> str {
+    ret metal_native_texture_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_error(handle: usize) -> str {
+    ret vulkan_native_texture_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_width(handle: usize) -> u32 {
+    ret metal_native_texture_width(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_width(handle: usize) -> u32 {
+    ret vulkan_native_texture_width(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_height(handle: usize) -> u32 {
+    ret metal_native_texture_height(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_height(handle: usize) -> u32 {
+    ret vulkan_native_texture_height(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_mip_levels(handle: usize) -> u32 {
+    ret metal_native_texture_mip_levels(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_mip_levels(handle: usize) -> u32 {
+    ret vulkan_native_texture_mip_levels(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_format(handle: usize) -> u32 {
+    ret metal_native_texture_format(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_format(handle: usize) -> u32 {
+    ret vulkan_native_texture_format(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_layout(handle: usize) -> u32 {
+    ret metal_native_texture_layout(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_layout(handle: usize) -> u32 {
+    ret vulkan_native_texture_layout(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_texture_destroy(handle: usize) -> bool {
+    ret metal_native_texture_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_texture_destroy(handle: usize) -> bool {
+    ret vulkan_native_texture_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_create(instance: usize, title: str, width: u32, height: u32) -> usize {
+    ret metal_native_window_create(instance, title, width, height)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_create(instance: usize, title: str, width: u32, height: u32) -> usize {
+    ret vulkan_native_window_create(instance, title, width, height)
+}
+#cfg(target_os = "macos")
+pub fn native_window_attach(instance: usize, platform_handle: usize, width: u32, height: u32) -> usize {
+    ret metal_native_window_attach(instance, platform_handle, width, height)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_attach(instance: usize, platform_handle: usize, width: u32, height: u32) -> usize {
+    ret vulkan_native_window_attach(instance, platform_handle, width, height)
+}
+#cfg(target_os = "macos")
+pub fn native_window_available(handle: usize) -> bool {
+    ret metal_native_window_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_available(handle: usize) -> bool {
+    ret vulkan_native_window_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_error(handle: usize) -> str {
+    ret metal_native_window_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_error(handle: usize) -> str {
+    ret vulkan_native_window_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_open(handle: usize) -> bool {
+    ret metal_native_window_open(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_open(handle: usize) -> bool {
+    ret vulkan_native_window_open(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_poll(handle: usize) -> bool {
+    ret metal_native_window_poll(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_poll(handle: usize) -> bool {
+    ret vulkan_native_window_poll(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_width(handle: usize) -> u32 {
+    ret metal_native_window_width(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_width(handle: usize) -> u32 {
+    ret vulkan_native_window_width(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_height(handle: usize) -> u32 {
+    ret metal_native_window_height(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_height(handle: usize) -> u32 {
+    ret vulkan_native_window_height(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_key_down(handle: usize, scancode: u32) -> bool {
+    ret metal_native_window_key_down(handle, scancode)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_key_down(handle: usize, scancode: u32) -> bool {
+    ret vulkan_native_window_key_down(handle, scancode)
+}
+#cfg(target_os = "macos")
+pub fn native_window_mouse_x(handle: usize) -> f32 {
+    ret metal_native_window_mouse_x(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_mouse_x(handle: usize) -> f32 {
+    ret vulkan_native_window_mouse_x(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_mouse_y(handle: usize) -> f32 {
+    ret metal_native_window_mouse_y(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_mouse_y(handle: usize) -> f32 {
+    ret vulkan_native_window_mouse_y(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_mouse_dx(handle: usize) -> f32 {
+    ret metal_native_window_mouse_dx(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_mouse_dx(handle: usize) -> f32 {
+    ret vulkan_native_window_mouse_dx(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_mouse_dy(handle: usize) -> f32 {
+    ret metal_native_window_mouse_dy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_mouse_dy(handle: usize) -> f32 {
+    ret vulkan_native_window_mouse_dy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_window_mouse_down(handle: usize, button_mask: u32) -> bool {
+    ret metal_native_window_mouse_down(handle, button_mask)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_mouse_down(handle: usize, button_mask: u32) -> bool {
+    ret vulkan_native_window_mouse_down(handle, button_mask)
+}
+#cfg(target_os = "macos")
+pub fn native_window_destroy(handle: usize) -> bool {
+    ret metal_native_window_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_window_destroy(handle: usize) -> bool {
+    ret vulkan_native_window_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_create(device: usize, window: usize) -> usize {
+    ret metal_native_swapchain_create(device, window)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_create(device: usize, window: usize) -> usize {
+    ret vulkan_native_swapchain_create(device, window)
+}
+#cfg(target_os = "macos")
+pub fn native_offscreen_create(device: usize, width: u32, height: u32) -> usize {
+    ret metal_native_offscreen_create(device, width, height)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_offscreen_create(device: usize, width: u32, height: u32) -> usize {
+    ret vulkan_native_offscreen_create(device, width, height)
+}
+#cfg(target_os = "macos")
+pub fn native_shared_offscreen_create(device: usize, width: u32, height: u32) -> usize {
+    ret metal_native_shared_offscreen_create(device, width, height)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_shared_offscreen_create(device: usize, width: u32, height: u32) -> usize {
+    ret vulkan_native_shared_offscreen_create(device, width, height)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_available(handle: usize) -> bool {
+    ret metal_native_swapchain_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_available(handle: usize) -> bool {
+    ret vulkan_native_swapchain_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_set_present_mode(handle: usize, immediate: bool) -> bool {
+    ret metal_native_swapchain_set_present_mode(handle, immediate)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_set_present_mode(handle: usize, immediate: bool) -> bool {
+    ret vulkan_native_swapchain_set_present_mode(handle, immediate)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_error(handle: usize) -> str {
+    ret metal_native_swapchain_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_error(handle: usize) -> str {
+    ret vulkan_native_swapchain_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_width(handle: usize) -> u32 {
+    ret metal_native_swapchain_width(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_width(handle: usize) -> u32 {
+    ret vulkan_native_swapchain_width(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_height(handle: usize) -> u32 {
+    ret metal_native_swapchain_height(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_height(handle: usize) -> u32 {
+    ret vulkan_native_swapchain_height(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_frames_in_flight(handle: usize) -> u32 {
+    ret metal_native_swapchain_frames_in_flight(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_frames_in_flight(handle: usize) -> u32 {
+    ret vulkan_native_swapchain_frames_in_flight(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_pixels(handle: usize) -> usize {
+    ret metal_native_swapchain_pixels(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_pixels(handle: usize) -> usize {
+    ret vulkan_native_swapchain_pixels(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_pitch(handle: usize) -> u32 {
+    ret metal_native_swapchain_pitch(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_pitch(handle: usize) -> u32 {
+    ret vulkan_native_swapchain_pitch(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_external_image(handle: usize) -> usize {
+    ret metal_native_swapchain_external_image(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_external_image(handle: usize) -> usize {
+    ret vulkan_native_swapchain_external_image(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_external_layout(handle: usize) -> u32 {
+    ret metal_native_swapchain_external_layout(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_external_layout(handle: usize) -> u32 {
+    ret vulkan_native_swapchain_external_layout(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_clear(handle: usize, red: f32, green: f32, blue: f32, alpha: f32) -> bool {
+    ret metal_native_swapchain_clear(handle, red, green, blue, alpha)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_clear(handle: usize, red: f32, green: f32, blue: f32, alpha: f32) -> bool {
+    ret vulkan_native_swapchain_clear(handle, red, green, blue, alpha)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_draw_pipeline(handle: usize, pipeline: usize, red: f32, green: f32, blue: f32,
+    alpha: f32,) -> bool {
+    ret metal_native_swapchain_draw_pipeline(handle, pipeline, red, green, blue, alpha)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_draw_pipeline(handle: usize, pipeline: usize, red: f32, green: f32, blue: f32,
+    alpha: f32,) -> bool {
+    ret vulkan_native_swapchain_draw_pipeline(handle, pipeline, red, green, blue, alpha)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_draw_indexed(handle: usize, pipeline: usize, vertex: usize, index: usize,
+    index_count: u32, red: f32, green: f32, blue: f32, alpha: f32,) -> bool {
+    ret metal_native_swapchain_draw_indexed(handle, pipeline, vertex, index, index_count, red, green, blue, alpha)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_draw_indexed(handle: usize, pipeline: usize, vertex: usize, index: usize,
+    index_count: u32, red: f32, green: f32, blue: f32, alpha: f32,) -> bool {
+    ret vulkan_native_swapchain_draw_indexed(handle, pipeline, vertex, index, index_count, red, green, blue, alpha)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_draw_indexed_bound(handle: usize, pipeline: usize, vertex: usize, index: usize,
+    bind_group: usize, index_count: u32, red: f32, green: f32, blue: f32, alpha: f32,) -> bool {
+    ret metal_native_swapchain_draw_indexed_bound(handle, pipeline, vertex, index, bind_group, index_count, red, green, blue, alpha)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_draw_indexed_bound(handle: usize, pipeline: usize, vertex: usize, index: usize,
+    bind_group: usize, index_count: u32, red: f32, green: f32, blue: f32, alpha: f32,) -> bool {
+    ret vulkan_native_swapchain_draw_indexed_bound(handle, pipeline, vertex, index, bind_group, index_count, red, green, blue, alpha)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_destroy(handle: usize) -> bool {
+    ret metal_native_swapchain_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_destroy(handle: usize) -> bool {
+    ret vulkan_native_swapchain_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_last_frame_complete(handle: usize) -> bool {
+    ret metal_native_swapchain_last_frame_complete(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_last_frame_complete(handle: usize) -> bool {
+    ret vulkan_native_swapchain_last_frame_complete(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_swapchain_destroy_retired(handle: usize) -> bool {
+    ret metal_native_swapchain_destroy_retired(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_swapchain_destroy_retired(handle: usize) -> bool {
+    ret vulkan_native_swapchain_destroy_retired(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_acquire(swapchain: usize) -> usize {
+    ret metal_native_frame_acquire(swapchain)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_acquire(swapchain: usize) -> usize {
+    ret vulkan_native_frame_acquire(swapchain)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_available(handle: usize) -> bool {
+    ret metal_native_frame_available(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_available(handle: usize) -> bool {
+    ret vulkan_native_frame_available(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_slot(handle: usize) -> u32 {
+    ret metal_native_frame_slot(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_slot(handle: usize) -> u32 {
+    ret vulkan_native_frame_slot(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_error(handle: usize) -> str {
+    ret metal_native_frame_error(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_error(handle: usize) -> str {
+    ret vulkan_native_frame_error(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_begin_render_pass(handle: usize, pipeline: usize,
+    red: f32, green: f32, blue: f32, alpha: f32,) -> bool {
+    ret metal_native_frame_begin_render_pass(handle, pipeline, red, green, blue, alpha)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_begin_render_pass(handle: usize, pipeline: usize,
+    red: f32, green: f32, blue: f32, alpha: f32,) -> bool {
+    ret vulkan_native_frame_begin_render_pass(handle, pipeline, red, green, blue, alpha)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_dispatch_compute(handle: usize, pipeline: usize,
+    group: usize, x: u32, y: u32, z: u32,) -> bool {
+    ret metal_native_frame_dispatch_compute(handle, pipeline, group, x, y, z)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_dispatch_compute(handle: usize, pipeline: usize,
+    group: usize, x: u32, y: u32, z: u32,) -> bool {
+    ret vulkan_native_frame_dispatch_compute(handle, pipeline, group, x, y, z)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_compute_barrier(handle: usize) -> bool {
+    ret metal_native_frame_compute_barrier(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_compute_barrier(handle: usize) -> bool {
+    ret vulkan_native_frame_compute_barrier(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_fill_buffer(
+    handle: usize, buffer: usize, offset: u64, size: u64,
+    value: u32,) -> bool {
+    ret metal_native_frame_fill_buffer(handle, buffer, offset, size, value)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_fill_buffer(
+    handle: usize, buffer: usize, offset: u64, size: u64,
+    value: u32,) -> bool {
+    ret vulkan_native_frame_fill_buffer(handle, buffer, offset, size, value)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_transfer_storage_barrier(handle: usize) -> bool {
+    ret metal_native_frame_transfer_storage_barrier(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_transfer_storage_barrier(handle: usize) -> bool {
+    ret vulkan_native_frame_transfer_storage_barrier(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_fragment_storage_barrier(handle: usize) -> bool {
+    ret metal_native_frame_fragment_storage_barrier(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_fragment_storage_barrier(handle: usize) -> bool {
+    ret vulkan_native_frame_fragment_storage_barrier(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_copy_buffer(handle: usize, source: usize,
+    destination: usize, source_offset: u64, destination_offset: u64,
+    size: u64,) -> bool {
+    ret metal_native_frame_copy_buffer(handle, source, destination, source_offset, destination_offset, size)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_copy_buffer(handle: usize, source: usize,
+    destination: usize, source_offset: u64, destination_offset: u64,
+    size: u64,) -> bool {
+    ret vulkan_native_frame_copy_buffer(handle, source, destination, source_offset, destination_offset, size)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_bind_group(handle: usize, bind_group: usize) -> bool {
+    ret metal_native_frame_bind_group(handle, bind_group)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_bind_group(handle: usize, bind_group: usize) -> bool {
+    ret vulkan_native_frame_bind_group(handle, bind_group)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_bind_pipeline(handle: usize, pipeline: usize) -> bool {
+    ret metal_native_frame_bind_pipeline(handle, pipeline)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_bind_pipeline(handle: usize, pipeline: usize) -> bool {
+    ret vulkan_native_frame_bind_pipeline(handle, pipeline)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_bind_vertex_buffer(handle: usize, buffer: usize) -> bool {
+    ret metal_native_frame_bind_vertex_buffer(handle, buffer)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_bind_vertex_buffer(handle: usize, buffer: usize) -> bool {
+    ret vulkan_native_frame_bind_vertex_buffer(handle, buffer)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_bind_index_buffer(handle: usize, buffer: usize) -> bool {
+    ret metal_native_frame_bind_index_buffer(handle, buffer)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_bind_index_buffer(handle: usize, buffer: usize) -> bool {
+    ret vulkan_native_frame_bind_index_buffer(handle, buffer)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_draw_indexed(handle: usize, index_count: u32, instance_count: u32,
+    first_index: u32, vertex_offset: i32, first_instance: u32,) -> bool {
+    ret metal_native_frame_draw_indexed(handle, index_count, instance_count, first_index, vertex_offset, first_instance)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_draw_indexed(handle: usize, index_count: u32, instance_count: u32,
+    first_index: u32, vertex_offset: i32, first_instance: u32,) -> bool {
+    ret vulkan_native_frame_draw_indexed(handle, index_count, instance_count, first_index, vertex_offset, first_instance)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_draw_indexed_indirect_count(handle: usize,
+    commands: usize, commands_offset: u64, count: usize, count_offset: u64,
+    maximum_draw_count: u32, stride: u32,) -> bool {
+    ret metal_native_frame_draw_indexed_indirect_count(handle, commands, commands_offset, count, count_offset, maximum_draw_count, stride)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_draw_indexed_indirect_count(handle: usize,
+    commands: usize, commands_offset: u64, count: usize, count_offset: u64,
+    maximum_draw_count: u32, stride: u32,) -> bool {
+    ret vulkan_native_frame_draw_indexed_indirect_count(handle, commands, commands_offset, count, count_offset, maximum_draw_count, stride)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_draw_mesh_tasks(handle: usize,
+    group_count_x: u32, group_count_y: u32, group_count_z: u32,) -> bool {
+    ret metal_native_frame_draw_mesh_tasks(handle, group_count_x, group_count_y, group_count_z)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_draw_mesh_tasks(handle: usize,
+    group_count_x: u32, group_count_y: u32, group_count_z: u32,) -> bool {
+    ret vulkan_native_frame_draw_mesh_tasks(handle, group_count_x, group_count_y, group_count_z)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_draw_mesh_tasks_indirect(handle: usize,
+    commands: usize, offset: u64,) -> bool {
+    ret metal_native_frame_draw_mesh_tasks_indirect(handle, commands, offset)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_draw_mesh_tasks_indirect(handle: usize,
+    commands: usize, offset: u64,) -> bool {
+    ret vulkan_native_frame_draw_mesh_tasks_indirect(handle, commands, offset)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_end_render_pass(handle: usize) -> bool {
+    ret metal_native_frame_end_render_pass(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_end_render_pass(handle: usize) -> bool {
+    ret vulkan_native_frame_end_render_pass(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_set_viewport(handle: usize, x: u32, y: u32, width: u32, height: u32) -> bool {
+    ret metal_native_frame_set_viewport(handle, x, y, width, height)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_set_viewport(handle: usize, x: u32, y: u32, width: u32, height: u32) -> bool {
+    ret vulkan_native_frame_set_viewport(handle, x, y, width, height)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_upload_ui(handle: usize, pixels: usize, width: u32, height: u32, pitch: u32,
+    hole_x: u32, hole_y: u32, hole_width: u32, hole_height: u32,) -> bool {
+    ret metal_native_frame_upload_ui(handle, pixels, width, height, pitch, hole_x, hole_y, hole_width, hole_height)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_upload_ui(handle: usize, pixels: usize, width: u32, height: u32, pitch: u32,
+    hole_x: u32, hole_y: u32, hole_width: u32, hole_height: u32,) -> bool {
+    ret vulkan_native_frame_upload_ui(handle, pixels, width, height, pitch, hole_x, hole_y, hole_width, hole_height)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_present(handle: usize) -> bool {
+    ret metal_native_frame_present(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_present(handle: usize) -> bool {
+    ret vulkan_native_frame_present(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_frame_destroy(handle: usize) -> bool {
+    ret metal_native_frame_destroy(handle)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_frame_destroy(handle: usize) -> bool {
+    ret vulkan_native_frame_destroy(handle)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_transition_texture(encoder: usize, texture: usize, new_layout: u32) -> bool {
+    ret metal_native_encoder_transition_texture(encoder, texture, new_layout)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_transition_texture(encoder: usize, texture: usize, new_layout: u32) -> bool {
+    ret vulkan_native_encoder_transition_texture(encoder, texture, new_layout)
+}
+#cfg(target_os = "macos")
+pub fn native_encoder_copy_buffer_to_texture(encoder: usize, buffer: usize, texture: usize, width: u32,
+    height: u32, mip_level: u32,) -> bool {
+    ret metal_native_encoder_copy_buffer_to_texture(encoder, buffer, texture, width, height, mip_level)
+}
+#cfg(not(target_os = "macos"))
+pub fn native_encoder_copy_buffer_to_texture(encoder: usize, buffer: usize, texture: usize, width: u32,
+    height: u32, mip_level: u32,) -> bool {
+    ret vulkan_native_encoder_copy_buffer_to_texture(encoder, buffer, texture, width, height, mip_level)
+}
