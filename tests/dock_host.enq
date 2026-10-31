@@ -1,0 +1,109 @@
+//! Retained panel identity, tab visibility and two-root commits without native windows.
+import luma::{DockHost, DockNodeId, DockPanel, DockPlacement, DockWorkspace, PanelId, ReactiveUi, Rect, Size, StyleSheet, UiBindings, UiContext, Widget, WindowId, layout_widget}
+import std::os::read_file
+
+fn main() -> u32 {
+    let main = WindowId::new(1) let floating = WindowId::new(2)
+    let a = PanelId::new("a") let b = PanelId::new("b")
+    let mut context = UiContext::new()
+    let mut text = context.signal[str]("Initial")
+    let mut bindings = UiBindings::new(context)
+    let tree = bindings.tree()
+    let mut workspace = DockWorkspace::new(main)
+    let mut host = DockHost::new(workspace, bindings)
+    if !host.register(DockPanel::new("a", "A", Size::new(200, 160)),
+        Widget::input("editor-a", "Initial"),) ||
+    !host.register(DockPanel::new("b", "B", Size::new(280, 180)), Widget::input("editor-b", "Pending")) {
+        ret 1
+    }
+    let root = bindings.mount(Widget::panel("main-root").with_classes("luma-dock-root"))
+    if !host.attach_window(main, root) || !workspace.show(a, main) || !workspace.show(b, main) || !host.commit() {
+        ret 2
+    }
+    let editor_a = tree.find(root, "editor-a").unwrap_or(root)
+    let editor_b = tree.find(root, "editor-b").unwrap_or(root)
+    let observed = text
+    let _bound = bindings.bind_text(editor_a, | cx | {
+            ret cx.read[str](observed)
+        }
+        ,
+    )
+    let shell = tree.children(root).get(0).unwrap_or(root)
+    let capacity = tree.capacity()
+    if !workspace.activate(a) || !host.commit() || !tree.children(root).get(0).unwrap_or(root).same(shell) ||
+    tree.capacity() != capacity {
+        ret 3
+    }
+    let sheet = StyleSheet::parse(read_file("assets/default.css"))
+    let snapshot = tree.snapshot(root).unwrap_or(Widget::panel("main-root"))
+    let mut ui = ReactiveUi::new(layout_widget(sheet.apply(snapshot, "", "", ""), Rect::new(0, 0, 900, 600)))
+    if ui.find_layout("editor-a").is_none() || ui.find_layout("editor-b").is_some() {
+        ret 4
+    }
+    let group = workspace.location(a).unwrap_or(DockNodeId::empty())
+    if !workspace.dock(b, group, DockPlacement::Right, 0) || !host.commit() ||
+    !host.resize_geometry(main, Rect::new(0, 0, 900, 600)) {
+        ret 5
+    }
+    if !tree.find(root, "editor-a").unwrap_or(root).same(editor_a) ||
+    !tree.find(root, "editor-b").unwrap_or(root).same(editor_b) {
+        ret 6
+    }
+    if !workspace.detach(b, floating) {
+        ret 7
+    }
+    let satellite = bindings.mount(Widget::panel("satellite-root").with_classes("luma-dock-root"))
+    if !host.attach_window(floating, satellite) || !host.commit() {
+        ret 8
+    }
+    if tree.find(root, "editor-b").is_some() || !tree.find(satellite, "editor-b").unwrap_or(root).same(editor_b) {
+        ret 9
+    }
+    text.set("Changed after transfer")
+    if bindings.flush() != 1 || tree.widget(editor_a).unwrap_or(Widget::label("")).text() != "Changed after transfer" {
+        ret 10
+    }
+    if !workspace.close_window(floating) || host.detach_window(floating) || !host.commit() || !host.detach_window(floating) ||
+    !bindings.unmount(satellite) || !tree.find(root, "editor-b").unwrap_or(root).same(editor_b) {
+        ret 11
+    }
+    let maximum = tree.capacity()
+    for _index in 0..50 {
+        let target = workspace.location(a).unwrap_or(DockNodeId::empty())
+        if !workspace.dock(b, target, DockPlacement::Right, 0) || !host.commit() ||
+        !workspace.dock(b, target, DockPlacement::Center, 1) || !host.commit() {
+            ret 12
+        }
+    }
+    if tree.capacity() > maximum + 16 || !tree.contains(editor_a) || !tree.contains(editor_b) {
+        ret 13
+    }
+    let saved_layout = workspace.snapshot()
+    for _index in 0..20 {
+        if !workspace.restore(saved_layout) || !host.commit() ||
+        !tree.find(root, "editor-a").unwrap_or(root).same(editor_a) ||
+        !tree.find(root, "editor-b").unwrap_or(root).same(editor_b) {
+            ret 17
+        }
+    }
+    text.set("Changed after layout restoration")
+    if tree.capacity() > maximum + 16 || bindings.flush() != 1 ||
+    tree.widget(editor_a).unwrap_or(Widget::label("")).text() != "Changed after layout restoration" {
+        ret 18
+    }
+    let last_shell = tree.children(root).get(0).unwrap_or(root)
+    let _unmounted_panel = workspace.register(DockPanel::new("missing", "Missing", Size::zero()))
+    let _shown_missing = workspace.show(PanelId::new("missing"), main)
+    if host.commit() || !tree.children(root).get(0).unwrap_or(root).same(last_shell) || !tree.contains(editor_b) {
+        ret 16
+    }
+    host.dispose()
+    if tree.len() != 0 {
+        ret 14
+    }
+    text.set("Disposed")
+    if bindings.flush() != 0 {
+        ret 15
+    }
+    ret 0
+}

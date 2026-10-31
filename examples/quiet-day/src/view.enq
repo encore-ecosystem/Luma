@@ -1,0 +1,319 @@
+//! Retained native Luma widgets; no Graphene, webview or raster UI assets.
+import luma::{SvgDocument, Widget, horizontal, vertical}
+
+import mod::model::{Day, clock}
+fn panel(id: str, classes: str) -> Widget {
+    ret Widget::panel(id).with_classes(classes).with_direction(vertical())
+}
+fn row(id: str, classes: str) -> Widget {
+    ret Widget::panel(id).with_classes(classes).with_direction(horizontal())
+}
+fn label(id: str, text: str, classes: str) -> Widget {
+    ret Widget::label(text).with_id(id).with_classes(classes).with_text_wrap(!(classes.contains("overline") || classes.contains("task-group") || classes.contains("task-time") || classes.contains("brand-name") || classes.contains("timer")))
+}
+fn button(id: str, text: str, classes: str, active: bool) -> Widget {
+    ret Widget::button(id, text).with_classes(classes + if active {
+            " selected"
+        } else {
+            ""
+        }
+    ).with_checked(active)
+    .with_attribute("aria-pressed", if active {
+            "true"
+        } else {
+            "false"
+        }
+        ,
+    )
+}
+fn icon(name: str) -> SvgDocument {
+    let path = match name {
+        "sun" => "<circle cx='12' cy='12' r='4'/><path d='M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5'/>"
+        "all" => "<rect x='4' y='4' width='16' height='16' rx='4'/><path d='M8 9h8M8 13h8m-8 4h4'/>"
+        "done" => "<circle cx='12' cy='12' r='9'/><path d='m8 12 3 3 5-6'/>"
+        "leaf" => "<path d='M5 19c-4-9 2-15 15-15 0 13-6 19-15 15Zm0 0L15 9'/>"
+        "search" => "<circle cx='10.5' cy='10.5' r='6.5'/><path d='m16 16 5 5'/>"
+        "plus" => "<path d='M12 5v14M5 12h14'/>"
+        "undo" => "<path d='m9 5-5 5 5 5M4 10h10c6 0 6 10 0 10'/>"
+        _ => "<circle cx='12' cy='12' r='9'/><path d='M12 8v4l3 2'/>"
+    }
+    ret SvgDocument::parse("<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>" + path + "</svg>")
+}
+fn art() -> SvgDocument {
+    ret SvgDocument::parse("<svg viewBox='0 0 300 230'><circle cx='209' cy='69' r='43' fill='#d9b87b'/><path d='M75 211V104a64 64 0 0 1 128 0v107Z' fill='#dadfd1'/><path d='M89 211V105a50 50 0 0 1 100 0v106Z' fill='#eef0e6'/><path d='M0 210h300' stroke='#bac3ae' stroke-width='2'/><path d='M167 207c-5-54-10-95 16-140M169 171c-33-4-47-22-43-40 24-1 39 14 43 40m-3-20c30-7 41-28 34-43-22 5-34 20-34 43m4-37c-27-5-33-24-27-38 20 4 27 20 27 38m8-33c-8-20 1-37 18-41 3 19-3 33-18 41' fill='#3c6351'/><path d='M139 175h59l-7 35h-44Z' fill='#9b7054'/><path d='M133 174h70v9h-70Z' fill='#ae8263'/><ellipse cx='172' cy='213' rx='46' ry='5' fill='#c9cebc'/><path d='M41 199h64v12H41Z' fill='#728774'/><path d='M49 186h62v12H49Z' fill='#b7a278'/><path d='M44 173h55v12H44Z' fill='#f8f7ef'/><path d='M53 179h31' stroke='#d0cabc' stroke-width='2'/></svg>")
+}
+fn sidebar(day: Day) -> Widget {
+    let mut root = panel("sidebar", "sidebar")
+    let mut brand = row("brand", "brand")
+    brand.push(Widget::icon("brand-mark", icon("leaf")).with_classes("brand-mark").with_attribute("aria-hidden", "true"))
+    brand.push(label("brand-name", "тихо", "brand-name")) root.push(brand)
+    root.push(label("brand-caption", "ПРОСТРАНСТВО ДЛЯ ГЛАВНОГО", "brand-caption"))
+    let mut nav = panel("navigation", "navigation").with_attribute("role", "navigation").with_attribute("aria-label", "Задачи")
+    for key in vec!["today", "all", "done"] {
+        let text = if key == "today" {
+            "Сегодня"
+        } elif key == "all" {
+            "Все задачи"
+        } else {
+            "Выполнено"
+        }
+        let item = button("scope-" + key, text, "nav-item", day.scope == key)
+        nav.push(item)
+    }
+    root.push(nav)
+    root.push(label("space-label", "РАЗДЕЛЫ", "overline section-caption"))
+    for category in vec!["Работа", "Личное", "Дом"] {
+        root.push(button("folder-" + category, category, "category-nav", day.category == category).with_attribute("aria-label", "Раздел: " + category))
+    }
+    root.push(Widget::spacer(1_f32))
+    let mut note = panel("sidebar-note", "sidebar-note")
+    note.push(label("note-eyebrow", "В СВОЁМ ТЕМПЕ", "overline"))
+    note.push(label("note-title", "Оставьте место\nдля паузы.", "note-title"))
+    note.push(label("note-description", "Не каждый час должен\nбыть продуктивным.", "muted small")) root.push(note)
+    root.push(label("native-label", "Сделано на Luma + Encore", "native-label")) ret root
+}
+fn new_task(day: Day) -> Widget {
+    let mut root = panel("composer", "composer")
+    root.push(label("new-label", "Что хочется сделать?", "section-title"))
+    root.push(Widget::input("draft", day.draft).with_classes("text-input draft-input").with_attribute("aria-label", "Что хочется сделать?").with_attribute("placeholder", "Например, набросать первую идею").with_attribute("aria-invalid", if day.error {
+                "true"
+            } else {
+                "false"
+            }
+            ,
+        ).with_attribute("aria-describedby", "draft-hint"))
+    root.push(label("draft-hint", if day.error {
+                "Введите название задачи: от 1 до 100 символов."
+            } else {
+                "До 100 символов. Enter добавит задачу."
+            }
+            , if day.error {
+                "error small"
+            } else {
+                "muted small"
+            }
+            ,
+        ).with_attribute("role", if day.error {
+                "alert"
+            } else {
+                "note"
+            }
+            ,
+        ))
+    let mut groups = row("composer-groups", "filters")
+    for group in vec!["Работа", "Личное", "Дом"] {
+        groups.push(button("draft-group-" + group, group, "chip", day.draft_group == group))
+    }
+    root.push(groups)
+    let mut actions = row("composer-actions", "composer-actions")
+    actions.push(Widget::spacer(1_f32))
+    actions.push(button("cancel-add", "Отмена", "button", false))
+    actions.push(button("submit-task", "Добавить", "button primary", false)) root.push(actions) ret root
+}
+fn tasks(day: Day) -> Widget {
+    let mut root = panel("task-card", "task-card")
+    let mut heading = row("list-heading", "list-heading")
+    heading.push(label("list-title", if day.scope == "all" {
+                "Все задачи"
+            } elif day.scope == "done" {
+                "Уже получилось"
+            } else {
+                "План на сегодня"
+            }
+            , "section-title",))
+    heading.push(button("undo", "Отменить", "button quiet compact", false).with_disabled(day.undo.len() == 0).with_attribute("title", "Отменить последнее изменение"))
+    heading.push(button("redo", "Повторить", "button quiet compact", false).with_disabled(day.redo.len() == 0)) root.push(heading)
+    let mut filters = row("filters", "filters")
+    for group in vec!["Все", "Работа", "Личное", "Дом"] {
+        filters.push(button("category-" + group, group, "chip", day.category == group))
+    }
+    root.push(filters)
+    let mut count = 0_u32
+    for t in day.tasks {
+        if !day.matches(t) {
+            continue
+        }
+        count += 1
+        let mut task = row("row-" + t.id.fmt(), "task-row" + if t.done {
+                " completed"
+            } else {
+                ""
+            }
+            ,
+        )
+        task.push(Widget::checkbox("task-" + t.id.fmt(), "", t.done).with_classes("task-checkbox").with_attribute("aria-label", t.title).with_children(vec![label("title-" + t.id.fmt(), t.title, "task-title")]))
+        task.push(label("", "" + t.group, "task-group"))
+        task.push(label("", t.minutes.fmt() + " мин", "task-time")) root.push(task)
+    }
+    if count == 0 {
+        let mut empty = panel("empty-state", "empty-state")
+        empty.push(Widget::icon("empty-icon", icon("leaf")).with_classes("empty-icon").with_attribute("aria-hidden", "true"))
+        empty.push(label("empty-title", if day.search != "" {
+                    "Ничего не нашлось"
+                } else {
+                    "Здесь пока тихо"
+                }
+                , "section-title",))
+        empty.push(label("empty-description", "Измените запрос или вернитесь ко всем задачам.", "muted"))
+        empty.push(button("clear-filters", "Показать все задачи", "button", false)) root.push(empty)
+    }
+    let mut foot = row("list-footer", "list-footer")
+    foot.push(label("list-count", "Показано: " + count.fmt(), "muted small")) foot.push(Widget::spacer(1_f32))
+    foot.push(label("list-tip", "Маленькие шаги тоже считаются", "muted small")) root.push(foot) ret root
+}
+fn focus_panel(day: Day) -> Widget {
+    let mut root = panel("focus-panel", "focus-panel")
+    let mut heading = row("focus-heading", "focus-heading")
+    heading.push(Widget::icon("clock-icon", icon("clock")).with_classes("nav-icon").with_attribute("aria-hidden", "true"))
+    heading.push(label("focus-label", "Время для главного", "section-title")) root.push(heading)
+    root.push(label("focus-subtitle", "Одна сессия. Одна задача.", "muted"))
+    root.push(label("timer", clock(day.remaining), "timer").with_attribute("aria-label", "Осталось времени"))
+    root.push(label("timer-state", if day.running {
+                "Сессия идёт"
+            } elif day.remaining == 0 {
+                "Пора отдохнуть"
+            } elif day.remaining != day.duration {
+                "Пауза"
+            } else {
+                "Можно начинать"
+            }
+            , "timer-state",))
+    root.push(Widget::progress(1_f32 -(day.remaining as f32) /(day.duration as f32)).with_id("session-progress").with_classes("session-progress"))
+    let mut duration = row("duration", "duration")
+    for minutes in vec![15_u32, 25_u32, 45_u32] {
+        duration.push(button("minutes-" + minutes.fmt(), minutes.fmt() + " мин", "chip", day.duration == minutes * 60).with_disabled(day.running))
+    }
+    root.push(duration)
+    root.push(button("focus-toggle", if day.running {
+                "Поставить на паузу"
+            } elif day.remaining != day.duration && day.remaining != 0 {
+                "Продолжить сессию"
+            } else {
+                "Начать фокус"
+            }
+            , "button focus-action", day.running,))
+    root.push(button("focus-reset", "Сбросить таймер", "button quiet", false).with_disabled(!day.running && day.remaining == day.duration))
+    root.push(label("focus-hint", "Таймер можно остановить\nв любой момент.", "muted small focus-hint"))
+    ret root
+}
+pub fn view(day: Day, width: f32) -> Widget {
+    let narrow = width < 1000_f32 let compact = width < 650_f32
+    let mut root = panel("root", "app" + if compact {
+            " compact"
+        } else {
+            ""
+        }
+        ,
+    ).with_attribute("lang", "ru")
+    let mut shell = if compact {
+        panel("shell", "shell mobile-shell")
+    } else {
+        row("shell", "shell")
+    }
+    if !compact {
+        shell.push(sidebar(day))
+    }
+    let mut main = panel("main", "main").with_attribute("role", "main").with_attribute("data-luma-scrollable", "true")
+    let mut toolbar = row("toolbar", "toolbar")
+    toolbar.push(label("breadcrumb", if compact {
+                "тихо / сегодня"
+            } else {
+                "ЛИЧНОЕ ПРОСТРАНСТВО   /   ОБЗОР"
+            }
+            , "overline breadcrumb",))
+    toolbar.push(button("help", "?", "button help", day.help).with_attribute("aria-label", "Показать подсказки")) main.push(toolbar)
+    let mut intro = panel("intro", "intro")
+    intro.push(label("greeting", "Хороший день\nначинается с малого.", "greeting").with_attribute("role", "heading").with_attribute("aria-level", "1"))
+    intro.push(label("subtitle", "Выберите главное. Для остального найдётся время.", "subtitle")) main.push(intro)
+    main.push(label("search-label", "Поиск по задачам", "muted small search-label"))
+    let mut actions = if compact {
+        panel("top-actions", "top-actions stacked")
+    } else {
+        row("top-actions", "top-actions")
+    }
+    actions.push(Widget::input("search", day.search).with_classes("text-input search").with_attribute("placeholder", "Найти задачу…").with_attribute("aria-label", "Найти задачу").with_attribute("aria-labelledby", "search-label"))
+    if day.search != "" {
+        actions.push(button("clear-search", "Очистить", "button", false))
+    }
+    actions.push(button("add-task", if day.composing {
+                "Закрыть форму"
+            } else {
+                "+  Добавить задачу"
+            }
+            , if day.composing {
+                "button"
+            } else {
+                "button primary"
+            }
+            , false,)) main.push(actions)
+    if compact {
+        let mut navigation = row("mobile-navigation", "filters") for key in vec!["today", "all", "done"] {
+            navigation.push(button("scope-" + key, if key == "today" {
+                        "Сегодня"
+                    } elif key == "all" {
+                        "Все"
+                    } else {
+                        "Готово"
+                    }
+                    , "chip", day.scope == key,))
+        }
+        main.push(navigation)
+    }
+    if day.composing {
+        main.push(new_task(day))
+    }
+    let mut body = if narrow {
+        panel("body", "body stacked")
+    } else {
+        row("body", "body")
+    }
+    let mut content = panel("content", "content")
+    let mut garden = row("garden", "garden")
+    let mut garden_text = panel("garden-text", "garden-text")
+    garden_text.push(label("garden-overline", "БЕЗ ЛИШНЕГО ШУМА", "overline"))
+    garden_text.push(label("garden-title", "Не больше.\nА осмысленнее.", "garden-title"))
+    garden_text.push(label("garden-caption", "Освободите немного места\nдля того, что важно.", "garden-caption")) garden.push(garden_text)
+    if !compact {
+        garden.push(Widget::icon("garden-art", art()).with_classes("garden-art").with_attribute("aria-hidden", "true"))
+    }
+    content.push(garden)
+    let mut stats = row("stats", "stats")
+    let total = day.today_count(false) let done = day.today_count(true)
+    for key in vec!["left", "done", "focus"] {
+        let mut stat = panel("stat-" + key, "stat")
+        stat.push(label("", if key == "left" {
+                    "Осталось на сегодня"
+                } elif key == "done" {
+                    "Уже выполнено"
+                } else {
+                    "Минут в фокусе"
+                }
+                , "muted small",))
+        stat.push(label("value-" + key, if key == "left" {
+                    (total - done).fmt()
+                } elif key == "done" {
+                    done.fmt()
+                } else {
+                    (day.focused_seconds / 60_u64).fmt()
+                }
+                , "stat-value",)) stats.push(stat)
+    }
+    content.push(stats) content.push(tasks(day)) body.push(content)
+    let mut aside = panel("aside", "aside" + if narrow {
+            " wide-aside"
+        } else {
+            ""
+        }
+        ,
+    ) aside.push(focus_panel(day))
+    let mut quote = panel("quote", "quote")
+    quote.push(label("quote-heading", "НА ЗАМЕТКУ", "overline"))
+    quote.push(label("quote-copy", "План — это ориентир,\nа не обещание успеть всё.", "quote-copy")) aside.push(quote) body.push(aside) main.push(body)
+    let mut footer = panel("footer", "footer")
+    footer.push(label("status", day.status, "muted small").with_attribute("role", "status"))
+    if day.help {
+        footer.push(label("help-text", "Tab — следующий элемент · Shift+Tab — назад\nSpace — отметить задачу · Enter — добавить из поля\nF12 — сохранить снимок окна в target/proof/", "muted small"))
+    }
+    footer.push(label("demo-note", "Нативный интерфейс · Luma + Encore · Данные в памяти", "muted small")) main.push(footer)
+    shell.push(main) root.push(shell) ret root
+}

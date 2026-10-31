@@ -1,0 +1,82 @@
+//! Interaction-only style commits preserve unrelated geometry and event data.
+import luma::{RendererKind, StyleSheet, UiBindings, UiContext, Widget, Window}
+
+fn main() -> u32 {
+    let mut context = UiContext::new()
+    let mut value = context.signal[str]("Initial")
+    let mut bindings = UiBindings::new(context)
+    let mut root = Widget::panel("root")
+    let mut trigger = Widget::panel("trigger").with_classes("trigger")
+    trigger.push(Widget::label("Nested").with_id("nested"))
+    root.push(trigger)
+    root.push(Widget::button("button", "Button"))
+    root.push(Widget::label("Status").with_id("status"))
+    root.push(Widget::label("Initial").with_id("stable"))
+    let mounted = bindings.mount(root)
+    let tree = bindings.tree()
+    let stable = tree.find(mounted, "stable").unwrap_or(mounted)
+    let observed = value
+    let _bound = bindings.bind_text(stable, | cx | {
+            ret cx.read[str](observed)
+        }
+        ,
+    )
+    let initial = tree.snapshot(mounted).unwrap_or(root)
+    let _mounted = tree.take_changes()
+    let sheet = StyleSheet::parse(
+        "#root { flex-direction: column; } label { color: #111111; } " +
+        ".trigger:hover label { color: #ff0000; } " +
+        "#root:has(.trigger:hover) { background: #0000ff; } " +
+        "button:active + #status { color: #00ff00; } " +
+        "button:focus-visible { outline-width: 2px; } " +
+        "#root:has(button:active) { padding: 10px; }")
+    let window = Window::create_with_renderer("Interaction binding transaction", 320, 240,
+        RendererKind::Software,).with_stylesheet(sheet).with_bindings(bindings, mounted)
+    if !window.available() {
+        ret 1
+    }
+    let mut ui = window.reactive(initial)
+    ui = ui.with_reduced_motion(true)
+    ui.clear_paint()
+    let generation = ui.segment_generation("stable")
+    let frames = window.presented_frames()
+    ui = window.stage_binding_frame(ui, "nested", "", "", 100)
+    if ui.find_widget("nested").unwrap_or(root).style().foreground().red() != 255 ||
+    ui.find_widget("root").unwrap_or(root).style().background().blue() != 255 ||
+    ui.segment_generation("stable") != generation || ui.needs_full_repaint() ||
+    window.presented_frames() != frames {
+        window.destroy() ret 2
+    }
+    // A data write immediately before a hover must not replay stale content.
+    value.set("Changed")
+    ui = window.stage_binding_frame(ui, "", "", "", 101)
+    if ui.find_widget("stable").unwrap_or(root).text() != "Changed" ||
+    ui.find_widget("nested").unwrap_or(root).style().foreground().red() != 17 {
+        window.destroy() ret 3
+    }
+    // Geometric and sibling selector changes still commit together.
+    ui = window.stage_binding_frame(ui, "button", "button", "", 102)
+    if ui.find_widget("status").unwrap_or(root).style().foreground().green() != 255 ||
+    ui.find_widget("root").unwrap_or(root).style().padding().left() != 10 ||
+    ui.find_layout("status").unwrap_or(ui.layout()).bounds().x() < 10 ||
+    window.presented_frames() != frames {
+        window.destroy() ret 4
+    }
+    let _mouse = ui.set_keyboard_focus(false)
+    ui = window.stage_binding_frame(ui, "button", "", "button", 103)
+    if !ui.find_widget("button").unwrap_or(root).focused() ||
+    ui.find_widget("button").unwrap_or(root).style().outline().width() != 0 {
+        window.destroy() ret 5
+    }
+    let _keyboard = ui.set_keyboard_focus(true)
+    ui = window.stage_binding_frame(ui, "button", "", "button", 104)
+    if ui.find_widget("button").unwrap_or(root).style().outline().width() != 2 {
+        window.destroy() ret 6
+    }
+    ui = window.stage_binding_frame(ui, "", "", "", 105)
+    if ui.find_widget("button").unwrap_or(root).focused() {
+        window.destroy() ret 7
+    }
+    window.destroy()
+    ret 0
+}

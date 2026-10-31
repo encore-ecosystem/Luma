@@ -1,0 +1,171 @@
+//! Real window transactions: batching, anonymous identity, CSS, layout and disposal.
+import luma::{UiBindings, UiContext, RendererKind, StyleSheet, Widget, Window, UiEvent, ui_event_click}
+
+fn main() -> u32 {
+    let mut context = UiContext::new()
+    let mut value = context.signal[f32](0.5)
+    let mut text = context.signal[str]("Initial")
+    let mut checked = context.signal[bool](false)
+    let mut unused = context.signal[u32](0)
+    let mut bindings = UiBindings::new(context)
+    let mut authored = Widget::panel("root")
+    authored.push(Widget::slider("slider", 0.5))
+    authored.push(Widget::label("Initial"))
+    authored.push(Widget::checkbox("toggle", "Toggle", false))
+    authored.push(Widget::label("Sibling").with_id("sibling"))
+    let root = bindings.mount(authored)
+    let tree = bindings.tree()
+    let slider = tree.children(root).get(0).unwrap_or(root)
+    let anonymous = tree.children(root).get(1).unwrap_or(root)
+    let toggle = tree.children(root).get(2).unwrap_or(root)
+    let observed_value = value
+    let observed_text = text
+    let observed_checked = checked
+    let _value = bindings.bind_value(slider, | cx | {
+            ret cx.read[f32](observed_value)
+        }
+        ,
+    )
+    let _text = bindings.bind_text(anonymous, | cx | {
+            ret cx.read[str](observed_text)
+        }
+        ,
+    )
+    let _checked = bindings.bind_checked(toggle, | cx | {
+            ret cx.read[bool](observed_checked)
+        }
+        ,
+    )
+    let initial = tree.snapshot(root).unwrap_or(Widget::panel("root"))
+    let _mounted = tree.take_changes()
+    let window = Window::create_with_renderer("Binding transactions", 320, 240,
+        RendererKind::Software,).with_stylesheet(StyleSheet::parse(
+            "#root { flex-direction: column; } #slider { order: 2; } label { height: auto; } .hidden { display: none; } #toggle:checked ~ #sibling { color: #ff0000; }"))
+    .with_bindings(bindings, root)
+    if !window.available() {
+        ret 1
+    }
+    let mut ui = window.reactive(initial)
+    ui = ui.with_reduced_motion(true)
+    let evaluations = bindings.evaluations()
+    let sibling_generation = ui.segment_generation("sibling")
+    let misses = window.stylesheet().cache_misses()
+    value.set(0.6)
+    value.set(0.7)
+    value.set(0.8)
+    ui = window.stage_bindings(ui)
+    if bindings.evaluations() != evaluations + 1 ||
+    ui.find_widget("slider").unwrap_or(Widget::spacer(0)).value() != 0.8 ||
+    ui.segment_generation("sibling") != sibling_generation ||
+    window.stylesheet().cache_misses() != misses || ui.needs_full_repaint() {
+        window.destroy() ret 2
+    }
+    ui.clear_paint()
+    unused.set(1)
+    ui = window.stage_bindings(ui)
+    if ui.is_dirty() || bindings.evaluations() != evaluations + 1 {
+        window.destroy() ret 3
+    }
+    text.set("Longer anonymous text")
+    ui = window.stage_bindings(ui)
+    if ui.declarative_root().children().get(1).unwrap_or(Widget::spacer(0)).text() != "Longer anonymous text" ||
+    ui.layout().retained_widget().children().get(1).unwrap_or(Widget::spacer(0)).text() != "Longer anonymous text" {
+        window.destroy() ret 4
+    }
+    checked.set(true)
+    ui = window.stage_bindings(ui)
+    if ui.find_widget("sibling").unwrap_or(Widget::spacer(0)).style().foreground().red() != 255 {
+        window.destroy() ret 5
+    }
+    let _removed = bindings.unmount(anonymous)
+    ui = window.stage_bindings(ui)
+    if ui.declarative_root().children().len() != 3 ||
+    ui.layout().retained_widget().children().len() != 3 {
+        window.destroy() ret 6
+    }
+    let before = bindings.evaluations()
+    text.set("Disposed binding")
+    ui.clear_paint()
+    ui = window.stage_bindings(ui)
+    if bindings.evaluations() != before || ui.is_dirty() {
+        window.destroy() ret 7
+    }
+    value.set(0.1)
+    ui = window.stage_bindings(ui)
+    if ui.find_widget("slider").unwrap_or(Widget::spacer(0)).value() != 0.1 {
+        window.destroy() ret 8
+    }
+    let mut desired = Widget::panel("root")
+    for child in ui.declarative_root().children() {
+        desired.push(child)
+    }
+    let first_capture = 1_u32
+    desired.push(Widget::button("capture", "Capture").with_on_click( | event | {
+                if first_capture == 2 {
+                    event.prevent_default()
+                }
+            }
+        ))
+    let _component = bindings.reconcile(root, desired)
+    ui = window.stage_binding_frame(ui, "", "", "", 0)
+    if !tree.contains(slider) || !ui.dispatch_event("capture", UiEvent::new(ui_event_click(), "capture")) {
+        window.destroy() ret 9
+    }
+    ui.clear_paint()
+    let mut next = Widget::panel("root")
+    let second_capture = 2_u32
+    for child in ui.declarative_root().children() {
+        next.push(if child.id() == "capture" {
+                Widget::button("capture", "Capture").with_on_click( | event | {
+                        if second_capture == 2 {
+                            event.prevent_default()
+                        }
+                    }
+                )
+            } else {
+                child
+            }
+        )
+    }
+    let _refreshed = bindings.reconcile(root, next)
+    ui = window.stage_binding_frame(ui, "", "", "", 1)
+    if ui.is_dirty() || ui.dispatch_event("capture", UiEvent::new(ui_event_click(), "capture")) {
+        window.destroy() ret 10
+    }
+    let sibling = tree.find(root, "sibling").unwrap_or(root)
+    let _hidden = tree.set_classes(sibling, "hidden")
+    ui = window.stage_binding_frame(ui, "", "", "", 2)
+    if ui.find_widget("sibling").is_some() {
+        window.destroy() ret 11
+    }
+    ui.clear_paint()
+    let _text = tree.set_text(sibling, "Changed while hidden")
+    ui = window.stage_binding_frame(ui, "", "", "", 3)
+    let _shown = tree.set_classes(sibling, "")
+    ui = window.stage_binding_frame(ui, "", "", "", 4)
+    if ui.find_widget("sibling").unwrap_or(Widget::spacer(0)).text() != "Changed while hidden" {
+        window.destroy() ret 12
+    }
+    let source = ui.declarative_root().children()
+    let mut reordered = Widget::panel("root")
+    for index in 0..source.len() {
+        reordered.push(source.get(source.len() - index - 1).unwrap_or(Widget::spacer(0)))
+    }
+    let _reordered = bindings.reconcile(root, reordered)
+    ui = window.stage_binding_frame(ui, "", "", "", 5)
+    if !tree.find(root, "slider").unwrap_or(root).same(slider) ||
+    tree.ordinal(slider) != 3 {
+        window.destroy() ret 15
+    }
+    value.set(0.9)
+    ui = window.stage_binding_frame(ui, "", "", "", 5)
+    if ui.find_widget("slider").unwrap_or(Widget::spacer(0)).value() != 0.9 {
+        window.destroy() ret 13
+    }
+    window.destroy()
+    value.set(0.4)
+    if bindings.has_pending() {
+        ret 14
+    }
+    ret 0
+}

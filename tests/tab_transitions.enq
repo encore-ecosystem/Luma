@@ -1,0 +1,107 @@
+import luma::{ReactiveUi, Rect, StyleSheet, Widget, layout_widget}
+
+fn tree(selected: bool) -> Widget {
+    let mut root = Widget::panel("root")
+    let mut nav = Widget::panel("nav")
+    nav.push(Widget::button("first", "First").with_attribute("aria-selected",
+            if selected {
+                "true"
+            } else {
+                "false"
+            }
+            ,))
+    nav.push(Widget::button("second", "Second").with_attribute("aria-selected",
+            if selected {
+                "false"
+            } else {
+                "true"
+            }
+            ,))
+    root.push(nav)
+    let mut page = Widget::panel(if selected {
+            "page-one"
+        } else {
+            "page-two"
+        }
+    )
+    page.push(Widget::label("Content"))
+    if !selected {
+        page.push(Widget::label("Other content"))
+    }
+    root.push(page)
+    ret root
+}
+
+fn switching_contract(spacing: u64) -> u32 {
+    let sheet = StyleSheet::parse(
+        "button { width: 160px; background: #ffffff; color: #202020; transition: width 120ms linear, background-color 120ms linear, color 120ms linear; } " +
+        "button[aria-selected=true] { width: 140px; background: #202020; color: #ffffff; }")
+    let bounds = Rect::new(0.0, 0.0, 800.0, 600.0)
+    let mut ui = ReactiveUi::new(layout_widget(sheet.apply(tree(true), "", "", ""), bounds))
+    for step in 0_usize..8_usize {
+        let selected = step % 2 == 1
+        let time = 1000_u64 +(step as u64) * spacing
+        let _advanced = ui.advance_transitions(time)
+        if ui.needs_layout() {
+            let _flushed = ui.flush_layout()
+        }
+        let target = sheet.apply(tree(selected), "", "", "")
+        ui.prune_transitions(target, time)
+        let displayed = ui.prepare_style_targets(target)
+        if ui.reconcile(displayed) >= 2 {
+            ui.replace_layout(layout_widget(displayed, bounds))
+        }
+        ui.apply_style_targets(target, time)
+    }
+    let _finished = ui.advance_transitions(3000)
+    if ui.needs_layout() {
+        let _flushed = ui.flush_layout()
+    }
+    let first = ui.find_widget("first").unwrap_or(Widget::spacer(0.0))
+    let second = ui.find_widget("second").unwrap_or(Widget::spacer(0.0))
+    if ui.has_active_transitions() {
+        ret 1
+    }
+    if first.style().background().red() != 32 {
+        ret 2
+    }
+    if second.style().background().red() != 255 {
+        ret 3
+    }
+    if first.style().foreground().red() != 255 ||
+    second.style().foreground().red() != 32 {
+        ret 4
+    }
+    if first.attribute("aria-selected").unwrap_or("") != "true" ||
+    second.attribute("aria-selected").unwrap_or("") != "false" {
+        ret 5
+    }
+    ret 0
+}
+
+fn main() -> u32 {
+    let bounds = Rect::new(0.0, 0.0, 800.0, 600.0)
+    let mut retained = ReactiveUi::new(layout_widget(tree(true), bounds))
+    let original = retained.find_widget("first").unwrap_or(Widget::spacer(0.0))
+    let patched = original.with_text("Updated").with_value(0.75)
+    .with_computed_style(original.style().with_font_size(23.0))
+    let _patched = retained.patch_widget("first", patched)
+    retained.invalidate_layout("root")
+    let _flushed = retained.flush_layout()
+    let refreshed = retained.find_widget("first").unwrap_or(Widget::spacer(0.0))
+    if refreshed.text() != "Updated" || refreshed.value() != 0.75 ||
+    refreshed.style().font_size() != 23.0 {
+        ret 20
+    }
+    // Reversal before the first animation tick used to leave the old target
+    // running, even though the displayed sample already matched the new one.
+    let immediate = switching_contract(0)
+    if immediate != 0 {
+        ret immediate
+    }
+    let interrupted = switching_contract(30)
+    if interrupted != 0 {
+        ret 10 + interrupted
+    }
+    ret switching_contract(150)
+}

@@ -1,0 +1,78 @@
+//! Real independent swapchains share one GPU owner and survive either close order.
+import luma::{Widget, Window, WindowSet}
+
+fn lifecycle(parent_first: bool) -> u32 {
+    let parent = Window::create("Luma shared-window owner", 160, 120)
+    if !parent.available() {
+        ret 1
+    }
+    let child = match parent.create_shared("Luma shared-window satellite", 160, 120) {
+        Ok(window) => window
+        Err(error) => {
+            parent.destroy() ret 2
+        }
+    }
+    let a = parent.vulkan_interop() let b = child.vulkan_interop()
+    if a.instance() == 0 || a.instance() != b.instance() || a.device() != b.device() ||
+    a.swapchain() == b.swapchain() {
+        child.destroy() parent.destroy() ret 3
+    }
+    let mut windows = WindowSet::new()
+    let main = windows.add(parent) let satellite = windows.add(child)
+    if main.same(satellite) || !windows.add(parent).same(main) || windows.ids().len() != 2 {
+        child.destroy() parent.destroy() ret 4
+    }
+    let survivor = if parent_first {
+        child
+    } else {
+        parent
+    }
+    let closing = if parent_first {
+        parent
+    } else {
+        child
+    }
+    let closing_id = if parent_first {
+        main
+    } else {
+        satellite
+    }
+    let remaining_id = if parent_first {
+        satellite
+    } else {
+        main
+    }
+    if !windows.remove(closing_id) || !closing.destroy() || !survivor.is_open() {
+        survivor.destroy() ret 5
+    }
+    if windows.ids().len() != 1 || windows.get(closing_id).is_some() || windows.get(remaining_id).is_none() {
+        survivor.destroy() ret 6
+    }
+    for _sample in 0..8 {
+        match windows.wait(0) {
+            Some(event) => {
+                if !event.window().same(remaining_id) {
+                    survivor.destroy() ret 9
+                }
+            }
+            None => {
+            }
+        }
+    }
+    // Recording succeeds on the shared device after the original owner closes.
+    let layout = survivor.layout(Widget::label("Survivor").with_id("survivor"))
+    if !survivor.cache_layout(layout) {
+        survivor.destroy() ret 7
+    }
+    if !windows.remove(remaining_id) || !survivor.destroy() {
+        ret 8
+    }
+    ret 0
+}
+fn main() -> u32 {
+    let first = lifecycle(true)
+    if first != 0 {
+        ret first
+    }
+    ret lifecycle(false)
+}

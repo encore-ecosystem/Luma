@@ -1,8 +1,0 @@
-[project]
-name = "vulkan_native"
-version = "0.1.0"
-description = "Direct Vulkan backend shared by Luma and embedded renderers"
-repository = "https://github.com/encore-ecosystem/Luma"
-encore = ">=0.2.1, <0.3.0"
-licence = "MIT"
-dependencies = []

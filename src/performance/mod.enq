@@ -1,0 +1,131 @@
+//! Opt-in bounded frame measurements, buffered outside the input hot path.
+import core::vec::Vec
+import std::io::eprintln
+import std::os::{env, write_file}
+
+struct FrameSample {
+    cpu: u64 submit: u64 presentation: u64 upload: u64
+}
+
+pub struct FrameProfiler {
+    enabled: bool
+    warmup: usize
+    pending_cpu: u64
+    samples: Vec[FrameSample]
+}
+
+fn percentile(values: mut Vec[u64], percentage: usize) -> u64 {
+    // Sorting is performed only after capture, never while preparing frames.
+    for index in 1_usize..values.len() {
+        let value = values.get(index).unwrap_or(0)
+        let mut position = index
+        while position > 0 && values.get(position - 1).unwrap_or(0) > value {
+            values.set(position, values.get(position - 1).unwrap_or(0))
+            position -= 1
+        }
+        values.set(position, value)
+    }
+    let rank =(values.len() * percentage + 99) / 100
+    ret values.get(if rank > 0 {
+            rank - 1
+        } else {
+            0_usize
+        }
+    ).unwrap_or(0)
+}
+
+impl for FrameProfiler {
+    pub fn new() -> Self {
+        ret Self {
+            env("LUMA_PROFILE").unwrap_or("") == "1", 100, 0, Vec[FrameSample]::new()
+        }
+    }
+    pub fn enabled(self: Self) -> bool {
+        ret self.enabled
+    }
+    pub fn record(self: mut Self, cpu: u64, submit: u64, presentation: u64,
+        upload: u64, presented: bool,) -> Self {
+        if !self.enabled {
+            ret self
+        }
+        self.pending_cpu += cpu
+        if !presented {
+            ret self
+        }
+        if self.warmup > 0 {
+            self.warmup -= 1
+        } else {
+            self.samples.push(FrameSample {
+                    self.pending_cpu, submit, presentation, upload
+                }
+                ,
+            )
+        }
+        self.pending_cpu = 0
+        if self.samples.len() == 1000 {
+            self.finish()
+            self.enabled = false
+        }
+        ret self
+    }
+    pub fn finish(self: Self) ->() {
+        if !self.enabled {
+            ret()
+        }
+        if self.samples.len() == 0 {
+            ret()
+        }
+        let mut cpu = Vec[u64]::new()
+        let mut presentation = Vec[u64]::new()
+        let mut report = "cpu_prepare_ns,submit_ns,presentation_ns,geometry_upload_bytes\n"
+        let mut bytes = 0_u64
+        for sample in self.samples {
+            // submit includes command preparation as well as acquire/present.
+            let host = if sample.submit > sample.presentation {
+                sample.submit - sample.presentation
+            } else {
+                0_u64
+            }
+            cpu.push(sample.cpu + host)
+            presentation.push(sample.presentation)
+            bytes += sample.upload
+            report += f "{sample.cpu + host},{sample.submit},{sample.presentation},{sample.upload}\n"
+        }
+        let p50 = percentile(cpu, 50) / 1000
+        let p95 = percentile(cpu, 95) / 1000
+        let p99 = percentile(cpu, 99) / 1000
+        let wait95 = percentile(presentation, 95) / 1000
+        eprintln(f "LUMA_PROFILE frames={self.samples.len()} cpu_us p50={p50} p95={p95} p99={p99} acquire_present_p95_us={wait95} uploaded_bytes={bytes}")
+        let path = env("LUMA_PROFILE_OUTPUT").unwrap_or("")
+        if path != "" {
+            let result = write_file(path, report)
+            if result != 0 {
+                eprintln("Unable to write LUMA_PROFILE_OUTPUT")
+            }
+        }
+        ret()
+    }
+}
+
+#attr(test)
+fn frame_profiler_accumulates_events_and_excludes_warmup() -> bool {
+    let mut profiler = FrameProfiler {
+        true, 1, 0, Vec[FrameSample]::new()
+    }
+    profiler = profiler.record(10, 0, 0, 0, false)
+    profiler = profiler.record(20, 30, 5, 40, true)
+    if profiler.warmup != 0 || profiler.samples.len() != 0 {
+        ret false
+    }
+    profiler = profiler.record(100, 0, 0, 0, false)
+    profiler = profiler.record(200, 300, 50, 400, true)
+    match profiler.samples.get(0) {
+        Some(sample) => {
+            ret sample.cpu == 300 && sample.submit == 300 && sample.presentation == 50 &&
+            sample.upload == 400 && profiler.pending_cpu == 0 && profiler.samples.len() == 1
+        }
+        None => {
+            ret false
+        }
+    }
+}

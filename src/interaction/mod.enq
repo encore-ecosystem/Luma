@@ -2,6 +2,11 @@
 
 import core::option::Option
 import core::vec::Vec
+
+import std::time::perf_counter_ns
+
+pub import mod::number::format_decimal
+import refrain::application::{Event, Window, event_key_down, event_pointer_down, event_pointer_move, event_pointer_up}
 import refrain::widget::{Widget, WidgetLayout, widget_button, widget_checkbox, widget_color_picker, widget_icon_button, widget_icon_card, widget_input, widget_link, widget_radio, widget_range_slider, widget_select, widget_slider, widget_switch, widget_terminal, widget_textarea}
 
 pub struct InteractionState {
@@ -14,17 +19,21 @@ pub struct TextEditor {
     value: str
     cursor: usize
     anchor: usize
+    pointer_dragging: bool
+    click_ns: u64
+    click_x: f32
+    click_y: f32
 }
 
 impl for TextEditor {
     pub fn new(value: str) -> TextEditor {
         ret TextEditor {
-            value, value.char_len(), value.char_len()
+            value, value.char_len(), value.char_len(), false, 0_u64, 0_f32, 0_f32
         }
     }
     pub fn with_selection(self: Self, anchor: usize, cursor: usize) -> TextEditor {
         ret TextEditor {
-            self.value, clamp_index(cursor, self.value.char_len()), clamp_index(anchor, self.value.char_len())
+            self.value, clamp_index(cursor, self.value.char_len()), clamp_index(anchor, self.value.char_len()), self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn with_cursor(self: Self, cursor: usize) -> TextEditor {
@@ -37,7 +46,7 @@ impl for TextEditor {
         self.value.slice(finish, self.value.char_len() - finish)
         let cursor = start + text.char_len()
         ret TextEditor {
-            value, cursor, cursor
+            value, cursor, cursor, self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn backspace(self: Self) -> TextEditor {
@@ -72,6 +81,7 @@ impl for TextEditor {
             } else {
                 cursor
             }
+            , self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn move_right(self: Self, extend: bool) -> TextEditor {
@@ -88,6 +98,7 @@ impl for TextEditor {
             } else {
                 cursor
             }
+            , self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn move_home(self: Self, extend: bool) -> TextEditor {
@@ -97,6 +108,7 @@ impl for TextEditor {
             } else {
                 0_usize
             }
+            , self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn move_end(self: Self, extend: bool) -> TextEditor {
@@ -107,6 +119,7 @@ impl for TextEditor {
             } else {
                 finish
             }
+            , self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn move_line_home(self: Self, extend: bool) -> TextEditor {
@@ -117,6 +130,7 @@ impl for TextEditor {
             } else {
                 cursor
             }
+            , self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn move_line_end(self: Self, extend: bool) -> TextEditor {
@@ -127,6 +141,7 @@ impl for TextEditor {
             } else {
                 cursor
             }
+            , self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn move_up(self: Self, extend: bool) -> TextEditor {
@@ -167,11 +182,12 @@ impl for TextEditor {
             } else {
                 cursor
             }
+            , self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn select_all(self: Self) -> TextEditor {
         ret TextEditor {
-            self.value, self.value.char_len(), 0_usize
+            self.value, self.value.char_len(), 0_usize, self.pointer_dragging, self.click_ns, self.click_x, self.click_y
         }
     }
     pub fn selected_text(self: Self) -> str {
@@ -213,8 +229,85 @@ impl for TextEditor {
     pub fn has_selection(self: Self) -> bool {
         ret self.cursor != self.anchor
     }
-}
+    /// Pointer selection belongs to the active input even outside its bounds.
+    pub fn pointer_active(self: Self) -> bool {
+        ret self.pointer_dragging
+    }
+    pub fn pointer_handles(self: Self, event: Event, target: str, id: str) -> bool {
+        ret(event.kind() == event_pointer_down() && event.key() == 1 && target == id) ||
+        (self.pointer_dragging &&(event.kind() == event_pointer_move() ||(event.kind() == event_pointer_up() && event.key() == 1)))
+    }
+    pub fn pointer_input(self: Self, event: Event, layout: WidgetLayout, id: str, window: Window) -> Self {
+        let mut next = self
+        let bounds = match layout.find_bounds(id) {
+            Some(bounds) => bounds None => {
+                ret next
+            }
+        }
+        let widget = match layout.find_widget(id) {
+            Some(widget) => widget None => {
+                ret next
+            }
+        }
+        if event.kind() == event_pointer_down() && event.key() == 1 {
+            let index = window.input_text_index(widget, bounds, next.value, next.cursor, event.x())
+            let now = if event.timestamp_ns() != 0 {
+                event.timestamp_ns()
+            } else {
+                perf_counter_ns()
+            }
+            let dx = event.x() - next.click_x let dy = event.y() - next.click_y
+            let double_click = next.click_ns != 0 && now >= next.click_ns && now - next.click_ns < 400000000_u64 && dx * dx + dy * dy < 25
+            next = if double_click {
+                next.select_all()
+            } elif event.shift() {
+                next.with_selection(next.anchor, index)
+            } else {
+                next.with_cursor(index)
+            }
+            next.pointer_dragging = !double_click next.click_ns = if double_click {
+                0_u64
+            } else {
+                now
+            }
+            next.click_x = event.x() next.click_y = event.y()
+        } elif event.kind() == event_pointer_move() && next.pointer_dragging {
+            if event.primary_down() {
+                next = next.with_selection(next.anchor, window.input_text_index(widget, bounds, next.value, next.cursor, event.x()))
+            } else {
+                next.pointer_dragging = false
+            }
+        } elif event.kind() == event_pointer_up() && event.key() == 1 {
+            next.pointer_dragging = false
+        }
+        ret next
+    }
+    pub fn key_input(self: Self, event: Event, window: Window) -> Self {
+        if event.control() {
+            if event.key() == 97 {
+                ret self.select_all()
+            }
+            if event.key() == 118 {
+                ret self.paste(window.clipboard_text())
+            }
+            if event.key() == 99 || event.key() == 120 {
+                window.set_clipboard(self.selected_text())
+                ret if event.key() == 120 {
+                    self.cut()
+                } else {
+                    self
+                }
+            }
+        }
+        ret match event.key() {
+            8 => self.backspace() 127 => self.delete()
+            1073741904 => self.move_left(event.shift()) 1073741903 => self.move_right(event.shift())
+            1073741898 => self.move_home(event.shift()) 1073741901 => self.move_end(event.shift())
+            _ => self
+        }
+    }
 
+}
 fn line_start(value: str, cursor: usize) -> usize {
     let length = value.char_len()
     let mut index = if cursor > length {
@@ -477,4 +570,23 @@ fn focus_loss_cancels_pointer_without_losing_control_focus() -> bool {
     ret cancelled.hovered() == "" && cancelled.active() == "" &&
     cancelled.focused() == "speed" &&
     cancelled.release_target("speed") == ""
+}
+
+/// Editing keys without application-owned commit/cancel/history shortcuts.
+pub fn text_edit_key(event: Event) -> bool {
+    if event.kind() != event_key_down() {
+        ret false
+    }
+    if event.control() {
+        ret event.key() == 97 || event.key() == 99 || event.key() == 120 || event.key() == 118
+    }
+    ret event.key() == 8 || event.key() == 127 || event.key() == 1073741904 || event.key() == 1073741903 || event.key() == 1073741898 || event.key() == 1073741901
+}
+
+/// Excludes action buttons that share an application's keyboard focus owner.
+pub fn editable_text_field(layout: WidgetLayout, id: str) -> bool {
+    ret match layout.find_widget(id) {
+        Some(widget) => !widget.disabled() &&(widget.kind() == widget_input() || widget.kind() == widget_textarea())
+        None => false
+    }
 }

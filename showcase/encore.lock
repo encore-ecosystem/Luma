@@ -1,0 +1,48 @@
+version = 2
+
+[[packages]]
+name = "luma"
+ref = "path@.."
+version = "0.0.0"
+features = ["fonts"]
+
+[[packages]]
+name = "std"
+ref = "index@std"
+version = "0.0.1"
+archive = "http://127.0.0.1:8137/archives/0e48caf5ace11a51b84c1c509536f7d3a4f880e5f5f85d40c6f598d9d0c3c73c.tar.gz"
+checksum = "0e48caf5ace11a51b84c1c509536f7d3a4f880e5f5f85d40c6f598d9d0c3c73c"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "core"
+ref = "sys@core"
+version = "0.0.0"
+
+[[packages]]
+name = "color"
+ref = "index@color"
+version = "0.0.0"
+archive = "http://127.0.0.1:8137/archives/e1b883aabe52e4a79a6b02c507ea627ce4696bd67fb42b56b051036a4f19059c.tar.gz"
+checksum = "e1b883aabe52e4a79a6b02c507ea627ce4696bd67fb42b56b051036a4f19059c"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "ui_native"
+ref = "workspace@ui_native"
+version = "0.0.0"
+source = "embedded@luma"
+path = "workspace/ui_native"
+
+[[packages]]
+name = "vulkan"
+ref = "index@vulkan@0.1.0"
+version = "0.1.0"
+archive = "http://127.0.0.1:8137/archives/b45f50e9b532b732920d7ad17e9602839509776b98fd9ea62446bfa79bbc14dd.tar.gz"
+checksum = "b45f50e9b532b732920d7ad17e9602839509776b98fd9ea62446bfa79bbc14dd"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "platform"
+ref = "sys@platform"
+version = "0.0.0"

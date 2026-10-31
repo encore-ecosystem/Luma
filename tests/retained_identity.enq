@@ -1,0 +1,49 @@
+//! Data-only frames retain paths, but never retain obsolete event closures.
+import luma::{ApplicationOptions, ReactiveUi, Rect, Signal, UiEvent, Widget, layout_widget, ui_event_click}
+
+fn button(count: Signal[u32] < H >, amount: u32) -> Widget {
+    ret Widget::button("button", "Unchanged pixels").with_on_click( | event | {
+            count.set(count.get() + amount)
+        }
+    )
+}
+
+fn main() -> u32 {
+    let count = Signal[u32]::new(0)
+    let mut root = Widget::panel("root")
+    root.push(button(count, 1))
+    let bounds = Rect::new(0.0, 0.0, 400.0, 200.0)
+    let mut ui = ReactiveUi::new(layout_widget(root, bounds))
+    let generation = ui.segment_generation("button")
+    let mut fresh = Widget::panel("root")
+    fresh.push(button(count, 10))
+    if !ui.refresh_unchanged(fresh) {
+        ret 1
+    }
+    let _sent = ui.dispatch_event("button", UiEvent::new(ui_event_click(), "button"))
+    if count.get() != 10 || ui.segment_generation("button") != generation {
+        ret 2
+    }
+    // Equal-sized structural replacement must rebuild hash chains: the path
+    // vector itself is shared and cannot serve as the old identity snapshot.
+    if !ui.replace_subtree("button", Widget::button("replacement", "Other")) {
+        ret 3
+    }
+    if ui.find_widget("button").is_some() || ui.find_widget("replacement").is_none() {
+        ret 4
+    }
+    let _removed = ui.dispatch_event("button", UiEvent::new(ui_event_click(), "button"))
+    if count.get() != 10 {
+        ret 5
+    }
+    let _patched = ui.patch_text("replacement", "Latest")
+    if ui.find_widget("replacement").unwrap_or(Widget::spacer(0.0)).text() != "Latest" {
+        ret 6
+    }
+    let mut options = ApplicationOptions::event_driven()
+    if options.frame_interval_ms() != 0 || options.interaction_interval_ms() != 4 ||
+    options.with_interaction_interval_ms(0).interaction_interval_ms() != 1 {
+        ret 7
+    }
+    ret 0
+}

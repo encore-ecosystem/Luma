@@ -1,0 +1,139 @@
+//! Content-sized sections for this demo's flex composition.
+import core::vec::Vec
+import luma::{StyleSheet, Widget, Window, horizontal, widget_checkbox, widget_label, widget_panel, widget_spacer}
+
+import mod::model::Day
+import mod::view::view
+fn max(a: f32, b: f32) -> f32 {
+    ret if a > b {
+        a
+    } else {
+        b
+    }
+}
+fn text_lines(window: Window, text: str, width: f32) -> usize {
+    let mut lines = 1_usize
+    let mut line = ""
+    let mut word_start = 0_usize
+    for i in 0_usize..text.char_len() + 1_usize {
+        let letter = if i < text.char_len() {
+            text.slice(i, 1_usize)
+        } else {
+            ""
+        }
+        if letter != " " && letter != "\n" && letter != "" {
+            continue
+        }
+        let word = text.slice(word_start, i - word_start)
+        let candidate = line + word
+        if line != "" && window.text_width(candidate) > width {
+            lines += 1
+            line = word
+        } else {
+            line = candidate
+        }
+        if window.text_width(line) > width {
+            let mut rest = line
+            while window.text_width(rest) > width && rest.char_len() > 1 {
+                let count = window.text_index(rest, width)
+                let count = if count > 0 {
+                    count
+                } else {
+                    1_usize
+                }
+                rest = rest.slice(count, rest.char_len() - count)
+                lines += 1
+            }
+            line = rest
+        }
+        if letter == "\n" {
+            lines += 1 line = ""
+        } else {
+            line += " "
+        }
+        word_start = i + 1_usize
+    }
+    ret lines
+}
+fn fit(window: Window, family: str, widget: Widget, width: f32) ->(Widget, f32) {
+    let style = widget.style() let layout = style.layout() let padding = style.padding()
+    let inner = max(1_f32, width - padding.left() - padding.right())
+    let horizontal_flow = if layout.flex().direction_set() {
+        layout.flex().direction() == horizontal()
+    } else {
+        widget.direction() == horizontal()
+    }
+    let mut fixed = 0_f32 let mut flexible = 0_usize
+    for child in widget.children() {
+        if !child.style().layout().flex().displayed() {
+            continue
+        }
+        let w = child.style().layout().width()
+        if w > 0 {
+            fixed += w
+        } else {
+            flexible += 1
+        }
+    }
+    let children = widget.children() let gaps = if children.len() > 1 {
+        ((children.len() - 1) as f32) * style.gap()
+    } else {
+        0_f32
+    }
+    let share = max(1_f32,(inner - fixed - gaps) /(if flexible > 0 {
+                flexible as f32
+            } else {
+                1_f32
+            }
+        ))
+    let mut output = Vec[Widget]::new() let mut height = 0_f32 let mut visible = 0_usize
+    for child in children {
+        let w = if horizontal_flow {
+            let desired = child.style().layout().width() if desired > 0 {
+                desired
+            } else {
+                share
+            }
+        } else {
+            inner
+        }
+        let fitted = fit(window, family, child, w) output.push(fitted.0)
+        if !child.style().layout().flex().displayed() {
+            continue
+        }
+        visible += 1
+        height = if horizontal_flow {
+            max(height, fitted.1)
+        } else {
+            height + fitted.1
+        }
+    }
+    if !horizontal_flow && visible > 1 {
+        height +=((visible - 1) as f32) * style.gap()
+    }
+    height += padding.top() + padding.bottom()
+    if widget.kind() == widget_label() || widget.kind() == widget_checkbox() {
+        let _font = window.select_font(family, style.font_size(), style.font_weight())
+        let lines = if widget.text_wrap() {
+            text_lines(window, widget.text(), max(1_f32, width - 16_f32))
+        } else {
+            1_usize
+        }
+        height = max(height,(lines as f32) * max(window.text_height("Mg") + 2_f32, style.font_size() * 1.4_f32) + 8_f32)
+    }
+    if widget.kind() == widget_spacer() {
+        height = 0_f32
+    }
+    height = max(height, max(layout.height(), layout.min_height()))
+    if widget.kind() != widget_panel() {
+        height = max(height, widget.basis())
+    }
+    let result = widget.with_children(output)
+    if (widget.kind() == widget_label() || widget.kind() == widget_panel()) && widget.id() != "root" && widget.id() != "shell" && widget.id() != "main" && widget.id() != "sidebar" {
+        ret(result.with_style(style.with_min_height(height)), height)
+    }
+    ret(result, height)
+}
+pub fn layout_view(window: Window, family: str, day: Day, width: f32, sheet: StyleSheet) -> Widget {
+    ret fit(window, family, sheet.apply(view(day, width), "", "", ""), width).0
+}

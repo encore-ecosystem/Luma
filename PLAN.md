@@ -103,11 +103,25 @@ editor path.
   indexed hit testing, focus and pointer state, animation deadlines, native
   system fonts, stale-handle protection, and typed creation errors are
   implemented.
-- Interaction CSS is parsed once and patched onto the retained target instead
-  of restyling the complete tree. Animated subtree replacement resolves all
-  requested IDs in one declarative traversal, relayouts only those subtrees,
-  and splices only their entries into the flat hit-test index; unrelated
-  layout and index branches are not rebuilt on animation ticks.
+- Interaction CSS is parsed once. Managed hover/focus changes currently
+  recompute the stylesheet cascade from the declarative root so ancestor and
+  sibling selectors stay correct. A single postorder side-table pass now
+  aggregates descendant pseudo-state and focus marking, so each cascade node
+  consumes precomputed state instead of recursively searching its subtree;
+  retained reconciliation preserves unchanged segments, but the cascade walk
+  itself is still a known full-tree cost.
+  Ancestor and sibling combinators now consume the matched node's interaction
+  state, including `:hover +`, `:active ~`, and ancestor `:focus-within`.
+  `:has()` matching now consumes the same recursive interaction snapshot, so
+  nested hover/active/focus selectors are evaluated against the exact descendant
+  state. Relational cache keys include that subtree state, preventing stale
+  parent styles when the pointer moves between descendants. Regression coverage
+  exercises nested `:has(input:focus)`, `:has(button:hover)` and
+  `:has(button:active)` alongside ancestor/sibling state selectors.
+  Animated subtree replacement resolves all requested IDs in one declarative
+  traversal, relayouts only those subtrees, and splices only their entries into
+  the flat hit-test index; unrelated layout and index branches are not rebuilt
+  on animation ticks.
 - Window creation may map an inexpensive technical frame only when the
   compositor supports hiding it with opacity. `Window::reactive` builds the
   retained cache before presentation and reveals exactly one complete

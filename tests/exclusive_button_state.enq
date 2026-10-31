@@ -1,0 +1,50 @@
+//! Replacing a row must clear the previously selected button, including after interaction.
+import luma::{Widget, Window, RendererKind, StyleSheet, UiContext, UiBindings}
+fn row(active: usize) -> Widget {
+    let mut root = Widget::panel("root")
+    for i in 0..4 {
+        root.push(Widget::button(i.fmt(), i.fmt()).with_classes("choice").with_checked(i == active).with_attribute("aria-pressed", if i == active {
+                    "true"
+                } else {
+                    "false"
+                }
+                ,
+            ))
+    }
+    ret root
+}
+fn main() -> u32 {
+    let mut bindings = UiBindings::new(UiContext::new())
+    let root = bindings.mount(row(4))
+    let sheet = StyleSheet::parse(".choice{background:#112233;}.choice:checked{background:#aabbcc;}.choice:focus{outline:1px solid #ffffff;}")
+    let window = Window::create_with_renderer("Exclusive button state", 320, 240, RendererKind::Software).with_stylesheet(sheet).with_bindings(bindings, root)
+    if !window.available() {
+        ret 1
+    }
+    let mut ui = window.reactive(row(4))
+    ui = ui.with_reduced_motion(true)
+    for active in 0..4 {
+        if !bindings.reconcile(root, row(active)) {
+            window.destroy() ret 2
+        }
+        ui = window.stage_binding_frame(ui, active.fmt(), active.fmt(), active.fmt(), 100 + active as u64)
+        ui = window.stage_binding_frame(ui, active.fmt(), "", active.fmt(), 110 + active as u64)
+        for i in 0..4 {
+            let button = ui.find_widget(i.fmt()).unwrap_or(Widget::panel("missing"))
+            if button.style().background().red() !=(if i == active {
+                    170_u8
+                } else {
+                    17_u8
+                }
+            ) || button.attribute("aria-pressed").unwrap_or("") !=(if i == active {
+                    "true"
+                } else {
+                    "false"
+                }
+            ) {
+                window.destroy() ret 3
+            }
+        }
+    }
+    window.destroy() ret 0
+}

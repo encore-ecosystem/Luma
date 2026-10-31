@@ -1,7 +1,8 @@
 //! Typed visual, layout, typography, shadow, gradient, and theme styles.
 
 import color::{Color, black, transparent, white}
-import geometry::Insets
+
+import refrain::geometry::Insets
 
 pub fn text_start() -> usize {
     ret 0_usize
@@ -270,75 +271,99 @@ impl for FlexStyle {
             self.wrap, self.wrap_reverse, self.row_gap, self.column_gap, self.direction_reverse, value
         }
     }
+    #attr(borrowed_self)
     pub fn direction(self: Self) -> usize {
         ret self.direction
     }
+    #attr(borrowed_self)
     pub fn direction_set(self: Self) -> bool {
         ret self.direction_set
     }
+    #attr(borrowed_self)
     pub fn basis(self: Self) -> f32 {
         ret self.basis
     }
+    #attr(borrowed_self)
     pub fn grow(self: Self) -> f32 {
         ret self.grow
     }
+    #attr(borrowed_self)
     pub fn shrink(self: Self) -> f32 {
         ret self.shrink
     }
+    #attr(borrowed_self)
     pub fn justify(self: Self) -> usize {
         ret self.justify
     }
+    #attr(borrowed_self)
     pub fn align(self: Self) -> usize {
         ret self.align
     }
+    #attr(borrowed_self)
     pub fn displayed(self: Self) -> bool {
         ret self.displayed
     }
+    #attr(borrowed_self)
     pub fn grid(self: Self) -> bool {
         ret self.grid
     }
+    #attr(borrowed_self)
     pub fn columns(self: Self) -> usize {
         ret self.columns
     }
+    #attr(borrowed_self)
     pub fn column_template(self: Self) -> str {
         ret self.column_template
     }
+    #attr(borrowed_self)
     pub fn row_template(self: Self) -> str {
         ret self.row_template
     }
+    #attr(borrowed_self)
     pub fn auto_column_template(self: Self) -> str {
         ret self.auto_column_template
     }
+    #attr(borrowed_self)
     pub fn auto_row_template(self: Self) -> str {
         ret self.auto_row_template
     }
+    #attr(borrowed_self)
     pub fn auto_flow_column(self: Self) -> bool {
         ret self.auto_flow_column
     }
+    #attr(borrowed_self)
     pub fn auto_flow_dense(self: Self) -> bool {
         ret self.auto_flow_dense
     }
+    #attr(borrowed_self)
     pub fn self_align(self: Self) -> i32 {
         ret self.self_align
     }
+    #attr(borrowed_self)
     pub fn order(self: Self) -> i32 {
         ret self.order
     }
+    #attr(borrowed_self)
     pub fn wrap(self: Self) -> bool {
         ret self.wrap
     }
+    #attr(borrowed_self)
     pub fn wrap_reverse(self: Self) -> bool {
         ret self.wrap_reverse
     }
+    #attr(borrowed_self)
     pub fn row_gap(self: Self) -> f32 {
         ret self.row_gap
     }
+    #attr(borrowed_self)
     pub fn column_gap(self: Self) -> f32 {
         ret self.column_gap
     }
+    #attr(borrowed_self)
     pub fn direction_reverse(self: Self) -> bool {
         ret self.direction_reverse
     }
+    #attr(borrowed_self)
     pub fn align_content(self: Self) -> usize {
         ret self.align_content
     }
@@ -626,6 +651,62 @@ pub struct LayoutStyle {
 }
 
 impl for LayoutStyle {
+    pub fn with_transition_sample(self: Self, sample: LayoutStyle, properties: str) -> Self {
+        let mut result = self
+        result.margin = transition_insets(result.margin, sample.margin, properties, "margin")
+        if transition_selects(properties, "width", "") {
+            result.width = sample.width
+        }
+        if transition_selects(properties, "height", "") {
+            result.height = sample.height
+        }
+        if transition_selects(properties, "min-width", "") {
+            result.min_width = sample.min_width
+        }
+        if transition_selects(properties, "min-height", "") {
+            result.min_height = sample.min_height
+        }
+        if transition_selects(properties, "max-width", "") {
+            result.max_width = sample.max_width
+        }
+        if transition_selects(properties, "max-height", "") {
+            result.max_height = sample.max_height
+        }
+        if transition_selects(properties, "flex-basis", "flex") {
+            result.flex.basis = sample.flex.basis
+        }
+        if transition_selects(properties, "flex-grow", "flex") {
+            result.flex.grow = sample.flex.grow
+        }
+        if transition_selects(properties, "flex-shrink", "flex") {
+            result.flex.shrink = sample.flex.shrink
+        }
+        if transition_selects(properties, "row-gap", "gap") {
+            result.flex.row_gap = sample.flex.row_gap
+        }
+        if transition_selects(properties, "column-gap", "gap") {
+            result.flex.column_gap = sample.flex.column_gap
+        }
+        if transition_selects(properties, "width", "") {
+            result.relative.width = sample.relative.width
+        }
+        if transition_selects(properties, "height", "") {
+            result.relative.height = sample.relative.height
+        }
+        if transition_selects(properties, "top", "") && result.position.top_set() && sample.position.top_set() {
+            result.position = result.position.with_top(sample.position.top())
+        }
+        if transition_selects(properties, "right", "") && result.position.right_set() && sample.position.right_set() {
+            result.position = result.position.with_right(sample.position.right())
+        }
+        if transition_selects(properties, "bottom", "") && result.position.bottom_set() && sample.position.bottom_set() {
+            result.position = result.position.with_bottom(sample.position.bottom())
+        }
+        if transition_selects(properties, "left", "") && result.position.left_set() && sample.position.left_set() {
+            result.position = result.position.with_left(sample.position.left())
+        }
+        ret result
+    }
     pub fn default() -> LayoutStyle {
         ret LayoutStyle {
             Insets::all(0.0_f32), - 1.0_f32, - 1.0_f32,
@@ -852,45 +933,59 @@ impl for LayoutStyle {
     pub fn with_z_index(self: Self, value: i32) -> LayoutStyle {
         ret self.with_position(self.position.with_z_index(value))
     }
+    #attr(borrowed_self)
     pub fn margin(self: Self) -> Insets {
         ret self.margin
     }
+    #attr(borrowed_self)
     pub fn width(self: Self) -> f32 {
         ret self.width
     }
+    #attr(borrowed_self)
     pub fn height(self: Self) -> f32 {
         ret self.height
     }
+    #attr(borrowed_self)
     pub fn min_width(self: Self) -> f32 {
         ret self.min_width
     }
+    #attr(borrowed_self)
     pub fn min_height(self: Self) -> f32 {
         ret self.min_height
     }
+    #attr(borrowed_self)
     pub fn max_width(self: Self) -> f32 {
         ret self.max_width
     }
+    #attr(borrowed_self)
     pub fn max_height(self: Self) -> f32 {
         ret self.max_height
     }
+    #attr(borrowed_self)
     pub fn flex(self: Self) -> FlexStyle {
         ret self.flex
     }
+    #attr(borrowed_self)
     pub fn overflow_hidden(self: Self) -> bool {
         ret self.overflow_hidden
     }
+    #attr(borrowed_self)
     pub fn position(self: Self) -> PositionStyle {
         ret self.position
     }
+    #attr(borrowed_self)
     pub fn relative(self: Self) -> RelativeSize {
         ret self.relative
     }
+    #attr(borrowed_self)
     pub fn scroll(self: Self) -> ScrollOffset {
         ret self.scroll
     }
+    #attr(borrowed_self)
     pub fn content_box(self: Self) -> bool {
         ret self.content_box
     }
+    #attr(borrowed_self)
     pub fn grid_placement(self: Self) -> GridPlacement {
         ret self.grid_placement
     }
@@ -1029,9 +1124,56 @@ pub struct LinearGradient {
     enabled: bool
 }
 
-/// CSS transition declarations retained with a computed style. The raw lists
-/// are parsed only when a property actually changes, keeping ordinary style
-/// resolution allocation-free.
+fn transition_selects(properties: str, name: str, shorthand: str) -> bool {
+    let mut token = ""
+    let mut index = 0_usize
+    while index <= properties.char_len() {
+        let character = if index == properties.char_len() {
+            ","
+        } else {
+            properties.slice(index, 1_usize)
+        }
+        if character == "," {
+            if token == "all" || token == name ||(shorthand != "" && token == shorthand) {
+                ret true
+            }
+            token = ""
+        } elif character != " " && character != "\t" && character != "\n" && character != "\r" {
+            token = token + character
+        }
+        index += 1_usize
+    }
+    ret false
+}
+fn transition_insets(target: Insets, sample: Insets, properties: str, name: str) -> Insets {
+    ret Insets::only(
+        if transition_selects(properties, name + "-top", name) {
+            sample.top()
+        } else {
+            target.top()
+        }
+        ,
+        if transition_selects(properties, name + "-right", name) {
+            sample.right()
+        } else {
+            target.right()
+        }
+        ,
+        if transition_selects(properties, name + "-bottom", name) {
+            sample.bottom()
+        } else {
+            target.bottom()
+        }
+        ,
+        if transition_selects(properties, name + "-left", name) {
+            sample.left()
+        } else {
+            target.left()
+        }
+        ,)
+}
+
+/// CSS transition property, timing, delay and easing declarations.
 pub struct TransitionStyle {
     properties: str
     durations: str
@@ -1093,7 +1235,7 @@ struct InteractionStyle {
 }
 
 impl for InteractionStyle {
-    fn default() -> Self {
+    pub fn default() -> Self {
         ret Self {
             Color::rgb(37_u8, 99_u8, 235_u8), false, 0_u32, false, TransitionStyle::none()
         }
@@ -1161,6 +1303,73 @@ pub struct Style {
 }
 
 impl for Style {
+    /// Keep target state except for the animatable properties explicitly selected by CSS.
+    pub fn with_transition_sample(self: Self, sample: Style, properties: str) -> Self {
+        let mut result = self
+        if transition_selects(properties, "background-color", "background") {
+            result.background = sample.background
+        }
+        if transition_selects(properties, "color", "") {
+            result.foreground = sample.foreground
+        }
+        if transition_selects(properties, "border-color", "border") {
+            result.border_color = sample.border_color
+        }
+        if transition_selects(properties, "border-width", "border") {
+            result.border_width = sample.border_width
+        }
+        if transition_selects(properties, "border-radius", "") {
+            result.radius = sample.radius
+        }
+        if transition_selects(properties, "gap", "") {
+            result.gap = sample.gap
+        }
+        if transition_selects(properties, "font-size", "font") {
+            result.font_size = sample.font_size
+        }
+        if transition_selects(properties, "font-weight", "font") {
+            result.font_weight = sample.font_weight
+        }
+        if transition_selects(properties, "opacity", "") {
+            result.opacity = sample.opacity
+        }
+        result.padding = transition_insets(result.padding, sample.padding, properties, "padding")
+        result.layout = result.layout.with_transition_sample(sample.layout, properties)
+        result.outline = OutlineStyle::new(
+            if transition_selects(properties, "outline-width", "outline") {
+                sample.outline.width()
+            } else {
+                result.outline.width()
+            }
+            ,
+            if transition_selects(properties, "outline-color", "outline") {
+                sample.outline.color()
+            } else {
+                result.outline.color()
+            }
+            ,
+            if transition_selects(properties, "outline-offset", "outline") {
+                sample.outline.offset()
+            } else {
+                result.outline.offset()
+            }
+            ,)
+        if transition_selects(properties, "box-shadow", "") {
+            result.shadow = sample.shadow
+        }
+        if transition_selects(properties, "accent-color", "") {
+            result.interaction.accent = sample.interaction.accent
+        }
+        if transition_selects(properties, "text-decoration-color", "text-decoration") {
+            result.decoration = TextDecorationStyle::new(result.decoration.underline(), result.decoration.overline(),
+                result.decoration.line_through(), sample.decoration.color(), result.decoration.color_set(), result.decoration.thickness(),)
+        }
+        if transition_selects(properties, "text-decoration-thickness", "text-decoration") {
+            result.decoration = TextDecorationStyle::new(result.decoration.underline(), result.decoration.overline(),
+                result.decoration.line_through(), result.decoration.color(), result.decoration.color_set(), sample.decoration.thickness(),)
+        }
+        ret result
+    }
     pub fn default() -> Style {
         ret Style {
             transparent(), black(), transparent(), 0.0_f32, 0.0_f32,
@@ -1270,10 +1479,19 @@ impl for Style {
         }
     }
     pub fn with_font_weight(self: Self, value: u32) -> Style {
+        let weight = if value < 1_u32 {
+            1_u32
+        } else {
+            if value > 1000_u32 {
+                1000_u32
+            } else {
+                value
+            }
+        }
         ret Style {
             self.background, self.foreground, self.border_color,
             self.border_width, self.radius, self.padding, self.gap, self.font_family, self.font_size,
-            value, self.text_align, self.opacity, self.layout,
+            weight, self.text_align, self.opacity, self.layout,
             self.foreground_set, self.font_family_set, self.font_size_set, true, self.text_align_set,
             self.visible, self.pointer_events, self.visibility_set, self.pointer_events_set, self.outline,
             self.shadow, self.decoration, self.gradient, self.interaction
@@ -1625,73 +1843,109 @@ impl for Style {
             }
         }
     }
+    /// Equality of every property inherited by descendants, including input
+    /// visibility, pointer behavior, accent and cursor capabilities.
+    #attr(borrowed_self)
+    pub fn inheritance_equivalent(self: Self, other: Style) -> bool {
+        ret self.foreground.packed() == other.foreground.packed() &&
+        self.font_family == other.font_family && self.font_size == other.font_size &&
+        self.font_weight == other.font_weight && self.text_align == other.text_align &&
+        self.visible == other.visible && self.pointer_events == other.pointer_events &&
+        self.interaction.accent.packed() == other.interaction.accent.packed() &&
+        self.interaction.accent_set == other.interaction.accent_set &&
+        self.interaction.cursor == other.interaction.cursor &&
+        self.interaction.cursor_set == other.interaction.cursor_set
+    }
+    #attr(borrowed_self)
     pub fn background(self: Self) -> Color {
         ret self.background
     }
+    #attr(borrowed_self)
     pub fn foreground(self: Self) -> Color {
         ret self.foreground
     }
+    #attr(borrowed_self)
     pub fn border_color(self: Self) -> Color {
         ret self.border_color
     }
+    #attr(borrowed_self)
     pub fn border_width(self: Self) -> f32 {
         ret self.border_width
     }
+    #attr(borrowed_self)
     pub fn radius(self: Self) -> f32 {
         ret self.radius
     }
+    #attr(borrowed_self)
     pub fn padding(self: Self) -> Insets {
         ret self.padding
     }
+    #attr(borrowed_self)
     pub fn gap(self: Self) -> f32 {
         ret self.gap
     }
+    #attr(borrowed_self)
     pub fn font_family(self: Self) -> str {
         ret self.font_family
     }
+    #attr(borrowed_self)
     pub fn font_size(self: Self) -> f32 {
         ret self.font_size
     }
+    #attr(borrowed_self)
     pub fn font_weight(self: Self) -> u32 {
         ret self.font_weight
     }
+    #attr(borrowed_self)
     pub fn text_align(self: Self) -> usize {
         ret self.text_align
     }
+    #attr(borrowed_self)
     pub fn opacity(self: Self) -> f32 {
         ret self.opacity
     }
+    #attr(borrowed_self)
     pub fn visible(self: Self) -> bool {
         ret self.visible
     }
+    #attr(borrowed_self)
     pub fn pointer_events(self: Self) -> bool {
         ret self.pointer_events
     }
+    #attr(borrowed_self)
     pub fn outline(self: Self) -> OutlineStyle {
         ret self.outline
     }
+    #attr(borrowed_self)
     pub fn shadow(self: Self) -> ShadowStyle {
         ret self.shadow
     }
+    #attr(borrowed_self)
     pub fn decoration(self: Self) -> TextDecorationStyle {
         ret self.decoration
     }
+    #attr(borrowed_self)
     pub fn linear_gradient(self: Self) -> LinearGradient {
         ret self.gradient
     }
+    #attr(borrowed_self)
     pub fn accent_color(self: Self) -> Color {
         ret self.interaction.accent
     }
+    #attr(borrowed_self)
     pub fn pointer_cursor(self: Self) -> u32 {
         ret self.interaction.cursor
     }
+    #attr(borrowed_self)
     pub fn transition(self: Self) -> TransitionStyle {
         ret self.interaction.transition
     }
+    #attr(borrowed_self)
     pub fn layout(self: Self) -> LayoutStyle {
         ret self.layout
     }
     /// Returns whether changing to `other` preserves widget geometry.
+    #attr(borrowed_self)
     pub fn layout_equivalent(self: Self, other: Style) -> bool {
         ret self.border_width == other.border_width &&
         insets_equal(self.padding, other.padding) &&
@@ -1702,6 +1956,7 @@ impl for Style {
         layout_style_equal(self.layout, other.layout)
     }
     /// Returns whether every rendered and inherited style property is equal.
+    #attr(borrowed_self)
     pub fn equivalent(self: Self, other: Style) -> bool {
         ret self.layout_equivalent(other) &&
         self.background.packed() == other.background.packed() &&
@@ -1732,6 +1987,52 @@ impl for Style {
 fn transition_style_equal(lhs: TransitionStyle, rhs: TransitionStyle) -> bool {
     ret lhs.properties() == rhs.properties() && lhs.durations() == rhs.durations() &&
     lhs.delays() == rhs.delays() && lhs.easings() == rhs.easings()
+}
+
+#attr(test)
+fn inherited_style_comparison_matches_resolved_child_styles() -> bool {
+    let base = Style::default()
+    for left in 0..16 {
+        let first = if left == 0 {
+            base
+        } elif left == 1 {
+            base.with_foreground(Color::rgb(1, 2, 3))
+        } elif left == 2 {
+            base.with_font_family("Monospace")
+        } elif left == 3 {
+            base.with_font_size(20_f32)
+        } elif left == 4 {
+            base.with_font_weight(700_u32)
+        } elif left == 5 {
+            base.with_text_align(text_center())
+        } elif left == 6 {
+            base.with_visibility(false)
+        } elif left == 7 {
+            base.with_pointer_events(false)
+        } elif left == 8 {
+            base.with_accent_color(Color::rgb(1, 2, 3))
+        } elif left == 9 {
+            base.with_pointer_cursor(2_u32)
+        } elif left == 10 {
+            base.with_background(Color::rgb(1, 2, 3))
+        } elif left == 11 {
+            base.with_opacity(0.5_f32)
+        } elif left == 12 {
+            base.with_padding(Insets::all(10_f32))
+        } elif left == 13 {
+            base.with_gap(20_f32)
+        } elif left == 14 {
+            base.with_accent_color(base.accent_color())
+        } else {
+            base.with_pointer_cursor(base.pointer_cursor())
+        }
+        let normalized = Style::default().inherit_text(first)
+        if first.inheritance_equivalent(base) != normalized.equivalent(Style::default().inherit_text(base)) ||
+        !first.inheritance_equivalent(first) {
+            ret false
+        }
+    }
+    ret true
 }
 
 fn insets_equal(lhs: Insets, rhs: Insets) -> bool {

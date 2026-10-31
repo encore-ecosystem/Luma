@@ -1,0 +1,156 @@
+//! Real layout hit-testing, preview-only drags, tab selection and anchored resizing.
+import luma::{DockHost, DockInteraction, DockNodeId, DockPanel, DockPlacement, DockRelease, DockWorkspace, NodeId, PanelId, ReactiveUi, Rect, Size, StyleSheet, UiBindings, UiContext, Widget, WindowId, layout_widget}
+import std::os::read_file
+
+fn layout(host: mut DockHost&, root: NodeId, sheet: StyleSheet) -> ReactiveUi {
+    let _sized = host.resize_geometry(WindowId::new(1), Rect::new(0, 0, 900, 600))
+    let snapshot = host.bindings().tree().snapshot(root).unwrap_or(Widget::panel("root"))
+    ret ReactiveUi::new(layout_widget(sheet.apply(snapshot, "", "", ""), Rect::new(0, 0, 900, 600)))
+}
+fn main() -> u32 {
+    let main = WindowId::new(1)
+    let a = PanelId::new("a") let b = PanelId::new("b")
+    let mut bindings = UiBindings::new(UiContext::new())
+    let mut workspace = DockWorkspace::new(main)
+    let mut host = DockHost::new(workspace, bindings)
+    if !host.register(DockPanel::new("a", "A", Size::new(200, 160)), Widget::input("input-a", "A")) ||
+    !host.register(DockPanel::new("b", "B", Size::new(280, 160)), Widget::input("input-b", "B")) {
+        ret 1
+    }
+    let root = bindings.mount(Widget::panel("dock-root").with_classes("luma-dock-root"))
+    if !host.attach_window(main, root) || !workspace.show(a, main) || !workspace.show(b, main) ||
+    !workspace.activate(a) || !host.commit() {
+        ret 2
+    }
+    let sheet = StyleSheet::parse(read_file("assets/default.css"))
+    let mut ui = layout(host, root, sheet)
+    let tree = bindings.tree()
+    let editor_a = tree.find(root, "input-a").unwrap_or(root)
+    let editor_b = tree.find(root, "input-b").unwrap_or(root)
+    let tab = match ui.find_layout(host.tab_element(b)) {
+        Some(value) => value.bounds() None => {
+            ret 3
+        }
+    }
+    let x = tab.x() + tab.width() * 0.5 let y = tab.y() + tab.height() * 0.5
+    let mut gesture = DockInteraction::new()
+    if !gesture.press(host, main, ui, x, y) {
+        ret 4
+    }
+    match gesture.release(host, main, ui, x, y) {
+        DockRelease::Committed => {
+        }
+        _ => {
+            ret 5
+        }
+    }
+    let group = workspace.location(b).unwrap_or(DockNodeId::empty())
+    let active = match workspace.node(group) {
+        Some(value) => value.active().unwrap_or(a) None => {
+            ret 6
+        }
+    }
+    if !active.same(b) || !host.commit() {
+        ret 7
+    }
+    ui = layout(host, root, sheet)
+    let revision = workspace.revision()
+    if !gesture.press(host, main, ui, x, y) || !gesture.motion(host, main, ui, x + 3, y + 4) ||
+    gesture.dragging() || workspace.revision() != revision {
+        ret 8
+    }
+    let _moved = gesture.motion(host, main, ui, 899, 300)
+    let preview = match gesture.preview() {
+        Some(value) => value None => {
+            ret 9
+        }
+    }
+    if !gesture.dragging() || preview.placement() != DockPlacement::Right ||
+    preview.bounds().width() < 280 || workspace.revision() != revision {
+        ret 10
+    }
+    gesture.cancel(workspace)
+    if gesture.captured() || workspace.revision() != revision {
+        ret 11
+    }
+    if !gesture.press(host, main, ui, x, y) {
+        ret 12
+    }
+    match gesture.release(host, main, ui, 899, 300) {
+        DockRelease::Committed => {
+        }
+        _ => {
+            ret 13
+        }
+    }
+    if workspace.location(a).unwrap_or(group).same(workspace.location(b).unwrap_or(group)) || !host.commit() {
+        ret 14
+    }
+    ui = layout(host, root, sheet)
+    if !tree.find(root, "input-a").unwrap_or(root).same(editor_a) ||
+    !tree.find(root, "input-b").unwrap_or(root).same(editor_b) {
+        ret 15
+    }
+    let root_node = match workspace.window(main) {
+        Some(value) => value.root() None => {
+            ret 16
+        }
+    }
+    let split = match workspace.node(root_node) {
+        Some(value) => value None => {
+            ret 17
+        }
+    }
+    let divider = match ui.find_layout("luma-dock-splitter-" + root_node.key()) {
+        Some(value) => value.bounds() None => {
+            ret 18
+        }
+    }
+    let sx = divider.x() + divider.width() * 0.5 let sy = divider.y() + divider.height() * 0.5
+    if !gesture.press(host, main, ui, sx, sy) || !gesture.resizing() {
+        ret 19
+    }
+    let original = split.fraction()
+    let _resized = gesture.motion(host, main, ui, sx + 20, sy)
+    let changed = match workspace.node(root_node) {
+        Some(value) => value.fraction() None => {
+            ret 20
+        }
+    }
+    if changed <= original {
+        ret 21
+    }
+    gesture.cancel(workspace)
+    let restored = match workspace.node(root_node) {
+        Some(value) => value.fraction() None => {
+            ret 22
+        }
+    }
+    if restored != original || gesture.captured() {
+        ret 23
+    }
+    let tab = match ui.find_layout(host.tab_element(b)) {
+        Some(value) => value.bounds() None => {
+            ret 24
+        }
+    }
+    let before_detach = workspace.revision()
+    if !gesture.press(host, main, ui, tab.x() + 10, tab.y() + 10) {
+        ret 25
+    }
+    match gesture.release(host, main, ui, 1000, 300) {
+        DockRelease::Detach(panel) => {
+            if !panel.same(b) {
+                ret 26
+            }
+        }
+        _ => {
+            ret 27
+        }
+    }
+    if workspace.revision() != before_detach || !workspace.owner(workspace.location(b).unwrap_or(group)).unwrap_or(main).same(main) {
+        ret 28
+    }
+    host.dispose()
+    ret 0
+}

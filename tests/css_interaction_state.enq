@@ -1,0 +1,87 @@
+import core::option::Option
+import luma::{StyleSheet, Widget}
+
+fn main() -> u32 {
+    let mut shell = Widget::panel("shell").with_classes("shell")
+    let mut group = Widget::panel("group").with_classes("group")
+    group.push(Widget::input("field", "value"))
+    shell.push(group)
+    let mut row = Widget::panel("row")
+    row.push(Widget::button("trigger", "Trigger").with_classes("trigger"))
+    row.push(Widget::label("Adjacent").with_classes("target"))
+    row.push(Widget::label("Later").with_classes("later"))
+    shell.push(row)
+    let sheet = StyleSheet::parse(
+        ".shell:hover { opacity: 0.4; } " +
+        ".group:focus-within { border-width: 3px; outline-width: 2px; } " +
+        ".shell:focus-within { border-radius: 6px; } " +
+        ".shell:has(input:focus) { padding: 8px; } " +
+        ".shell:has(button.trigger:hover) { width: 83px; } " +
+        ".shell:has(button.trigger:active) { height: 27px; } " +
+        ".shell:focus-within input { padding: 5px; } " +
+        ".trigger:hover + .target { opacity: 0.3; } " +
+        ".trigger:active ~ .later { border-width: 4px; }",)
+    let styled = sheet.apply(shell, "trigger", "trigger", "field")
+    if styled.style().opacity() != 0.4_f32 {
+        ret 11_u32
+    }
+    if styled.style().radius() != 6.0_f32 {
+        ret 12_u32
+    }
+    if styled.style().padding().top() != 8.0_f32 {
+        ret 13_u32
+    }
+    if styled.style().layout().width() != 83.0_f32 ||
+    styled.style().layout().height() != 27.0_f32 {
+        ret 14_u32
+    }
+    match styled.children().get(0_usize) {
+        Option[Widget]::Some(styled_group) => {
+            if styled_group.style().border_width() != 3.0_f32 ||
+            styled_group.style().outline().width() != 2.0_f32 {
+                ret 2_u32
+            }
+            match styled_group.children().get(0_usize) {
+                Option[Widget]::Some(field) => {
+                    if !field.focused() || field.style().padding().top() != 5.0_f32 {
+                        ret 3_u32
+                    }
+                }
+                Option[Widget]::None => {
+                    ret 4_u32
+                }
+            }
+        }
+        Option[Widget]::None => {
+            ret 5_u32
+        }
+    }
+    match styled.children().get(1_usize) {
+        Option[Widget]::Some(styled_row) => {
+            match styled_row.children().get(1_usize) {
+                Option[Widget]::Some(adjacent) => {
+                    if adjacent.style().opacity() != 0.3_f32 {
+                        ret 6_u32
+                    }
+                }
+                Option[Widget]::None => {
+                    ret 7_u32
+                }
+            }
+            match styled_row.children().get(2_usize) {
+                Option[Widget]::Some(later) => {
+                    if later.style().border_width() != 4.0_f32 {
+                        ret 8_u32
+                    }
+                }
+                Option[Widget]::None => {
+                    ret 9_u32
+                }
+            }
+        }
+        Option[Widget]::None => {
+            ret 10_u32
+        }
+    }
+    ret 0_u32
+}

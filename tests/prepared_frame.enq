@@ -1,0 +1,49 @@
+//! GPU backpressure retains prepared commands without losing subsequent updates.
+import core::vec::Vec
+import luma::{GridPlacement, ReactiveUi, Rect, Widget, grid_needs_content_sizes, layout_widget}
+
+fn main() -> u32 {
+    let countdown = Widget::countdown("timer", 100, 1)
+    let mut timer = ReactiveUi::new(layout_widget(countdown, Rect::new(0.0, 0.0, 80.0, 20.0)))
+    if timer.style_targets_unchanged(countdown) {
+        ret 8
+    }
+    let mut placements = Vec[GridPlacement]::new()
+    placements.push(GridPlacement::auto())
+    if grid_needs_content_sizes("1fr|1fr|1fr|1fr|1fr|1fr|1fr|1fr", "", "", "112px", placements) ||
+    !grid_needs_content_sizes("auto|1fr", "", "", "", placements) ||
+    !grid_needs_content_sizes("minmax(min-content, 1fr)", "", "", "", placements) ||
+    !grid_needs_content_sizes("1fr", "", "", "fit-content(100px)", placements) {
+        ret 6
+    }
+    placements.push(GridPlacement::auto().with_column_span(2))
+    if !grid_needs_content_sizes("1fr|1fr", "", "", "112px", placements) {
+        ret 7
+    }
+    let mut ui = ReactiveUi::new(layout_widget(Widget::button("button", "Before"),
+            Rect::new(0.0, 0.0, 100.0, 40.0),))
+    ui.invalidate_paint("button")
+    if !ui.is_dirty() || !ui.needs_preparation() {
+        ret 1
+    }
+    ui.commit_prepared()
+    if !ui.is_dirty() || ui.needs_preparation() || ui.needs_full_repaint() {
+        ret 2
+    }
+    let _changed = ui.patch_widget("button", Widget::button("button", "After"))
+    if !ui.is_dirty() || !ui.needs_preparation() {
+        ret 3
+    }
+    ui.commit_prepared()
+    ui.commit_rendered()
+    if ui.is_dirty() {
+        ret 4
+    }
+    let leaf = layout_widget(Widget::button("leaf", "Text"), Rect::new(3.0, 4.0, 80.0, 32.0))
+    ret if leaf.children().len() == 0 && leaf.bounds().x() == 3.0 &&
+    leaf.paint_bounds().width() >= leaf.bounds().width() {
+        0
+    } else {
+        5
+    }
+}

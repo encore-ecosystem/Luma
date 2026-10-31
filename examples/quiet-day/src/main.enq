@@ -1,0 +1,153 @@
+//! Standalone event-driven Luma app. Optional inspection files are local development aids.
+import core::result::Result
+import core::vec::Vec
+
+import std::io::{eprintln, println}
+import std::os::{env, mkdir_all, write_file_atomic}
+import std::time::perf_counter_ms
+
+import json::{Json, field, stringify}
+import luma::{Event, FontManager, Rect, StyleSheet, UiLayer, Window, event_close, event_key_down, event_pointer_down, event_pointer_move, event_pointer_up, event_resize, event_scroll, event_text_input, inspect_ui, key_enter, key_escape, key_tab}
+
+import mod::layout::layout_view
+import mod::model::Day
+fn snapshot(window: Window, layer: mut UiLayer, day: Day) ->() {
+    let layout = layer.layout() let inspected = inspect_ui(layout, 0_usize, 200_usize, "") let mut items = Vec[Json]::new()
+    for n in inspected.nodes {
+        let w = layout.find_widget(n.id)
+        items.push(Json::Object(vec![field("id", Json::String(n.id)), field("text", Json::String(n.text)), field("role", Json::String(n.role)), field("disabled", Json::Bool(n.disabled)), field("checked", Json::Bool(match w {
+                                Some(w) => w.checked() None => false
+                            }
+                        )), field("bounds", Json::Array(vec![Json::Number(n.bounds.x().fmt()), Json::Number(n.bounds.y().fmt()), Json::Number(n.bounds.width().fmt()), Json::Number(n.bounds.height().fmt())]))]))
+    }
+    let result = Json::Object(vec![field("width", Json::Number(window.width().fmt())), field("height", Json::Number(window.height().fmt())), field("density", Json::Number(window.pixel_density().fmt())), field("focused", Json::String(layer.focused())), field("hovered", Json::String(layer.hovered())), field("pressed", Json::String(layer.pressed())), field("tasks", Json::Number(day.tasks.len().fmt())), field("done", Json::Number(day.today_count(true).fmt())), field("timerRunning", Json::Bool(day.running)), field("items", Json::Array(items))])
+    let _saved = write_file_atomic("target/proof/inspection.json", stringify(result))
+}
+// Bring a keyboard-focused control into the main scroll viewport.
+fn reveal_focus(layer: mut UiLayer) ->() {
+    let layout = layer.layout()
+    match layout.find_bounds("main") {
+        Some(viewport) => {
+            match layout.find_bounds(layer.focused()) {
+                Some(bounds) => {
+                    if bounds.x() < viewport.x() {
+                        ret()
+                    }
+                    let delta = if bounds.bottom() > viewport.bottom() - 16_f32 {
+                        bounds.bottom() - viewport.bottom() + 16_f32
+                    } elif bounds.y() < viewport.y() + 12_f32 {
+                        bounds.y() - viewport.y() - 12_f32
+                    } else {
+                        0_f32
+                    }
+                    if delta != 0_f32 {
+                        let _scrolled = layer.input(Event {
+                                event_scroll(), viewport.x() + viewport.width() / 2_f32, viewport.y() + viewport.height() / 2_f32, 0_f32, 0_f32, 0_u32, 0_u32, 0_u32, 0_f32, - delta / 36_f32, "", 0_u64
+                            }
+                        )
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        None => {
+        }
+    }
+}
+fn launch() -> Result[u32, str] {
+    let sheet = StyleSheet::from_file("app.css")?
+    let window = Window::create("Тихо — Luma", 1360_u32, 1000_u32).with_stylesheet(sheet)
+    if !window.available() {
+        ret Result::Err("Не удалось открыть окно Luma")
+    }
+    window.set_minimum_size(320_u32, 420_u32)
+    let mut fonts = FontManager::system_default() fonts.register_all(window) fonts = fonts.activate_default(window, 14_f32, 400_u32)
+    let proof = env("LUMA_DEMO_PROOF").unwrap_or("") == "1"
+    let _directory = mkdir_all("target/proof")
+    let mut day = Day::new()
+    let bounds = Rect::new(0_f32, 0_f32, window.width() as f32, window.height() as f32)
+    let mut layer = UiLayer::new(layout_view(window, fonts.active_family(), day, window.width() as f32, window.stylesheet()), window.stylesheet(), bounds)
+    let mut width = window.width() let mut height = window.height() let mut dirty = true let mut shot = 0_u32 let mut capture_pending = false
+    println("Quiet Day · standalone Luma · data stays in memory")
+    while window.is_open() {
+        if dirty {
+            if window.width() != width || window.height() != height {
+                width = window.width() height = window.height()
+                layer.set_root(layout_view(window, fonts.active_family(), day, width as f32, window.stylesheet()), Rect::new(0_f32, 0_f32, width as f32, height as f32))
+            }
+            let layout = layer.layout()
+            if !window.draw_layout(layout) {
+                dirty = true
+            } else {
+                dirty = false
+            }
+            if proof {
+                snapshot(window, layer, day)
+            }
+        }
+        let event = window.wait(if dirty {
+                16_u32
+            } elif day.running {
+                200_u32
+            } else {
+                250_u32
+            }
+        )
+        if event.kind() == event_close() {
+            break
+        }
+        let now = perf_counter_ms() let mut changed = day.tick(now)
+        if event.kind() == event_resize() {
+            dirty = true
+        }
+        if event.kind() == event_key_down() && event.key() == key_tab() && layer.focused() == "" {
+            layer.focus_first() reveal_focus(layer) dirty = true continue
+        }
+        let focused = layer.focused()
+        let composing = day.composing
+        let response = layer.input(event)
+        changed = day.input(response, now) || changed
+        if event.kind() == event_key_down() {
+            if event.key() == key_enter() && focused == "draft" {
+                let _added = day.add() changed = true
+            } elif event.key() == key_escape() && day.composing {
+                day.composing = false day.error = false changed = true
+            }
+        }
+        if changed {
+            layer.set_root(layout_view(window, fonts.active_family(), day, window.width() as f32, window.stylesheet()), Rect::new(0_f32, 0_f32, window.width() as f32, window.height() as f32))
+            if !composing && day.composing {
+                layer.focus("draft")
+            } elif composing && !day.composing {
+                layer.focus("add-task")
+            }
+            dirty = true
+        }
+        if event.kind() == event_key_down() || composing != day.composing {
+            reveal_focus(layer)
+        }
+        if event.kind() == event_key_down() || event.kind() == event_pointer_down() || event.kind() == event_pointer_up() || event.kind() == event_pointer_move() || event.kind() == event_scroll() || event.kind() == event_text_input() {
+            dirty = true
+        }
+        if event.kind() == event_key_down() && event.key() == 1073741893_u32 {
+            window.request_capture() capture_pending = true dirty = true
+        }
+        if capture_pending {
+            let captured = window.capture_png(Rect::new(0_f32, 0_f32, 0_f32, 0_f32), 1800_u32)
+            if captured.png != "" {
+                shot += 1 let path = "target/proof/shot-" + shot.fmt() + ".png" write_file_atomic(path, captured.png) println(path) capture_pending = false
+            } else {
+                dirty = true
+            }
+        }
+    }
+    window.destroy() ret Result::Ok(0_u32)
+}
+fn main() -> u32 {
+    ret match launch() {
+        Ok(code) => code Err(error) => {
+            eprintln(error) 1_u32
+        }
+    }
+}

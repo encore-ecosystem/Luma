@@ -1,0 +1,160 @@
+//! A local structural cascade retains exact context and interaction indices.
+import core::vec::Vec
+import luma::{RetainedCascade, StyleSheet, Widget}
+
+fn same(left: Widget, right: Widget) -> bool {
+    if !left.style().equivalent(right.style()) || left.focused() != right.focused() ||
+    left.children().len() != right.children().len() {
+        ret false
+    }
+    let mut ordinal = 0_usize
+    for child in left.children() {
+        match right.children().get(ordinal) {
+            Some(other) => {
+                if !same(child, other) {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+        ordinal += 1
+    }
+    ret true
+}
+
+fn branch(step: usize) -> Widget {
+    let mut result = Widget::panel("overlay").with_classes(if step % 2 == 0 {
+            "warm"
+        } else {
+            "cool"
+        }
+    )
+    for index in 0..step % 6 {
+        result.push(if index % 2 == 0 {
+                Widget::button(f"item-{index}", f"Item {step}")
+            } else {
+                Widget::label(f"Label {step}")
+            }
+        )
+    }
+    ret result
+}
+
+fn main() -> u32 {
+    let sheet = StyleSheet::parse(":root { --ink: #112233; font-size: 17px; } .warm { --ink: #cc0000; } .cool { --ink: #00cc00; } #overlay button { color: var(--ink); } button:nth-of-type(2) { background: #445566; } #overlay:hover button { color: #ffffff; } button:hover { background: #ff0000; }")
+    let mut root = Widget::panel("root")
+    root.push(branch(0))
+    for index in 0..32 {
+        root.push(Widget::label("Untouched").with_id(f"outside-{index}"))
+    }
+    let mut state = RetainedCascade::new()
+    let _initial = sheet.apply_retained(root, "", "", "", true, state)
+    let mut path = Vec[usize]::new()
+    path.push(0)
+    for step in 1..14 {
+        // A prior interaction must not poison the next branch environment.
+        let _idle = sheet.stage_interaction("", "", "", true, state)
+        let authored = branch(step)
+        let actual = match sheet.apply_retained_subtree(path, authored, state) {
+            Some(value) => value
+            None => {
+                ret 1
+            }
+        }
+        if state.interaction_evaluations() != 1 + step % 6 {
+            ret 2
+        }
+        let mut children = Vec[Widget]::new()
+        children.push(authored)
+        for index in 1..root.children().len() {
+            children.push(root.children().get(index).unwrap_or(Widget::spacer(0)))
+        }
+        root = root.with_children(children)
+        let fresh = sheet.apply(root, "", "", "")
+        if !same(actual, fresh.children().get(0).unwrap_or(Widget::spacer(0))) {
+            ret 3
+        }
+        if step % 6 > 0 {
+            // Preorder offsets, spans and named targets after insertion/removal.
+            if !sheet.stage_interaction("item-0", "", "", true, state) {
+                ret 4
+            }
+            if !same(sheet.apply_retained(root, "item-0", "", "", true, state),
+                sheet.apply(root, "item-0", "", ""),) {
+                ret 5
+            }
+        }
+        if !same(sheet.apply_retained(root, "", "", "", true, state), fresh) {
+            ret 6
+        }
+    }
+    // Repeated same-shape edits reuse the index while retaining exact ancestor
+    // snapshots, inherited variables and subsequent hover target resolution.
+    for step in 42..58 {
+        let _reset = sheet.stage_interaction("", "", "", true, state)
+        let authored = branch(41).with_classes(if step % 2 == 0 {
+                "warm"
+            } else {
+                "cool"
+            }
+        )
+        let actual = match sheet.apply_retained_subtree(path, authored, state) {
+            Some(value) => value
+            None => {
+                ret 10
+            }
+        }
+        let mut children = Vec[Widget]::new()
+        children.push(authored)
+        for index in 1..root.children().len() {
+            children.push(root.children().get(index).unwrap_or(Widget::spacer(0)))
+        }
+        root = root.with_children(children)
+        if !same(actual, sheet.apply(root, "", "", "").children().get(0).unwrap_or(Widget::spacer(0))) {
+            ret 11
+        }
+        if !sheet.stage_interaction("item-0", "", "", true, state) ||
+        !same(sheet.apply_retained(root, "item-0", "", "", true, state),
+            sheet.apply(root, "item-0", "", ""),) {
+            ret 12
+        }
+        let _reset = sheet.stage_interaction("", "", "", true, state)
+    }
+    let relational = sheet.merge(StyleSheet::parse("panel:has(button) { color: #abcdef; }"))
+    let _warm = relational.apply_retained(root, "", "", "", true, state)
+    if relational.apply_retained_subtree(path, branch(4), state).is_some() {
+        ret 7
+    }
+    let sibling = StyleSheet::parse("#overlay:empty + label { color: #ff0000; }")
+    let _warm = sibling.apply_retained(root, "", "", "", true, state)
+    if sibling.apply_retained_subtree(path, branch(4), state).is_some() {
+        ret 8
+    }
+    let outside = sheet.merge(StyleSheet::parse("#root:hover { background: #abcdef; }"))
+    let _hover = outside.apply_retained(root, "item-0", "", "", true, state)
+    // Removing the hovered descendant can restyle ancestors outside the scope.
+    if outside.apply_retained_subtree(path, branch(0), state).is_some() {
+        ret 9
+    }
+    let scoped = StyleSheet::parse("input:focus-visible { outline-width: 2px; }")
+    let mut focus_root = Widget::panel("focus-root").with_child(Widget::panel("overlay").with_child(Widget::input("field", "").with_focus(true)))
+    let _initial_focus = scoped.apply_retained(focus_root, "", "", "", true, state)
+    for step in 0..6 {
+        let authored = Widget::panel("overlay").with_child(Widget::input("field", "").with_focus(step % 2 == 0))
+        if scoped.apply_retained_subtree(path, authored, state).is_none() {
+            ret 13
+        }
+        focus_root = focus_root.with_children(vec![authored])
+        if !same(scoped.apply_retained(focus_root, "", "", "", true, state), scoped.apply(focus_root, "", "", "")) {
+            ret 14
+        }
+        if !scoped.stage_interaction("field", "", "", false, state) ||
+        !same(scoped.apply_retained(focus_root, "field", "", "", false, state), scoped.apply_with_focus_visibility(focus_root, "field", "", "", false)) {
+            ret 15
+        }
+        let _reset = scoped.apply_retained(focus_root, "", "", "", true, state)
+    }
+    ret 0
+}

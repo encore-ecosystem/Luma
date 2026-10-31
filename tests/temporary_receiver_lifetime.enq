@@ -1,0 +1,54 @@
+//! A returned collection used as a read-only receiver must be released.
+//! This isolates the runtime lifetime requirement without UI or native code.
+import std::io::println
+import std::vec::Vec
+
+extern fn encore_node_debug_live_count() -> usize
+
+struct Holder {
+    values: Vec[u32]
+}
+
+impl for Holder {
+    fn values(self: Self) -> Vec[u32] {
+        ret self.values
+    }
+}
+
+fn exercise() -> usize {
+    let mut total = 0_usize
+    for index in 0_usize..100_usize {
+        let holder = Holder {
+            Vec[u32]::new()
+        }
+        total += holder.values().len()
+    }
+    ret total
+}
+
+fn named_receiver() -> usize {
+    let mut total = 0_usize
+    for index in 0_usize..100_usize {
+        let holder = Holder {
+            Vec[u32]::new()
+        }
+        let values = holder.values()
+        total += values.len()
+    }
+    ret total
+}
+
+fn main() -> u32 {
+    let before = encore_node_debug_live_count()
+    let named_total = named_receiver()
+    let named_after = encore_node_debug_live_count()
+    let total = exercise()
+    let after = encore_node_debug_live_count()
+    println(f "named receiver live nodes: {before} -> {named_after}")
+    println(f "temporary receiver live nodes: {before} -> {after}")
+    ret if named_total == 0 && named_after == before && total == 0 && after == before {
+        0_u32
+    } else {
+        1_u32
+    }
+}

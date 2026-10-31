@@ -1,0 +1,47 @@
+//! Typed computations cache values and propagate invalidation to bindings.
+import luma::{Computed, Signal, UiContext, ValueBinding}
+
+struct Double {
+    count: Signal[u32] < H >
+    evaluations: Signal[u32] < H >
+}
+
+impl ValueBinding[u32] for Double {
+    fn evaluate(self: Self, context: mut UiContext &) -> u32 {
+        self.evaluations.set(self.evaluations.get() + 1)
+        ret context.read[u32](self.count) * 2
+    }
+}
+
+fn main() -> u32 {
+    let mut context = UiContext::new()
+    let mut count = context.signal[u32](10)
+    let mut evaluations = context.signal[u32](0)
+    let expression = Double {
+        count, evaluations
+    }
+    let mut doubled = Computed[u32, Double]::new(context, expression)
+    let result = context.graph().observer()
+    let _begin = context.graph().begin(result)
+    if doubled.get(context) != 20 || doubled.get(context) != 20 {
+        ret 1
+    }
+    let _end = context.graph().end(result)
+    if evaluations.get() != 1 {
+        ret 2
+    }
+    count.set(11)
+    if !context.graph().is_dirty(result) {
+        ret 3
+    }
+    let _begin_again = context.graph().begin(result)
+    if doubled.get(context) != 22 {
+        ret 4
+    }
+    let _end_again = context.graph().end(result)
+    if evaluations.get() != 2 || context.graph().is_dirty(result) {
+        ret 5
+    }
+    doubled.dispose()
+    ret 0
+}

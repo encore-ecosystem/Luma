@@ -1,0 +1,71 @@
+//! Bindings update only subscribed properties and disappear with their nodes.
+import luma::{UiBindings, UiContext, Widget}
+
+fn main() -> u32 {
+    let mut context = UiContext::new()
+    let mut left = context.signal[u32](1)
+    let mut right = context.signal[u32](2)
+    let mut choose_left = context.signal[bool](true)
+    let mut ui = UiBindings::new(context)
+    let mut root = Widget::panel("root")
+    for index in 0..1000 {
+        root.push(Widget::label("static").with_id(f "label-{index}"))
+    }
+    let host = ui.mount(root)
+    let mut tree = ui.tree()
+    let target = tree.children(host).get(400).unwrap_or(host)
+    let sibling = tree.children(host).get(401).unwrap_or(host)
+    let observed_left = left
+    let observed_right = right
+    let observed_choice = choose_left
+    let _binding = ui.bind_text(target, | cx | {
+            let value = if cx.read[bool](observed_choice) {
+                cx.read[u32](observed_left)
+            } else {
+                cx.read[u32](observed_right)
+            }
+            ret f "Value: {value}"
+        }
+        ,)
+    let _mounted = tree.take_changes()
+    let before = ui.evaluations()
+    right.set(3)
+    if ui.flush() != 0 || ui.evaluations() != before {
+        ret 1
+    }
+    left.set(10)
+    left.set(11)
+    if ui.flush() != 1 || ui.evaluations() != before + 1 {
+        ret 2
+    }
+    if tree.widget(target).unwrap_or(Widget::spacer(0)).text() != "Value: 11" {
+        ret 3
+    }
+    if tree.widget(sibling).unwrap_or(Widget::spacer(0)).text() != "static" {
+        ret 4
+    }
+    if tree.take_changes().len() != 1 {
+        ret 5
+    }
+    choose_left.set(false)
+    if ui.flush() != 1 {
+        ret 6
+    }
+    left.set(12)
+    if ui.flush() != 0 {
+        ret 7
+    }
+    right.set(13)
+    if ui.flush() != 1 {
+        ret 8
+    }
+    if !ui.unmount(target) {
+        ret 9
+    }
+    right.set(14)
+    ret if ui.flush() == 0 && !tree.contains(target) {
+        0
+    } else {
+        10
+    }
+}

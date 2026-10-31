@@ -1,0 +1,246 @@
+//! In-memory demo data. Every edit uses a new vector, keeping history independent.
+import core::vec::Vec
+import luma::LayerInput
+pub struct Task {
+    id: u32
+    title: str
+    group: str
+    minutes: u32
+    done: bool
+    today: bool
+}
+pub struct Day {
+    tasks: Vec[Task]
+    undo: Vec[Vec[Task]]
+    redo: Vec[Vec[Task]]
+    scope: str
+    category: str
+    search: str
+    draft: str
+    draft_group: str
+    composing: bool
+    error: bool
+    help: bool
+    status: str
+    duration: u32
+    remaining: u32
+    running: bool
+    started: u64
+    remaining_at_start: u32
+    focused_seconds: u64
+}
+
+impl for Day {
+    pub fn new() -> Self {
+        ret Self {
+            vec![
+                Task { 1_u32, "Собрать идеи для нового проекта", "Работа", 25_u32, false, true },
+                Task { 2_u32, "Прочитать главу книги", "Личное", 20_u32, false, true },
+                Task { 3_u32, "Прогуляться без телефона", "Личное", 30_u32, false, true },
+                Task { 4_u32, "Разобрать входящие", "Работа", 10_u32, true, true },
+                Task { 5_u32, "Полить растения", "Дом", 5_u32, true, true },
+                Task { 6_u32, "Собрать мудборд", "Работа", 40_u32, false, false },
+                Task { 7_u32, "Выбрать маршрут выходного дня", "Личное", 15_u32, false, false }],
+            Vec[Vec[Task]]::new(), Vec[Vec[Task]]::new(), "today", "Все", "", "", "Работа", false, false, false, "Изменения остаются в памяти этой демки", 1500_u32, 1500_u32, false, 0_u64, 1500_u32, 0_u64
+        }
+    }
+    pub fn today_count(self: Self, done: bool) -> u32 {
+        let mut n = 0_u32 for t in self.tasks {
+            if t.today &&(!done || t.done) {
+                n += 1
+            }
+        }
+        ret n
+    }
+    pub fn matches(self: Self, t: Task) -> bool {
+        ret(self.scope == "all" ||(self.scope == "done" && t.done) ||(self.scope == "today" && t.today)) &&
+        (self.category == "Все" || t.group == self.category) &&(self.search == "" || t.title.contains(self.search) || t.group.contains(self.search))
+    }
+    fn commit(self: mut Self, next: Vec[Task]) ->() {
+        if self.undo.len() >= 32 {
+            let mut kept = Vec[Vec[Task]]::new() for i in 1_usize..self.undo.len() {
+                kept.push(self.undo.get_unchecked_borrowed(i))
+            }
+            self.undo = kept
+        }
+        self.undo.push(self.tasks) self.tasks = next self.redo.clear()
+    }
+    pub fn add(self: mut Self) -> bool {
+        let mut meaningful = false for i in 0_usize..self.draft.byte_len() {
+            if self.draft.byte_at(i) > 32 {
+                meaningful = true
+            }
+        }
+        if !meaningful || self.draft.char_len() > 100 {
+            self.error = true ret false
+        }
+        let mut next = Vec[Task]::new() let mut id = 1_u32 for t in self.tasks {
+            next.push(t) if t.id >= id {
+                id = t.id + 1
+            }
+        }
+        next.push(Task { id, self.draft, self.draft_group, 25_u32, false, true }) self.commit(next)
+        self.draft = "" self.composing = false self.error = false self.scope = "today" self.category = "Все" self.search = ""
+        self.status = "Задача добавлена. Её можно отменить." ret true
+    }
+    pub fn tick(self: mut Self, now: u64) -> bool {
+        if !self.running {
+            ret false
+        }
+        let elapsed =(now - self.started) / 1000_u64
+        let left = if elapsed >= self.remaining_at_start as u64 {
+            0_u32
+        } else {
+            self.remaining_at_start - elapsed as u32
+        }
+        if left == self.remaining {
+            ret false
+        }
+        self.focused_seconds +=(self.remaining - left) as u64 self.remaining = left
+        if left == 0 {
+            self.running = false self.status = "Сессия закончилась. Сделайте небольшой перерыв."
+        }
+        ret true
+    }
+    pub fn input(self: mut Self, event: LayerInput, now: u64) -> bool {
+        let id = event.target
+        if event.action == "text" {
+            if id == "search" {
+                self.search = event.text ret true
+            }
+            if id == "draft" {
+                self.draft = event.text if self.error {
+                    self.error = false
+                }
+                ret true
+            }
+        }
+        if event.action == "change" {
+            for t in self.tasks {
+                if id == "task-" + t.id.fmt() {
+                    let mut next = Vec[Task]::new() for item in self.tasks {
+                        next.push(if item.id == t.id {
+                                Task {
+                                    item.id, item.title, item.group, item.minutes, event.value > 0.5_f32, item.today
+                                }
+                            } else {
+                                item
+                            }
+                        )
+                    }
+                    self.commit(next) self.status = if event.value > 0.5_f32 {
+                        "Задача выполнена. Можно выдохнуть."
+                    } else {
+                        "Задача возвращена в план."
+                    }
+                    ret true
+                }
+            }
+        }
+        if event.action != "click" {
+            ret false
+        }
+        if id == "add-task" {
+            self.composing = !self.composing self.error = false
+        } elif id == "cancel-add" {
+            self.composing = false self.error = false
+        } elif id == "submit-task" {
+            self.add()
+        } elif id == "clear-search" {
+            self.search = ""
+        } elif id == "clear-filters" {
+            self.search = "" self.scope = "all" self.category = "Все"
+        } elif id == "help" {
+            self.help = !self.help
+        } elif id == "undo" {
+            match self.undo.pop() {
+                Some(tasks) => {
+                    self.redo.push(self.tasks) self.tasks = tasks self.status = "Последнее изменение отменено."
+                }
+                None => {
+                }
+            }
+        } elif id == "redo" {
+            match self.redo.pop() {
+                Some(tasks) => {
+                    self.undo.push(self.tasks) self.tasks = tasks self.status = "Изменение повторено."
+                }
+                None => {
+                }
+            }
+        } elif id == "focus-toggle" {
+            self.tick(now)
+            if self.running {
+                self.running = false
+            } else {
+                if self.remaining == 0 {
+                    self.remaining = self.duration
+                }
+                self.remaining_at_start = self.remaining self.started = now self.running = true
+            }
+        } elif id == "focus-reset" {
+            self.tick(now) self.running = false self.remaining = self.duration
+        } else {
+            for scope in vec!["today", "all", "done"] {
+                if id == "scope-" + scope {
+                    self.scope = scope
+                }
+            }
+            for category in vec!["Все", "Работа", "Личное", "Дом"] {
+                if id == "category-" + category || id == "folder-" + category {
+                    self.category = category
+                }
+            }
+            for group in vec!["Работа", "Личное", "Дом"] {
+                if id == "draft-group-" + group {
+                    self.draft_group = group
+                }
+            }
+            for minutes in vec![15_u32, 25_u32, 45_u32] {
+                if id == "minutes-" + minutes.fmt() && !self.running {
+                    self.duration = minutes * 60 self.remaining = self.duration
+                }
+            }
+        }
+        ret true
+    }
+}
+pub fn clock(seconds: u32) -> str {
+    let minutes = seconds / 60 let s = seconds % 60 ret(if minutes < 10 {
+            "0"
+        } else {
+            ""
+        }
+    ) + minutes.fmt() + ":" +(if s < 10 {
+            "0"
+        } else {
+            ""
+        }
+    ) + s.fmt()
+}
+
+#attr(test)
+fn history_is_independent_and_blank_tasks_are_rejected() -> bool {
+    let mut day = Day::new() let count = day.tasks.len()
+    day.draft = "   " if day.add() || day.tasks.len() != count {
+        ret false
+    }
+    day.draft = "Новая задача" if !day.add() || day.tasks.len() != count + 1 {
+        ret false
+    }
+    day.input(LayerInput { true, "undo", "click", 0_f32, "" }, 0_u64)
+    if day.tasks.len() != count {
+        ret false
+    }
+    day.input(LayerInput { true, "redo", "click", 0_f32, "" }, 0_u64)
+    ret day.tasks.len() == count + 1
+}
+#attr(test)
+fn timer_uses_elapsed_time_and_stays_paused() -> bool {
+    let mut day = Day::new() day.input(LayerInput { true, "focus-toggle", "click", 0_f32, "" }, 1000_u64)
+    day.tick(6000_u64) if day.remaining != 1495 {
+        ret false
+    }
+    day.input(LayerInput { true, "focus-toggle", "click", 0_f32, "" }, 6000_u64)
+    day.tick(20000_u64) ret day.remaining == 1495 && clock(1495_u32) == "24:55"
+}

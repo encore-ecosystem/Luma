@@ -1,0 +1,459 @@
+//! Bindings own subscriptions and update only their retained destination node.
+import core::option::Option
+import core::panic::panic
+import core::vec::Vec
+
+import refrain::reactive::context::UiContext
+import refrain::reactive::graph::ReactiveKey
+import refrain::retained::{NodeId, RetainedTree}
+import refrain::widget::Widget
+
+pub trait Component {
+    fn component_id(self: Self) -> str
+    fn view(self: Self, context: mut UiContext&) -> Widget
+}
+
+pub trait NodeBinding {
+    fn apply(self: Self, context: mut UiContext&, tree: mut RetainedTree&, node: NodeId) ->()
+}
+
+/// Property expressions share a non-generic evaluation-context contract.
+pub trait TextBinding {
+    fn evaluate(self: Self, context: mut UiContext&) -> str
+}
+pub trait NumberBinding {
+    fn evaluate(self: Self, context: mut UiContext&) -> f32
+}
+pub trait BoolBinding {
+    fn evaluate(self: Self, context: mut UiContext&) -> bool
+}
+
+struct TextProperty {
+    expression: dyn TextBinding
+}
+
+impl NodeBinding for TextProperty {
+    fn apply(self: Self, context: mut UiContext&, tree: mut RetainedTree&, node: NodeId) ->() {
+        let value = self.expression.evaluate(context)
+        let _updated = tree.set_text(node, value)
+        ret()
+    }
+}
+
+struct ValueProperty {
+    expression: dyn NumberBinding
+}
+
+impl NodeBinding for ValueProperty {
+    fn apply(self: Self, context: mut UiContext&, tree: mut RetainedTree&, node: NodeId) ->() {
+        let value = self.expression.evaluate(context)
+        let _updated = tree.set_value(node, value)
+        ret()
+    }
+}
+
+struct CheckedProperty {
+    expression: dyn BoolBinding
+}
+
+impl NodeBinding for CheckedProperty {
+    fn apply(self: Self, context: mut UiContext&, tree: mut RetainedTree&, node: NodeId) ->() {
+        let value = self.expression.evaluate(context)
+        let _updated = tree.set_checked(node, value)
+        ret()
+    }
+}
+
+struct BindingSlot {
+    key: ReactiveKey
+    node: NodeId
+    binding: dyn NodeBinding
+}
+
+struct AuthoredRoot {
+    node: NodeId
+    widget: Widget
+}
+
+struct FocusTarget {
+    root: NodeId
+    target: str
+}
+
+#attr(test)
+fn declared_focus_hints_are_scoped_to_live_roots() -> bool {
+    let mut bindings = UiBindings::new(UiContext::new())
+    let first = bindings.mount(Widget::panel("first").with_child(Widget::input("first-input", "")))
+    let second = bindings.mount(Widget::panel("second").with_child(Widget::input("second-input", "")))
+    if bindings.declared_focus(first).is_some() {
+        ret false
+    }
+    bindings.declare_focus(first, "first-input") bindings.declare_focus(second, "second-input")
+    if bindings.declared_focus(first).unwrap_or("") != "first-input" ||
+    bindings.declared_focus(second).unwrap_or("") != "second-input" {
+        ret false
+    }
+    bindings.declare_focus(first, "")
+    if bindings.declared_focus(first).is_none() || bindings.declared_focus(first).unwrap_or("missing") != "" {
+        ret false
+    }
+    let _removed = bindings.unmount(first)
+    let replacement = bindings.mount(Widget::panel("replacement"))
+    if bindings.declared_focus(first).is_some() || bindings.declared_focus(replacement).is_some() {
+        ret false
+    }
+    bindings.declare_focus(replacement, "replacement-input")
+    ret bindings.declared_focus(second).unwrap_or("") == "second-input" && bindings.declared_focus(replacement).unwrap_or("") == "replacement-input"
+}
+
+/// UI-owned registry. Mount once; source writes automatically schedule its bindings.
+pub struct UiBindings {
+    context: UiContext<H>
+    tree: RetainedTree<H>
+    bindings: Vec[Option[BindingSlot]]
+    owners: Vec[Vec[ReactiveKey]]
+    evaluations: u64
+    authored: Option[Widget]
+    roots: Vec[AuthoredRoot]
+    focus_targets: Vec[FocusTarget]
+    widget_events: bool
+}
+
+impl for UiBindings {
+    pub fn new(context: UiContext<H>) -> UiBindings<H> {
+        ret UiBindings<H> {
+            context, RetainedTree::new(),
+            Vec[Option[BindingSlot]]::new(), Vec[Vec[ReactiveKey]]::new(), 0, Option[Widget]::None,
+            Vec[AuthoredRoot]::new(), Vec[FocusTarget]::new(), true
+        }
+    }
+
+    pub fn context(self: Self&) -> UiContext<H> {
+        ret self.context
+    }
+    pub fn tree(self: Self&) -> RetainedTree<H> {
+        ret self.tree
+    }
+    pub fn evaluations(self: Self&) -> u64 {
+        ret self.evaluations
+    }
+    /// Models using only high-level application events may skip widget callbacks.
+    pub fn set_widget_event_dispatch(self: mut Self&, enabled: bool) ->() {
+        self.widget_events = enabled ret()
+    }
+    /// Widget callbacks are enabled by default for this binding registry.
+    pub fn widget_event_dispatch(self: Self&) -> bool {
+        ret self.widget_events
+    }
+    /// Supplies a root's authored focus request without scanning its widgets.
+    /// An empty target requests no authored field; pointer focus remains local.
+    pub fn declare_focus(self: mut Self&, root: NodeId, target: str) ->() {
+        if !self.tree.contains(root) {
+            ret()
+        }
+        let mut index = 0_usize
+        for entry in self.focus_targets {
+            if entry.root.same(root) {
+                if entry.target != target {
+                    self.focus_targets.set(index, FocusTarget {
+                            root, target
+                        }
+                        ,
+                    )
+                }
+                ret()
+            }
+            index += 1_usize
+        }
+        let mut targets = Vec[FocusTarget]::new()
+        for entry in self.focus_targets {
+            if self.tree.contains(entry.root) {
+                targets.push(entry)
+            }
+        }
+        targets.push(FocusTarget { root, target }) self.focus_targets = targets
+        ret()
+    }
+    /// None retains declarative-widget discovery for applications without a hint.
+    pub fn declared_focus(self: Self&, root: NodeId) -> Option[str] {
+        if !self.tree.contains(root) {
+            ret Option[str]::None
+        }
+        for entry in self.focus_targets {
+            if entry.root.same(root) {
+                ret Option[str]::Some(entry.target)
+            }
+        }
+        ret Option[str]::None
+    }
+    /// The runtime's committed authored snapshot, read without a tree walk.
+    pub fn authored_view(self: Self&) -> Option[Widget] {
+        ret self.authored
+    }
+    pub fn commit_authored_view(self: mut Self&, root: Widget) ->() {
+        self.authored = Option[Widget]::Some(root)
+        ret()
+    }
+    pub fn authored_view_for(self: Self&, root: NodeId) -> Option[Widget] {
+        if !self.tree.contains(root) {
+            ret Option[Widget]::None
+        }
+        for entry in self.roots {
+            if entry.node.same(root) {
+                ret Option[Widget]::Some(entry.widget)
+            }
+        }
+        ret Option[Widget]::None
+    }
+    pub fn commit_authored_view_for(self: mut Self&, root: NodeId, widget: Widget) -> bool {
+        if !self.tree.contains(root) {
+            ret false
+        }
+        let mut index = 0_usize
+        for entry in self.roots {
+            if entry.node.same(root) {
+                self.roots.set(index, AuthoredRoot { root, widget })
+                self.authored = Option[Widget]::Some(widget)
+                ret true
+            }
+            index += 1
+        }
+        self.roots.push(AuthoredRoot { root, widget })
+        self.authored = Option[Widget]::Some(widget)
+        ret true
+    }
+    pub fn has_pending_for(self: Self&, root: NodeId) -> bool {
+        ret self.context.graph().pending_count() > 0 || self.tree.has_pending_for(root)
+    }
+    pub fn has_pending(self: Self&) -> bool {
+        ret self.context.graph().pending_count() > 0 || self.tree.pending_count() > 0
+    }
+    pub fn mount(self: mut Self&, widget: Widget) -> NodeId {
+        ret self.tree.mount(widget)
+    }
+    /// Replaces a component's children and releases only their subscriptions.
+    pub fn replace_children(self: mut Self&, parent: NodeId, children: Vec[Widget]) -> bool {
+        if !self.tree.contains(parent) {
+            ret false
+        }
+        let previous = self.tree.children(parent)
+        // unmount replaces the parent's child vector; retain the old identities.
+        let mut removed = Vec[NodeId]::new()
+        for child in previous {
+            removed.push(child)
+        }
+        for child in removed {
+            let _removed = self.unmount(child)
+        }
+        for child in children {
+            let _added = self.tree.append(parent, child)
+        }
+        ret true
+    }
+
+    /// Component rebuilds retain matching child identities instead of tearing
+    /// down the whole subscription graph. Removed children are disposed first.
+    pub fn reconcile(self: mut Self&, node: NodeId, widget: Widget) -> bool {
+        if !self.tree.contains(node) {
+            ret false
+        }
+        let old_children = self.tree.children(node)
+        if old_children.len() == 0 && widget.children().len() == 0 {
+            ret self.tree.replace_local(node, widget)
+        }
+        let mut old = Vec[NodeId]::new()
+        for child in old_children {
+            old.push(child)
+        }
+        let mut used = Vec[bool]::new()
+        for _child in old {
+            used.push(false)
+        }
+        let mut children = Vec[NodeId]::new()
+        let mut ordinal = 0_usize
+        for desired in widget.children() {
+            let selected = self.tree.match_child(node, desired, used, ordinal)
+            let child = match selected {
+                Some(existing) => {
+                    used.set(self.tree.ordinal(existing), true)
+                    let _updated = self.reconcile(existing, desired)
+                    existing
+                }
+                None => self.tree.mount(desired)
+            }
+            children.push(child)
+            ordinal += 1
+        }
+        let mut index = 0_usize
+        for previous in old {
+            if !used.get(index).unwrap_or(false) {
+                let _removed = self.unmount(previous)
+            }
+            index += 1
+        }
+        let _local = self.tree.replace_local(node, widget)
+        ret self.tree.set_children(node, children)
+    }
+
+    pub fn bind(self: mut Self&, node: NodeId, binding: dyn NodeBinding) -> Option[ReactiveKey] {
+        if !self.tree.contains(node) {
+            ret Option[ReactiveKey]::None
+        }
+        let context = self.context
+        let graph = context.graph()
+        let key = graph.observer()
+        while self.bindings.len() <= key.index() {
+            self.bindings.push(Option[BindingSlot]::None)
+        }
+        while self.owners.len() <= node.index() {
+            self.owners.push(Vec[ReactiveKey]::new())
+        }
+        match self.owners.get(node.index()) {
+            Some(owners) => {
+                let mut updated = Vec[ReactiveKey]::new()
+                for owner in owners {
+                    updated.push(owner)
+                }
+                updated.push(key)
+                self.owners.set(node.index(), updated)
+            }
+            None => {
+            }
+        }
+        self.bindings.set(key.index(), Option[BindingSlot]::Some(BindingSlot {
+                    key, node, binding
+                }
+                ,
+            ))
+        let _evaluated = self.evaluate(key)
+        ret Option[ReactiveKey]::Some(key)
+    }
+
+    pub fn bind_text(self: mut Self&, node: NodeId, expression: dyn TextBinding) -> Option[ReactiveKey] {
+        ret self.bind(node, TextProperty {
+                expression
+            }
+            as dyn NodeBinding,)
+    }
+
+    pub fn bind_value(self: mut Self&, node: NodeId, expression: dyn NumberBinding) -> Option[ReactiveKey] {
+        ret self.bind(node, ValueProperty {
+                expression
+            }
+            as dyn NodeBinding,)
+    }
+
+    pub fn bind_checked(self: mut Self&, node: NodeId, expression: dyn BoolBinding) -> Option[ReactiveKey] {
+        ret self.bind(node, CheckedProperty {
+                expression
+            }
+            as dyn NodeBinding,)
+    }
+
+    fn evaluate(self: mut Self&, key: ReactiveKey) -> bool {
+        let entry = self.bindings.get(key.index()).unwrap_or(Option[BindingSlot]::None)
+        let slot = match entry {
+            Some(binding) => binding
+            None => {
+                ret false
+            }
+        }
+        if !slot.key.same(key) || !self.tree.contains(slot.node) {
+            ret false
+        }
+        let context = self.context
+        let graph = context.graph()
+        if !graph.begin(key) {
+            ret false
+        }
+        slot.binding.apply(self.context, self.tree, slot.node)
+        let _finished = graph.end(key)
+        self.evaluations += 1
+        ret true
+    }
+
+    /// No tree scan: only queued observers with live destinations are evaluated.
+    pub fn flush(self: mut Self&) -> usize {
+        let mut completed = 0_usize
+        let context = self.context
+        let graph = context.graph()
+        let mut rounds = 0_usize
+        while graph.pending_count() > 0 {
+            rounds += 1
+            if rounds > 1024 {
+                panic("reactive bindings did not reach a stable transaction")
+            }
+            for key in graph.take_pending() {
+                if self.evaluate(key) {
+                    completed += 1
+                }
+            }
+        }
+        ret completed
+    }
+
+    pub fn unbind(self: mut Self&, key: ReactiveKey) -> bool {
+        let entry = self.bindings.get(key.index()).unwrap_or(Option[BindingSlot]::None)
+        match entry {
+            Some(slot) => {
+                if !slot.key.same(key) {
+                    ret false
+                }
+                let context = self.context
+                let graph = context.graph()
+                let _disposed = graph.dispose_observer(key)
+                self.bindings.set(key.index(), Option[BindingSlot]::None)
+                match self.owners.get(slot.node.index()) {
+                    Some(owners) => {
+                        let mut retained = Vec[ReactiveKey]::new()
+                        for owner in owners {
+                            if !owner.same(key) {
+                                retained.push(owner)
+                            }
+                        }
+                        self.owners.set(slot.node.index(), retained)
+                    }
+                    None => {
+                    }
+                }
+                ret true
+            }
+            None => {
+            }
+        }
+        ret false
+    }
+
+    fn release_bindings(self: mut Self&, node: NodeId) ->() {
+        for child in self.tree.children(node) {
+            self.release_bindings(child)
+        }
+        match self.owners.get(node.index()) {
+            Some(owners) => {
+                for key in owners {
+                    let _removed = self.unbind(key)
+                }
+                self.owners.set(node.index(), Vec[ReactiveKey]::new())
+            }
+            None => {
+            }
+        }
+        ret()
+    }
+
+    /// Subtree removal also drops captured closures and reverse subscriptions.
+    pub fn unmount(self: mut Self&, node: NodeId) -> bool {
+        if !self.tree.contains(node) {
+            ret false
+        }
+        self.release_bindings(node)
+        let mut roots = Vec[AuthoredRoot]::new()
+        for entry in self.roots {
+            if self.tree.path(node, entry.node).is_none() {
+                roots.push(entry)
+            }
+        }
+        self.roots = roots
+        ret self.tree.unmount(node)
+    }
+}

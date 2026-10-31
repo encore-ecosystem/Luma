@@ -2,7 +2,7 @@
 
 import core::option::Option
 import core::vec::Vec
-import geometry::{Rect, Size}
+import refrain::geometry::{Rect, Size}
 import refrain::style::GridPlacement
 
 pub fn horizontal() -> usize {
@@ -496,6 +496,34 @@ pub fn grid_layout_flow_placed(bounds: Rect, column_template: str, row_template:
         row_gap, column_gap, placements, Vec[Size]::new(), Vec[Size]::new(), flow_column, dense,)
 }
 
+/// Fixed/fractional single-cell tracks do not depend on child measurements.
+/// Spanning fractional tracks still honor their children's intrinsic minima.
+pub fn grid_needs_content_sizes(columns: str, rows: str, auto_columns: str,
+    auto_rows: str, placements: Vec[GridPlacement],) -> bool {
+    for placement in placements {
+        if placement.column_span() > 1 || placement.row_span() > 1 {
+            ret true
+        }
+    }
+    ret template_needs_content(columns) || template_needs_content(rows) ||
+    template_needs_content(auto_columns) || template_needs_content(auto_rows)
+}
+
+fn template_needs_content(template: str) -> bool {
+    for track in grid_track_tokens(template) {
+        if track_needs_content(track) {
+            ret true
+        }
+    }
+    ret false
+}
+
+fn track_needs_content(track: str) -> bool {
+    // minmax is conservative: either bound can depend on intrinsic size.
+    ret track == "auto" || track == "min-content" || track == "max-content" ||
+    string_starts_with(track, "fit-content(") || string_starts_with(track, "minmax(")
+}
+
 pub fn grid_layout_intrinsic_placed(bounds: Rect, column_template: str, row_template: str,
     auto_column_template: str, auto_row_template: str, row_gap: f32, column_gap: f32,
     placements: Vec[GridPlacement], minimum_content: Vec[Size], maximum_content: Vec[Size],
@@ -567,6 +595,29 @@ fn extend_grid_tracks(explicit: Vec[str], count: usize, automatic: str) -> Vec[s
 
 fn place_grid_items(columns: usize, placements: Vec[GridPlacement], flow_column: bool, dense: bool) ->
 Vec[GridCell] {
+    // Auto row-flow with single-cell items cannot leave holes, even when dense.
+    // No occupancy matrix or placement search is necessary for this case.
+    let mut simple = !flow_column
+    for placement in placements {
+        if placement.column() > 0 || placement.row() > 0 ||
+        placement.column_span() != 1 || placement.row_span() != 1 {
+            simple = false
+            break
+        }
+    }
+    if simple {
+        let mut cells = Vec[GridCell]::new()
+        let mut index = 0_usize
+        while index < placements.len() {
+            cells.push(GridCell {
+                    index % columns, index / columns, 1, 1
+                }
+                ,
+            )
+            index += 1
+        }
+        ret cells
+    }
     let mut capacity_rows = placements.len() + 1_usize
     let mut capacity_index = 0_usize
     while capacity_index < placements.len() {
@@ -840,8 +891,17 @@ fn grid_track_sizes_intrinsic(tracks: Vec[str], extent: f32, gap: f32, cells: Ve
     let mut index = 0_usize
     while index < tracks.len() {
         let track = layout_trim(string_at(tracks, index))
-        let intrinsic_minimum = intrinsic_track_extent(index, cells, minimum_content, horizontal)
-        let intrinsic_maximum = intrinsic_track_extent(index, cells, maximum_content, horizontal)
+        let needs_content = track_needs_content(track)
+        let intrinsic_minimum = if needs_content {
+            intrinsic_track_extent(index, cells, minimum_content, horizontal)
+        } else {
+            0.0_f32
+        }
+        let intrinsic_maximum = if needs_content {
+            intrinsic_track_extent(index, cells, maximum_content, horizontal)
+        } else {
+            0.0_f32
+        }
         let minimum = grid_track_minimum(track, extent, intrinsic_minimum, intrinsic_maximum)
         let weight = grid_track_fraction(track)
         minima.push(minimum)
@@ -880,10 +940,9 @@ fn grid_track_sizes_intrinsic(tracks: Vec[str], extent: f32, gap: f32, cells: Ve
     ret sizes
 }
 
-fn apply_spanning_intrinsic(sizes: Vec[f32], tracks: Vec[str], cells: Vec[GridCell],
+fn apply_spanning_intrinsic(sizes: mut Vec[f32], tracks: Vec[str], cells: Vec[GridCell],
     minimum_content: Vec[Size], maximum_content: Vec[Size], horizontal: bool, gap: f32,) -> Vec[f32]
 {
-    let mut result = sizes
     let mut index = 0_usize
     while index < cells.len() && index < minimum_content.len() {
         let cell = grid_cell_at(cells, index)
@@ -899,24 +958,23 @@ fn apply_spanning_intrinsic(sizes: Vec[f32], tracks: Vec[str], cells: Vec[GridCe
         }
         if span > 1_usize {
             let minimum = size_axis(size_at(minimum_content, index), horizontal)
-            result = grow_intrinsic_span(result, tracks, start, span, gap, minimum, false)
+            sizes = grow_intrinsic_span(sizes, tracks, start, span, gap, minimum, false)
             if index < maximum_content.len() {
                 let maximum = size_axis(size_at(maximum_content, index), horizontal)
-                result = grow_intrinsic_span(result, tracks, start, span, gap, maximum, true)
+                sizes = grow_intrinsic_span(sizes, tracks, start, span, gap, maximum, true)
             }
         }
         index = index + 1_usize
     }
-    ret result
+    ret sizes
 }
 
-fn grow_intrinsic_span(sizes: Vec[f32], tracks: Vec[str], start: usize, span: usize,
+fn grow_intrinsic_span(sizes: mut Vec[f32], tracks: Vec[str], start: usize, span: usize,
     gap: f32, desired: f32, maximum: bool,) -> Vec[f32] {
-    let mut result = sizes
-    let finish = if start + span < result.len() {
+    let finish = if start + span < sizes.len() {
         start + span
     } else {
-        result.len()
+        sizes.len()
     }
     let mut occupied = if finish > start {
         gap *((finish - start - 1_usize) as f32)
@@ -926,24 +984,24 @@ fn grow_intrinsic_span(sizes: Vec[f32], tracks: Vec[str], start: usize, span: us
     let mut eligible = 0_usize
     let mut index = start
     while index < finish {
-        occupied = occupied + f32_at(result, index)
+        occupied = occupied + f32_at(sizes, index)
         if intrinsic_track_accepts(string_at(tracks, index), maximum) {
             eligible = eligible + 1_usize
         }
         index = index + 1_usize
     }
     if desired <= occupied || eligible == 0_usize {
-        ret result
+        ret sizes
     }
     let addition =(desired - occupied) /(eligible as f32)
     index = start
     while index < finish {
         if intrinsic_track_accepts(string_at(tracks, index), maximum) {
-            result.set(index, f32_at(result, index) + addition)
+            sizes.set(index, f32_at(sizes, index) + addition)
         }
         index = index + 1_usize
     }
-    ret result
+    ret sizes
 }
 
 fn intrinsic_track_accepts(track: str, maximum: bool) -> bool {
@@ -1242,8 +1300,7 @@ fn layout_digit(value: str) -> i32 {
     ret - 1_i32
 }
 
-fn distribute_grow(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Vec[f32] {
-    let mut result = extents
+fn distribute_grow(items: Vec[FlexItem], extents: mut Vec[f32], amount: f32) -> Vec[f32] {
     let mut remaining = amount
     let mut pass = 0_usize
     while remaining > 0.001_f32 && pass <= items.len() {
@@ -1252,7 +1309,7 @@ fn distribute_grow(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Vec[
         while index < items.len() {
             match items.get(index) {
                 Option[FlexItem]::Some(item) => {
-                    match result.get(index) {
+                    match extents.get(index) {
                         Option[f32]::Some(extent) => {
                             if item.grow() > 0.0_f32 && extent < item.max_size() {
                                 weight = weight + item.grow()
@@ -1276,13 +1333,13 @@ fn distribute_grow(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Vec[
         while index < items.len() {
             match items.get(index) {
                 Option[FlexItem]::Some(item) => {
-                    match result.get(index) {
+                    match extents.get(index) {
                         Option[f32]::Some(extent) => {
                             if item.grow() > 0.0_f32 && extent < item.max_size() {
                                 let next = clamp_layout_extent(extent + pass_amount * item.grow() / weight,
                                     item.min_size(), item.max_size(),)
                                 distributed = distributed + next - extent
-                                result.set(index, next)
+                                extents.set(index, next)
                             }
                         }
                         Option[f32]::None => {
@@ -1300,11 +1357,10 @@ fn distribute_grow(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Vec[
         remaining = remaining - distributed
         pass = pass + 1_usize
     }
-    ret result
+    ret extents
 }
 
-fn distribute_shrink(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Vec[f32] {
-    let mut result = extents
+fn distribute_shrink(items: Vec[FlexItem], extents: mut Vec[f32], amount: f32) -> Vec[f32] {
     let mut remaining = amount
     let mut pass = 0_usize
     while remaining > 0.001_f32 && pass <= items.len() {
@@ -1313,7 +1369,7 @@ fn distribute_shrink(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Ve
         while index < items.len() {
             match items.get(index) {
                 Option[FlexItem]::Some(item) => {
-                    match result.get(index) {
+                    match extents.get(index) {
                         Option[f32]::Some(extent) => {
                             if item.shrink() > 0.0_f32 && extent > item.min_size() {
                                 weight = weight + item.shrink() * item.basis()
@@ -1337,13 +1393,13 @@ fn distribute_shrink(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Ve
         while index < items.len() {
             match items.get(index) {
                 Option[FlexItem]::Some(item) => {
-                    match result.get(index) {
+                    match extents.get(index) {
                         Option[f32]::Some(extent) => {
                             if item.shrink() > 0.0_f32 && extent > item.min_size() {
                                 let share = pass_amount * item.shrink() * item.basis() / weight
                                 let next = clamp_layout_extent(extent - share, item.min_size(), item.max_size())
                                 distributed = distributed + extent - next
-                                result.set(index, next)
+                                extents.set(index, next)
                             }
                         }
                         Option[f32]::None => {
@@ -1361,7 +1417,7 @@ fn distribute_shrink(items: Vec[FlexItem], extents: Vec[f32], amount: f32) -> Ve
         remaining = remaining - distributed
         pass = pass + 1_usize
     }
-    ret result
+    ret extents
 }
 
 fn extent_sum(values: Vec[f32]) -> f32 {

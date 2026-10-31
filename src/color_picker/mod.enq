@@ -1,0 +1,648 @@
+import refrain::application::Window
+//! Windowless HDR-aware color selection. RGB values are linear, HSV/HEX are sRGB.
+import color::Color
+import core::fmt::Debug
+import core::option::Option
+import core::vec::Vec
+
+import refrain::application::{Event, event_focus_lost, event_key_down, event_pointer_down, event_pointer_move, event_pointer_up, event_text_input, key_backspace, key_delete, key_down, key_end, key_enter, key_escape, key_home, key_left, key_right, key_tab, key_up}
+import refrain::geometry::{Rect, Size}
+import refrain::interaction::TextEditor
+import refrain::layout::{horizontal, vertical}
+import refrain::style::Style
+import refrain::widget::{Widget, WidgetLayout}
+extern fn luma_color_decode(value: f32) -> f32
+extern fn luma_color_encode(value: f32) -> f32
+extern fn luma_color_number(value: str) -> f32
+
+pub fn picker_unit(value: f32) -> f32 {
+    ret if value > 1 {
+        1_f32
+    } elif value >= 0 {
+        value
+    } else {
+        0_f32
+    }
+}
+#attr(safe)
+pub fn picker_srgb_to_linear(value: f32) -> f32 {
+    unsafe {
+        ret luma_color_decode(value)
+    }
+}
+#attr(safe)
+pub fn picker_linear_to_srgb(value: f32) -> f32 {
+    unsafe {
+        ret luma_color_encode(value)
+    }
+}
+fn byte(value: f32) -> u8 {
+    ret(picker_unit(value) * 255 + 0.5) as u8
+}
+fn digit(value: u8) -> i32 {
+    ret if value >= 48 && value <= 57 {
+        (value - 48) as i32
+    } elif value >= 65 && value <= 70 {
+        (value - 55) as i32
+    } elif value >= 97 && value <= 102 {
+        (value - 87) as i32
+    } else {
+        - 1_i32
+    }
+}
+pub struct PickerColor {
+    red: f32
+    green: f32
+    blue: f32
+}
+
+impl for PickerColor {
+    pub fn linear(red: f32, green: f32, blue: f32) -> Self {
+        ret Self { red, green, blue }
+    }
+    pub fn red(self: Self) -> f32 {
+        ret self.red
+    }
+    pub fn green(self: Self) -> f32 {
+        ret self.green
+    }
+    pub fn blue(self: Self) -> f32 {
+        ret self.blue
+    }
+    pub fn display(self: Self) -> Color {
+        ret Color::rgb(byte(picker_linear_to_srgb(self.red)), byte(picker_linear_to_srgb(self.green)), byte(picker_linear_to_srgb(self.blue)))
+    }
+    pub fn hex(self: Self) -> str {
+        ret color_hex(self.display())
+    }
+}
+fn color_hex(c: Color) -> str {
+    let alphabet = "0123456789ABCDEF" let mut result = "#"
+    for value in vec![c.red(), c.green(), c.blue()] {
+        result += alphabet.slice((value / 16) as usize, 1) + alphabet.slice((value % 16) as usize, 1)
+    }
+    ret result
+}
+
+impl for PickerColor {
+    pub fn from_hex(source: str) -> Option[PickerColor] {
+        let input = if source.slice(0, 1) == "#" {
+            source.slice(1, source.char_len() - 1)
+        } else {
+            source
+        }
+        if input.byte_len() != 6 && input.byte_len() != 3 {
+            ret Option::None
+        }
+        let mut values = Vec[f32]::new()
+        for index in 0..3 {
+            let offset = if input.byte_len() == 3 {
+                index
+            } else {
+                index * 2
+            }
+            let high = digit(input.byte_at(offset)) let low = digit(input.byte_at(if input.byte_len() == 3 {
+                        offset
+                    } else {
+                        offset + 1
+                    }
+                ))
+            if high < 0 || low < 0 {
+                ret Option::None
+            }
+            values.push(picker_srgb_to_linear(((high * 16 + low) as f32) / 255))
+        }
+        ret Option::Some(Self::linear(values.get(0).unwrap_or(0), values.get(1).unwrap_or(0), values.get(2).unwrap_or(0)))
+    }
+}
+/// HSV is normalized to 0..1, with a stable hue retained for gray and black.
+pub struct PickerHsv {
+    hue: f32
+    saturation: f32
+    value: f32
+}
+
+impl for PickerHsv {
+    pub fn new(hue: f32, saturation: f32, value: f32) -> Self {
+        ret Self {
+            picker_unit(hue), picker_unit(saturation), picker_unit(value)
+        }
+    }
+    pub fn hue(self: Self) -> f32 {
+        ret self.hue
+    }
+    pub fn saturation(self: Self) -> f32 {
+        ret self.saturation
+    }
+    pub fn value(self: Self) -> f32 {
+        ret self.value
+    }
+    pub fn from_linear(color: PickerColor, previous: Self) -> Self {
+        let r = picker_unit(picker_linear_to_srgb(color.red)) let g = picker_unit(picker_linear_to_srgb(color.green)) let b = picker_unit(picker_linear_to_srgb(color.blue))
+        let high = if r > g {
+            if r > b {
+                r
+            } else {
+                b
+            }
+        } else {
+            if g > b {
+                g
+            } else {
+                b
+            }
+        }
+        let low = if r < g {
+            if r < b {
+                r
+            } else {
+                b
+            }
+        } else {
+            if g < b {
+                g
+            } else {
+                b
+            }
+        }
+        let delta = high - low
+        if high <= 0 {
+            ret Self { previous.hue, previous.saturation, 0 }
+        }
+        if delta <= 0.0000001 {
+            ret Self { previous.hue, 0, high }
+        }
+        let mut hue = if high == r {
+            (g - b) / delta
+        } elif high == g {
+            2 +(b - r) / delta
+        } else {
+            4 +(r - g) / delta
+        }
+        hue /= 6 if hue < 0 {
+            hue += 1
+        }
+        ret Self { hue, delta / high, high }
+    }
+    pub fn srgb(self: Self) -> PickerColor {
+        let h = if self.hue >= 1 {
+            0_f32
+        } else {
+            self.hue * 6
+        }
+        let sector = h as u32 let f = h - sector as f32
+        let p = self.value *(1 - self.saturation) let q = self.value *(1 - self.saturation * f) let t = self.value *(1 - self.saturation *(1 - f))
+        ret match sector {
+            0 => PickerColor::linear(self.value, t, p) 1 => PickerColor::linear(q, self.value, p) 2 => PickerColor::linear(p, self.value, t) 3 => PickerColor::linear(p, q, self.value) 4 => PickerColor::linear(t, p, self.value) _ => PickerColor::linear(self.value, p, q)
+        }
+    }
+    pub fn linear(self: Self) -> PickerColor {
+        let c = self.srgb() ret PickerColor::linear(picker_srgb_to_linear(c.red), picker_srgb_to_linear(c.green), picker_srgb_to_linear(c.blue))
+    }
+}
+fn short(value: f32) -> str { ret refrain::interaction::format_decimal(value, 4) }
+/// Input outcomes: unchanged=0, live color changed=1, accepted=2, cancelled=3.
+pub struct ColorPicker {
+    id: str
+    color: PickerColor
+    original: PickerColor
+    hsv: PickerHsv
+    fields: Vec[TextEditor]
+    focus: usize
+    dragging: usize
+    drag_bounds: Rect
+    message: str
+    field_dirty: bool
+    compact: bool
+    hsv_mode: bool
+}
+
+impl for ColorPicker {
+    pub fn new(id: str, color: PickerColor) -> Self {
+        let hsv = PickerHsv::from_linear(color, PickerHsv::new(0, 0, 0))
+        let mut picker = Self {
+            id, color, color, hsv, Vec[TextEditor]::new(), 0, 0, Rect::new(0, 0, 0, 0), "", false, false, false
+        }
+        picker.sync() ret picker
+    }
+    pub fn with_compact(self: mut Self) -> Self {
+        self.compact = true ret self
+    }
+    pub fn preferred_size(self: Self) -> Size {
+        ret if self.compact {
+            Size::new(320, 384)
+        } else {
+            Size::new(468, 558)
+        }
+    }
+    fn focus_order(self: Self) -> Vec[usize] {
+        if !self.compact {
+            ret vec![0_usize, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        }
+        let mut order = vec![0_usize, 1, 9, 13, 14]
+        for index in 0..3 {
+            order.push(index + if self.hsv_mode {
+                    5_usize
+                } else {
+                    2_usize
+                }
+            )
+        }
+        order.push(8) order.push(10)
+        if self.message == "" {
+            order.push(11)
+        }
+        order.push(12) ret order
+    }
+    pub fn color(self: Self) -> PickerColor {
+        ret self.color
+    }
+    pub fn hsv(self: Self) -> PickerHsv {
+        ret self.hsv
+    }
+    pub fn message(self: Self) -> str {
+        ret self.message
+    }
+    pub fn dragging(self: Self) -> bool {
+        ret self.dragging != 0
+    }
+    fn sync(self: mut Self) ->() {
+        self.field_dirty = false
+        self.fields.clear()
+        for value in vec![self.color.red, self.color.green, self.color.blue, self.hsv.hue * 360, self.hsv.saturation * 100, self.hsv.value * 100] {
+            self.fields.push(TextEditor::new(Debug::fmt(value)))
+        }
+        self.fields.push(TextEditor::new(self.color.hex()))
+    }
+    fn key(self: Self, part: str) -> str {
+        ret self.id + "-" + part
+    }
+    fn button(self: Self, part: str, title: str, index: usize) -> Widget {
+        ret Widget::button(self.key(part), title).with_classes("luma-cp-button").with_focus(self.focus == index)
+    }
+    pub fn widget(self: Self, width: f32, height: f32) -> Widget {
+        let size = self.preferred_size()
+        let w = if width < size.width() + 24 {
+            width - 24
+        } else {
+            size.width()
+        }
+        let spectrum = if self.compact {
+            184_f32
+        } else {
+            208_f32
+        }
+        let mut root = Widget::panel(self.id).with_classes(if self.compact {
+                "luma-color-dialog luma-cp-compact"
+            } else {
+                "luma-color-dialog"
+            }
+        ).with_attribute("role", "dialog").with_attribute("aria-modal", "true").with_attribute("aria-label", "Color Picker").with_direction(vertical()).with_computed_style(Style::default().with_left((width - w) / 2).with_top(if height > size.height() + 24 {
+                    (height - size.height()) / 2
+                } else {
+                    12_f32
+                }
+            ).with_width(w).with_max_height(height - 24))
+        let mut title = Widget::panel("").with_classes("luma-cp-row").with_direction(horizontal())
+        title.push(Widget::label("Color Picker").with_classes("luma-cp-title").with_flex(0, 1)) title.push(self.button("close", "×", 12).with_added_classes("luma-cp-close")) root.push(title)
+        let mut visual = Widget::panel("").with_classes("luma-cp-visual").with_direction(horizontal())
+        let hue = PickerHsv::new(self.hsv.hue, 1, 1).srgb()
+        let pure = Color::rgb(byte(hue.red), byte(hue.green), byte(hue.blue))
+        let mut sv = Widget::panel(self.key("sv")).with_classes("luma-cp-sv").with_raw_input().with_focus(self.focus == 0).with_attribute("role", "slider").with_attribute("aria-label", "Saturation and brightness").with_attribute("data-luma-css-variables", "--cp-hue: " + color_hex(pure) + ";")
+        sv.push(Widget::panel("").with_classes("luma-cp-shade"))
+        sv.push(Widget::panel("").with_classes("luma-cp-marker").with_computed_style(Style::default().with_left(self.hsv.saturation * spectrum - 5).with_top((1 - self.hsv.value) * spectrum - 5))) visual.push(sv)
+        let mut hue_strip = Widget::panel(self.key("hue")).with_classes("luma-cp-hue").with_direction(vertical()).with_raw_input().with_focus(self.focus == 1).with_attribute("role", "slider").with_attribute("aria-label", "Hue").with_attribute("aria-valuenow", short(self.hsv.hue * 360))
+        for index in 0..6 {
+            let a = PickerHsv::new(index as f32 / 6, 1, 1).srgb() let b = PickerHsv::new((index + 1) as f32 / 6, 1, 1).srgb()
+            hue_strip.push(Widget::panel("").with_classes("luma-cp-hue-segment").with_attribute("data-luma-css-variables", "--cp-start: " + color_hex(Color::rgb(byte(a.red), byte(a.green), byte(a.blue))) + "; --cp-end: " + color_hex(Color::rgb(byte(b.red), byte(b.green), byte(b.blue))) + ";"))
+        }
+        hue_strip.push(Widget::panel("").with_classes("luma-cp-hue-marker").with_computed_style(Style::default().with_top(self.hsv.hue * spectrum - 2))) visual.push(hue_strip)
+        let mut samples = Widget::panel("").with_classes("luma-cp-samples").with_direction(vertical())
+        samples.push(Widget::label("Old").with_classes("luma-cp-label"))
+        samples.push(self.button("old", self.original.hex(), 9).with_added_classes("luma-cp-sample").with_attribute("data-luma-css-variables", "--cp-color: " + self.original.hex() + "; --cp-ink: " + if picker_unit(self.original.red) * 0.2126 + picker_unit(self.original.green) * 0.7152 + picker_unit(self.original.blue) * 0.0722 > 0.179 {
+                    "#000000;"
+                } else {
+                    "#ffffff;"
+                }
+                ,
+            ))
+        samples.push(Widget::label("New").with_classes("luma-cp-label")) samples.push(Widget::panel("").with_classes("luma-cp-sample").with_attribute("data-luma-css-variables", "--cp-color: " + self.color.hex() + ";"))
+        samples.push(Widget::label("sRGB preview").with_classes("luma-cp-muted")) visual.push(samples) root.push(visual)
+        if self.compact {
+            let mut modes = Widget::panel("").with_classes("luma-cp-row luma-cp-modes").with_direction(horizontal())
+            modes.push(self.button("rgb", "RGB Linear", 13).with_added_classes(if !self.hsv_mode {
+                        "luma-cp-mode-selected"
+                    } else {
+                        ""
+                    }
+                ))
+            modes.push(self.button("hsv", "HSV", 14).with_added_classes(if self.hsv_mode {
+                        "luma-cp-mode-selected"
+                    } else {
+                        ""
+                    }
+                ))
+            root.push(modes)
+            let mut channels = Widget::panel("").with_classes("luma-cp-row luma-cp-components").with_direction(horizontal())
+            for index in 0..3 {
+                channels.push(Widget::label(if self.hsv_mode {
+                            vec!["H°", "S%", "V%"].get(index).unwrap_or("")
+                        } else {
+                            vec!["R", "G", "B"].get(index).unwrap_or("")
+                        }
+                        ,
+                    ).with_classes("luma-cp-channel"))
+                channels.push(self.entry(index + if self.hsv_mode {
+                            3_usize
+                        } else {
+                            0_usize
+                        }
+                    ))
+            }
+            root.push(channels)
+        } else {
+            let mut headings = Widget::panel("").with_classes("luma-cp-row luma-cp-headings").with_direction(horizontal())
+            headings.push(Widget::label("RGB Linear").with_classes("luma-cp-heading"))
+            headings.push(Widget::label("HSV (sRGB)").with_classes("luma-cp-heading"))
+            root.push(headings)
+            for index in 0..3 {
+                let mut row = Widget::panel("").with_classes("luma-cp-row").with_direction(horizontal())
+                row.push(Widget::label(vec!["R", "G", "B"].get(index).unwrap_or("")).with_classes("luma-cp-channel")) row.push(self.entry(index))
+                row.push(Widget::label(vec!["H °", "S %", "V %"].get(index).unwrap_or("")).with_classes("luma-cp-channel")) row.push(self.entry(index + 3)) root.push(row)
+            }
+        }
+        let mut hex = Widget::panel("").with_classes("luma-cp-row").with_direction(horizontal()) hex.push(Widget::label("HEX sRGB").with_classes("luma-cp-label")) hex.push(self.entry(6)) root.push(hex)
+        root.push(Widget::label(if self.message == "" {
+                    "Drag to choose · Arrows adjust · Esc cancels"
+                } else {
+                    self.message
+                }
+            ).with_classes(if self.message == "" {
+                    "luma-cp-muted"
+                } else {
+                    "luma-cp-error"
+                }
+            ))
+        let mut actions = Widget::panel("").with_classes("luma-cp-row").with_direction(horizontal()) actions.push(Widget::spacer(1)) actions.push(self.button("cancel", "Cancel", 10)) actions.push(self.button("ok", "OK", 11).with_added_classes("luma-cp-primary").with_disabled(self.message != "")) root.push(actions)
+        ret root
+    }
+    fn entry(self: Self, index: usize) -> Widget {
+        let editor = self.fields.get(index).unwrap_or(TextEditor::new(""))
+        let values = vec![self.color.red, self.color.green, self.color.blue, self.hsv.hue * 360, self.hsv.saturation * 100, self.hsv.value * 100]
+        let shown = if self.focus == index + 2 || index == 6 { editor.value() } else { short(values.get(index).unwrap_or(0)) }
+        ret Widget::input(f"{self.id}-value-{index}", shown).with_classes("luma-cp-input").with_focus(self.focus == index + 2).with_cursor(editor.cursor()).with_selection(editor.selection_start(), editor.selection_end()).with_attribute("aria-label", vec!["Red linear", "Green linear", "Blue linear", "Hue degrees", "Saturation percent", "Brightness percent", "Hexadecimal sRGB"].get(index).unwrap_or("Color value"))
+    }
+    fn commit(self: mut Self) -> bool {
+        if !self.field_dirty || self.focus < 2 || self.focus > 8 {
+            ret true
+        }
+        let index = self.focus - 2 let text = self.fields.get(index).unwrap_or(TextEditor::new("")).value()
+        if index == 6 {
+            match PickerColor::from_hex(text) {
+                Some(color) => {
+                    self.color = color self.hsv = PickerHsv::from_linear(color, self.hsv)
+                }
+                None => {
+                    self.message = "Enter #RGB or #RRGGBB" ret false
+                }
+            }
+        } else {
+            let value = unsafe {
+                luma_color_number(text)
+            }
+            if !(value >= - 340282346638528859811704183484516925440_f32 && value <= 340282346638528859811704183484516925440_f32) {
+                self.message = "Enter a finite number" ret false
+            }
+            if index < 3 {
+                self.color = PickerColor::linear(if index == 0 {
+                        value
+                    } else {
+                        self.color.red
+                    }
+                    , if index == 1 {
+                        value
+                    } else {
+                        self.color.green
+                    }
+                    , if index == 2 {
+                        value
+                    } else {
+                        self.color.blue
+                    }
+                    ,
+                ) self.hsv = PickerHsv::from_linear(self.color, self.hsv)
+            } else {
+                let limit = if index == 3 {
+                    360_f32
+                } else {
+                    100_f32
+                }
+                if value < 0 || value > limit {
+                    self.message = if index == 3 {
+                        "Hue must be 0–360"
+                    } else {
+                        "Saturation/value must be 0–100"
+                    }
+                    ret false
+                }
+                self.hsv = PickerHsv::new(if index == 3 {
+                        value / 360
+                    } else {
+                        self.hsv.hue
+                    }
+                    , if index == 4 {
+                        value / 100
+                    } else {
+                        self.hsv.saturation
+                    }
+                    , if index == 5 {
+                        value / 100
+                    } else {
+                        self.hsv.value
+                    }
+                    ,
+                ) self.color = self.hsv.linear()
+            }
+        }
+        self.message = "" self.sync() ret true
+    }
+    fn choose(self: mut Self, x: f32, y: f32) ->() {
+        let b = self.drag_bounds
+        if b.width() <= 0 || b.height() <= 0 {
+            ret()
+        }
+        self.hsv = if self.dragging == 1 {
+            PickerHsv::new(self.hsv.hue, picker_unit((x - b.x()) / b.width()), 1 - picker_unit((y - b.y()) / b.height()))
+        } else {
+            PickerHsv::new(picker_unit((y - b.y()) / b.height()), self.hsv.saturation, self.hsv.value)
+        }
+        self.color = self.hsv.linear() self.message = "" self.sync()
+    }
+    pub fn input_with_text(self: mut Self, event: Event, target: str, layout: WidgetLayout, window: Window) -> u32 {
+        if self.focus >= 2 && self.focus < 9 {
+            let index = self.focus - 2 let id = self.id + "-value-" + index.fmt()
+            let text = self.fields.get_unchecked_borrowed(index)
+            if text.pointer_handles(event, target, id) {
+                self.fields.set(index, text.pointer_input(event, layout, id, window)) ret 1
+            }
+            if refrain::interaction::text_edit_key(event) {
+                let edited = text.key_input(event, window) self.field_dirty = self.field_dirty || edited.value() != text.value()
+                self.fields.set(index, edited) ret 1
+            }
+        }
+        let result = self.input(event, target, layout)
+        if event.kind() == event_pointer_down() && event.key() == 1 && self.focus >= 2 && self.focus < 9 {
+            let index = self.focus - 2 let id = self.id + "-value-" + index.fmt()
+            if target == id {
+                self.fields.set(index, self.fields.get_unchecked_borrowed(index).with_cursor(0).pointer_input(event, layout, id, window))
+            }
+        }
+        ret result
+    }
+    pub fn input(self: mut Self, event: Event, target: str, layout: WidgetLayout) -> u32 {
+        if event.kind() == event_key_down() && event.key() == key_escape() {
+            self.dragging = 0 ret 3
+        }
+        if event.kind() == event_focus_lost() {
+            self.dragging = 0 ret 0
+        }
+        if event.kind() == event_pointer_down() && event.primary_down() {
+            if target == self.key("cancel") || target == self.key("close") {
+                self.dragging = 0 ret 3
+            }
+            if target == self.key("old") {
+                self.color = self.original self.hsv = PickerHsv::from_linear(self.color, self.hsv) self.message = "" self.sync() self.focus = 9 ret 1
+            }
+            let previous = self.color
+            if !self.commit() {
+                ret 0
+            }
+            if target == self.key("ok") {
+                ret 2
+            }
+            if self.compact &&(target == self.key("rgb") || target == self.key("hsv")) {
+                self.hsv_mode = target == self.key("hsv") self.focus = if self.hsv_mode {
+                    14_usize
+                } else {
+                    13_usize
+                }
+            }
+            for index in 0..7 {
+                if target == f"{self.id}-value-{index}" {
+                    self.focus = index + 2 let text = self.fields.get(index).unwrap_or(TextEditor::new("")).select_all() self.fields.set(index, text)
+                }
+            }
+            if target == self.key("sv") || target == self.key("hue") {
+                self.dragging = if target == self.key("sv") {
+                    1_usize
+                } else {
+                    2_usize
+                }
+                self.focus = self.dragging - 1
+                self.drag_bounds = layout.find_bounds(target).unwrap_or(Rect::new(0, 0, 0, 0)) self.choose(event.x(), event.y()) ret 1
+            }
+            ret if previous.red != self.color.red || previous.green != self.color.green || previous.blue != self.color.blue {
+                1_u32
+            } else {
+                0_u32
+            }
+        }
+        if event.kind() == event_pointer_move() && self.dragging != 0 {
+            self.choose(event.x(), event.y()) ret 1
+        }
+        if event.kind() == event_pointer_up() && self.dragging != 0 {
+            self.choose(event.x(), event.y()) self.dragging = 0 ret 1
+        }
+        if event.kind() == event_key_down() && event.key() == key_tab() {
+            if !self.commit() {
+                ret 0
+            }
+            let order = self.focus_order()
+            let mut position = 0_usize
+            for index in 0..order.len() {
+                if order.get(index).unwrap_or(0) == self.focus {
+                    position = index
+                }
+            }
+            self.focus = order.get((position + if event.shift() {
+                        order.len() - 1
+                    } else {
+                        1_usize
+                    }
+                ) % order.len()).unwrap_or(0)
+            ret 1
+        }
+        if event.kind() == event_key_down() && self.focus < 2 {
+            let step = if event.shift() {
+                0.05_f32
+            } else {
+                0.005_f32
+            }
+            let k = event.key() let dx = if k == key_right() {
+                step
+            } elif k == key_left() {
+                - step
+            } else {
+                0_f32
+            }
+            let dy = if k == key_up() {
+                step
+            } elif k == key_down() {
+                - step
+            } else {
+                0_f32
+            }
+            if dx != 0 || dy != 0 {
+                self.hsv = if self.focus == 0 {
+                    PickerHsv::new(self.hsv.hue, self.hsv.saturation + dx, self.hsv.value + dy)
+                } else {
+                    PickerHsv::new(self.hsv.hue + dx - dy, self.hsv.saturation, self.hsv.value)
+                }
+                self.color = self.hsv.linear() self.sync() ret 1
+            }
+        }
+        if event.kind() == event_key_down() &&(event.key() == key_enter() ||(event.key() == 32 && self.focus > 8)) {
+            if self.focus == 10 || self.focus == 12 {
+                ret 3
+            }
+            if !self.commit() {
+                ret 0
+            }
+            if self.focus == 11 {
+                ret 2
+            }
+            if self.focus == 9 {
+                self.color = self.original self.hsv = PickerHsv::from_linear(self.color, self.hsv) self.sync()
+            }
+            if self.compact &&(self.focus == 13 || self.focus == 14) {
+                self.hsv_mode = self.focus == 14
+            }
+            ret 1
+        }
+        if self.focus >= 2 && self.focus <= 8 &&(event.kind() == event_text_input() || event.kind() == event_key_down()) {
+            let index = self.focus - 2 let mut editor = self.fields.get(index).unwrap_or(TextEditor::new(""))
+            editor = if event.kind() == event_text_input() {
+                editor.insert(event.text())
+            } elif event.control() && event.key() == 97 {
+                editor.select_all()
+            } elif event.key() == key_backspace() {
+                editor.backspace()
+            } elif event.key() == key_delete() {
+                editor.delete()
+            } elif event.key() == key_left() {
+                editor.move_left(event.shift())
+            } elif event.key() == key_right() {
+                editor.move_right(event.shift())
+            } elif event.key() == key_home() {
+                editor.move_home(event.shift())
+            } elif event.key() == key_end() {
+                editor.move_end(event.shift())
+            } else {
+                editor
+            }
+            self.field_dirty = self.field_dirty || editor.value() != self.fields.get(index).unwrap_or(TextEditor::new("")).value()
+            self.fields.set(index, editor) self.message = "" ret 0
+        }
+        ret 0
+    }
+}

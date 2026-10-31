@@ -1,0 +1,62 @@
+//! Hover damage and underlying updates must never bake overlays into the base.
+import core::vec::Vec
+import luma::{Color, CompositeFrame, RendererKind, StyleSheet, Widget, Window}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer("Transient cache", 160, 120, RendererKind::Software)
+    .with_stylesheet(StyleSheet::parse("#stable { position: absolute; left: 0px; top: 0px; width: 160px; height: 120px; background: #101010; } #overlay { position: absolute; left: 10px; top: 10px; width: 80px; height: 60px; } #popup { width: 40px; height: 20px; background: #ff0000; border: 0; border-radius: 0; padding: 0; transition: none; }"))
+    if !window.available() {
+        ret 1
+    }
+    let mut root = Widget::panel("root")
+    root.push(Widget::panel("stable"))
+    let mut overlay = Widget::panel("overlay")
+    overlay.push(Widget::button("popup", ""))
+    root.push(overlay)
+    let mut ui = window.reactive(root)
+    let mut excluded = Vec[str]::new()
+    excluded.push("overlay")
+    if !window.cache_layout_excluding(ui.layout(), excluded) {
+        window.destroy() ret 2
+    }
+    let _drawn = window.present_frame(CompositeFrame::cached(ui.layout()).with_overlays(excluded))
+    if window.read_pixel(15, 15).red() != 255 {
+        window.destroy() ret 3
+    }
+    ui.clear_paint()
+    let popup = ui.find_widget("popup").unwrap_or(Widget::spacer(0))
+    let _hover = ui.patch_widget("popup", popup.with_computed_style(popup.style().with_background(Color::rgb(0, 255, 0))))
+    // The compatibility entrypoint must exclude descendants as well.
+    if !window.commit_cached_layout_targets(ui.layout(), ui.paint_targets(), excluded) {
+        window.destroy() ret 4
+    }
+    let _hidden = window.draw_cached_layout()
+    if window.read_pixel(15, 15).red() != 16 || window.read_pixel(15, 15).green() != 16 {
+        window.destroy() ret 5
+    }
+    ui.clear_paint()
+    let stable = ui.find_widget("stable").unwrap_or(Widget::spacer(0))
+    let _changed = ui.patch_widget("stable", stable.with_computed_style(stable.style().with_background(Color::rgb(32, 32, 32))))
+    // A full-size underlying patch must still filter the visible popup.
+    if !window.commit_cached_reactive_targets(ui, excluded) {
+        window.destroy() ret 6
+    }
+    let _hidden = window.draw_cached_layout()
+    if window.read_pixel(15, 15).red() != 32 || window.read_pixel(15, 15).green() != 32 {
+        window.destroy() ret 7
+    }
+    ui.clear_paint()
+    let host = ui.find_widget("overlay").unwrap_or(Widget::spacer(0))
+    let _removed = ui.replace_subtree("overlay", host.with_children(Vec[Widget]::new()))
+    if !window.commit_cached_reactive_targets(ui, excluded) {
+        window.destroy() ret 8
+    }
+    let _closed = window.present_frame(CompositeFrame::cached(ui.layout()).with_overlays(excluded))
+    let clear = window.read_pixel(15, 15)
+    window.destroy()
+    ret if clear.red() == 32 && clear.green() == 32 {
+        0
+    } else {
+        9
+    }
+}

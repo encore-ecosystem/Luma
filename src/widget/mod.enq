@@ -1,14 +1,16 @@
 //! Declarative widgets, retained layout trees, hit testing, and reactive updates.
 
-import color::{Color, black}
 import core::fmt::Debug
 import core::option::Option
 import core::vec::Vec
-import geometry::{Insets, Rect, Size}
+
+import color::{Color, black}
+
 import refrain::animation::{apply_easing, easing_in, easing_in_out, easing_linear, easing_out, interpolate_style}
 import refrain::event::{UiEvent, UiEventHandler, UiEventHandlers, ui_event_change, ui_event_click, ui_event_input, ui_event_key_down, ui_event_key_up, ui_event_pointer_down, ui_event_pointer_move, ui_event_pointer_up, ui_event_scroll, ui_event_transition_cancel, ui_event_transition_end, ui_event_transition_run, ui_event_transition_start, ui_phase_bubble, ui_phase_capture, ui_phase_target}
-import refrain::layout::{FlexItem, align_center, align_end, flex_layout_directional, flex_wrap_layout, grid_layout_gaps, grid_layout_intrinsic_placed, horizontal, vertical}
-import refrain::style::{GridPlacement, Style, text_center}
+import refrain::geometry::{Insets, Rect, Size}
+import refrain::layout::{FlexItem, align_center, align_end, flex_layout_directional, flex_wrap_layout, grid_layout_gaps, grid_layout_intrinsic_placed, grid_needs_content_sizes, horizontal, vertical}
+import refrain::style::{FlexStyle, GridPlacement, Style, text_center}
 import refrain::svg::SvgDocument
 
 pub fn widget_panel() -> usize {
@@ -97,6 +99,10 @@ pub fn widget_range_slider() -> usize {
 pub fn widget_rich_text() -> usize {
     ret 25_usize
 }
+/// A layout-owned vector canvas, without an external image submission.
+pub fn widget_canvas() -> usize {
+    ret 26
+}
 
 pub struct TextSelection {
     start: usize
@@ -157,6 +163,66 @@ impl for TextSelection {
     }
 }
 
+/// Selector data without child trees, SVG geometry or event closures.
+pub struct WidgetSelector {
+    kind: usize
+    id: str
+    tag: str
+    classes: str
+    attributes: Vec[WidgetAttribute]
+    checked: bool
+    focused: bool
+    disabled: bool
+    empty_text: bool
+    children: usize
+}
+
+impl for WidgetSelector {
+    /// Compare only attributes referenced by the stylesheet (plus pseudo-class inputs).
+    /// Accessibility labels and event metadata remain intact on the live widget.
+    pub fn equivalent_for_attributes(self: Self, other: WidgetSelector, compare_id: bool, names: Vec[str], compare_children: bool) -> bool {
+        if self.kind != other.kind ||(compare_id && self.id != other.id) ||
+        self.tag != other.tag || self.classes != other.classes ||
+        self.checked != other.checked || self.focused != other.focused ||
+        self.disabled != other.disabled || self.empty_text != other.empty_text ||(compare_children && self.children != other.children) {
+            ret false
+        }
+        if self.attributes.as_ptr() as usize == other.attributes.as_ptr() as usize {
+            ret true
+        }
+        for name in names {
+            let mut left_present = false
+            let mut right_present = false
+            let mut left = ""
+            let mut right = ""
+            for attribute in self.attributes {
+                if attribute.name() == name {
+                    left_present = true left = attribute.value()
+                }
+            }
+            for attribute in other.attributes {
+                if attribute.name() == name {
+                    right_present = true right = attribute.value()
+                }
+            }
+            if left_present != right_present || left != right {
+                ret false
+            }
+        }
+        ret true
+    }
+    pub fn id(self: Self) -> str {
+        ret self.id
+    }
+    pub fn equivalent(self: Self, other: WidgetSelector, compare_id: bool) -> bool {
+        ret self.kind == other.kind &&(!compare_id || self.id == other.id) &&
+        self.tag == other.tag && self.classes == other.classes &&
+        self.checked == other.checked && self.focused == other.focused &&
+        self.disabled == other.disabled && self.empty_text == other.empty_text &&
+        self.children == other.children && widget_attributes_equal(self.attributes, other.attributes)
+    }
+}
+
 pub struct Widget {
     kind: usize
     id: str
@@ -177,7 +243,8 @@ pub struct Widget {
     svg: SvgDocument
     tag: str
     style_explicit: bool
-    handlers: UiEventHandlers < H >
+    handlers: UiEventHandlers<H>
+    geometry_basis: f32
 }
 
 impl for Widget {
@@ -286,7 +353,7 @@ impl for Widget {
     pub fn color_picker(id: str, text: str, color: Color) -> Widget {
         ret widget_value(widget_color_picker(), id, text,
             control_style().with_border(3.0_f32, color), horizontal(), 40.0_f32, 0.0_f32, false, 0.0_f32,).with_attribute("type",
-            "color",)
+            "color",).with_attribute("data-luma-picker-color", "rgba(" + Debug::fmt(color.red()) + "," + Debug::fmt(color.green()) + "," + Debug::fmt(color.blue()) + "," + Debug::fmt((color.alpha() as f32) / 255) + ")")
     }
     pub fn color_swatch(id: str, color: Color, selected: bool) -> Widget {
         ret widget_value(widget_color_swatch(), id, "",
@@ -332,11 +399,15 @@ impl for Widget {
         ret widget_value(widget_render_surface(), id, "", Style::default(),
             horizontal(), 0.0_f32, 1.0_f32, false, 0.0_f32,)
     }
+    pub fn canvas(id: str) -> Widget {
+        ret widget_value(widget_canvas(), id, "", Style::default().with_overflow_hidden(true),
+            horizontal(), 0, 1, false, 0,).with_raw_input()
+    }
     pub fn with_style(self: Self, value: Style) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             value, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            self.value, self.children, self.svg, self.tag, true, self.handlers
+            self.value, self.children, self.svg, self.tag, true, self.handlers, self.geometry_basis
         }
     }
     /// Stores a cascade result without turning it into an inline override.
@@ -346,46 +417,63 @@ impl for Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             value, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_id(self: Self, value: str) -> Widget {
         ret Widget {
             self.kind, value, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_direction(self: Self, value: usize) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, value, self.basis, self.grow, self.checked, self.focused, self.disabled, self.value,
-            self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_flex(self: Self, basis: f32, grow: f32) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, basis, grow, self.checked, self.focused, self.disabled, self.value,
-            self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_focus(self: Self, value: bool) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, self.checked, value, self.disabled, self.value,
-            self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_classes(self: Self, value: str) -> Widget {
         ret Widget {
             self.kind, self.id, value, self.attributes, self.text, self.cursor, self.selection, self.style,
             self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled, self.value,
-            self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
+    /// Adds CSS classes without replacing the widget's existing component classes.
+    pub fn with_added_classes(self: Self, value: str) -> Widget {
+        if value == "" {
+            ret self
+        }
+        ret self.with_classes(if self.classes == "" {
+                value
+            } else {
+                self.classes + " " + value
+            }
+        )
+    }
     pub fn with_attribute(self: Self, name: str, value: str) -> Widget {
-        let mut attributes = self.attributes
+        // Vec storage is shared on assignment. An immutable builder must not
+        // mutate the authored widget (or a cached selector context) in place.
+        let mut attributes = Vec[WidgetAttribute]::new()
+        for attribute in self.attributes {
+            attributes.push(attribute)
+        }
         let mut index = 0_usize
         while index < attributes.len() {
             match attributes.get(index) {
@@ -396,7 +484,7 @@ impl for Widget {
                             self.kind, self.id, self.classes, attributes, self.text, self.cursor, self.selection,
                             self.style, self.direction, self.basis, self.grow, self.checked, self.focused,
                             self.disabled, self.value, self.children, self.svg, self.tag,
-                            self.style_explicit, self.handlers
+                            self.style_explicit, self.handlers, self.geometry_basis
                         }
                     }
                 }
@@ -409,8 +497,31 @@ impl for Widget {
         ret Widget {
             self.kind, self.id, self.classes, attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
+    }
+    /// Binds a dynamic custom property while leaving visual declarations in CSS.
+    /// Rebinding a name replaces its previous value rather than growing the payload.
+    pub fn with_css_variable(self: Self, name: str, value: str) -> Widget {
+        if name.char_len() < 3 || name.slice(0, 2) != "--" {
+            ret self
+        }
+        let previous = self.attribute("data-luma-css-variables").unwrap_or("")
+        let mut declarations = ""
+        let mut start = 0_usize
+        let mut index = 0_usize
+        while index <= previous.char_len() {
+            if index == previous.char_len() || previous.slice(index, 1) == ";" {
+                let entry = previous.slice(start, index - start)
+                if entry != "" &&(entry.char_len() < name.char_len() + 1 ||
+                    entry.slice(0, name.char_len() + 1) != name + ":") {
+                    declarations = declarations + entry + ";"
+                }
+                start = index + 1
+            }
+            index += 1
+        }
+        ret self.with_attribute("data-luma-css-variables", declarations + name + ":" + value + ";")
     }
     /// Enables word wrapping for text painted inside this widget's bounds.
     pub fn with_text_wrap(self: Self, value: bool) -> Widget {
@@ -458,6 +569,7 @@ impl for Widget {
     pub fn with_range_ticks(self: Self, count: usize) -> Widget {
         ret self.with_attribute("data-luma-range-ticks", Debug::fmt(count))
     }
+    #attr(borrowed_self)
     pub fn text_wrap(self: Self) -> bool {
         match self.attribute("data-luma-text-wrap") {
             Option[str]::Some(value) => {
@@ -468,6 +580,7 @@ impl for Widget {
         }
         ret false
     }
+    #attr(borrowed_self)
     pub fn text_anchor_child(self: Self) -> str {
         ret self.attribute("data-luma-text-anchor").unwrap_or("")
     }
@@ -480,7 +593,7 @@ impl for Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            self.value, value, self.svg, self.tag, self.style_explicit, self.handlers
+            self.value, value, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_disabled(self: Self, value: bool) -> Widget {
@@ -488,14 +601,14 @@ impl for Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis,
             self.grow, self.checked, self.focused, value, self.value, self.children, self.svg,
-            self.tag, self.style_explicit, self.handlers
+            self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_value(self: Self, value: f32) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            clamp_unit(value), self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            clamp_unit(value), self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_text(self: Self, value: str) -> Widget {
@@ -508,21 +621,21 @@ impl for Widget {
             self.kind, self.id, self.classes, self.attributes, value, cursor,
             TextSelection::caret(cursor), self.style, self.direction, self.basis, self.grow,
             self.checked, self.focused, self.disabled, self.value, self.children, self.svg,
-            self.tag, self.style_explicit, self.handlers
+            self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_checked(self: Self, value: bool) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, value, self.focused, self.disabled,
-            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            self.value, self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_value(self: Self, value: f32) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            clamp_unit(value), self.children, self.svg, self.tag, self.style_explicit, self.handlers
+            clamp_unit(value), self.children, self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_cursor(self: Self, value: usize) -> Widget {
@@ -535,7 +648,7 @@ impl for Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, cursor, TextSelection::caret(cursor),
             self.style, self.direction, self.basis,
             self.grow, self.checked, self.focused, self.disabled, self.value, self.children, self.svg,
-            self.tag, self.style_explicit, self.handlers
+            self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_selection(self: Self, start: usize, end: usize) -> Widget {
@@ -549,7 +662,7 @@ impl for Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, cursor, selection, self.style,
             self.direction,
             self.basis, self.grow, self.checked, self.focused, self.disabled, self.value, self.children,
-            self.svg, self.tag, self.style_explicit, self.handlers
+            self.svg, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_svg(self: Self, value: SvgDocument) -> Widget {
@@ -557,14 +670,14 @@ impl for Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction,
             self.basis, self.grow, self.checked, self.focused, self.disabled, self.value, self.children,
-            value, self.tag, self.style_explicit, self.handlers
+            value, self.tag, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_tag(self: Self, value: str) -> Widget {
         ret Widget {
             self.kind, self.id, self.classes, self.attributes, self.text, self.cursor, self.selection,
             self.style, self.direction, self.basis, self.grow, self.checked, self.focused, self.disabled,
-            self.value, self.children, self.svg, value, self.style_explicit, self.handlers
+            self.value, self.children, self.svg, value, self.style_explicit, self.handlers, self.geometry_basis
         }
     }
     pub fn with_child(self: Self, child: Widget) -> Widget {
@@ -575,6 +688,10 @@ impl for Widget {
     pub fn with_on(self: Self, kind: u32, handler: dyn UiEventHandler) -> Widget {
         self.handlers.add(kind, false, handler)
         ret self
+    }
+    #attr(borrowed_self)
+    pub fn has_event_handlers(self: Self) -> bool {
+        ret self.handlers.len() > 0
     }
     pub fn with_on_capture(self: Self, kind: u32, handler: dyn UiEventHandler) -> Widget {
         self.handlers.add(kind, true, handler)
@@ -622,15 +739,18 @@ impl for Widget {
     pub fn push(self: mut Self, child: Widget) ->() {
         self.children.push(child) ret()
     }
+    #attr(borrowed_self)
     pub fn kind(self: Self) -> usize {
         ret self.kind
     }
+    #attr(borrowed_self)
     pub fn tag(self: Self) -> str {
         ret self.tag
     }
     /// Stable selector input used by the stylesheet cache. It intentionally
-    /// excludes text and children because neither participates in CSS selector
-    /// matching, while including every authored attribute and state flag.
+    /// includes authored attributes and local state flags. The CSS cache adds
+    /// text emptiness, structure and relational selector dependencies.
+    #attr(borrowed_self)
     pub fn selector_signature(self: Self) -> str {
         let mut signature = self.tag + "|" + Debug::fmt(self.kind) + "|" + self.id + "|" +
         self.classes + "|" + Debug::fmt(self.checked) + "|" + Debug::fmt(self.focused) + "|" +
@@ -640,18 +760,81 @@ impl for Widget {
         }
         ret signature
     }
+    /// Cache signature restricted to attributes that can affect this stylesheet.
+    #attr(borrowed_self)
+    pub fn selector_signature_for_attributes(self: Self, names: Vec[str]) -> str {
+        let mut signature = self.tag + "|" + Debug::fmt(self.kind) + "|" + self.id + "|" +
+        self.classes + "|" + Debug::fmt(self.checked) + "|" + Debug::fmt(self.focused) + "|" +
+        Debug::fmt(self.disabled)
+        for attribute in self.attributes {
+            for name in names {
+                if name == attribute.name() {
+                    signature = signature + "|@" + name + "=" + attribute.value()
+                    break
+                }
+            }
+        }
+        ret signature
+    }
+    /// Compares selector inputs without allocating a serialized cache key.
+    /// Text content matters to selectors only through emptiness; handlers and
+    /// SVG resources are deliberately not CSS inputs.
+    #attr(borrowed_self)
+    pub fn selector_equivalent(self: Self, other: Widget) -> bool {
+        ret self.kind == other.kind && self.id == other.id &&
+        self.tag == other.tag && self.classes == other.classes &&
+        self.checked == other.checked && self.focused == other.focused &&
+        self.disabled == other.disabled &&(self.text == "") ==(other.text == "") &&
+        self.children.len() == other.children.len() &&
+        widget_attributes_equal(self.attributes, other.attributes)
+    }
+    #attr(borrowed_self)
+    pub fn selector_inputs(self: Self) -> WidgetSelector {
+        ret WidgetSelector {
+            self.kind, self.id, self.tag, self.classes, self.attributes,
+            self.checked, self.focused, self.disabled, self.text == "", self.children.len()
+        }
+    }
+    /// A CSS-only tree. It keeps selector inputs and authored styles, but
+    /// cannot retain application event captures or renderer resources.
+    pub fn selector_tree(self: Self) -> Widget {
+        ret selector_tree_widget(self, UiEventHandlers::new(), SvgDocument::empty())
+    }
+    #attr(borrowed_self)
     pub fn has_explicit_style(self: Self) -> bool {
         ret self.style_explicit
     }
-    pub fn handlers(self: Self) -> UiEventHandlers < H > {
+    /// Overrides sizing as a retained property, without disabling the CSS cascade.
+    pub fn with_geometry_basis(self: Self, value: f32) -> Widget {
+        let mut next = self
+        next.geometry_basis = value
+        ret next
+    }
+    #attr(borrowed_self)
+    pub fn geometry_basis(self: Self) -> f32 {
+        ret self.geometry_basis
+    }
+    #attr(borrowed_self)
+    pub fn geometry_style(self: Self, computed: Style) -> Style {
+        ret if self.geometry_basis >= 0 {
+            computed.with_flex_basis(self.geometry_basis)
+        } else {
+            computed
+        }
+    }
+    #attr(borrowed_self)
+    pub fn handlers(self: Self) -> UiEventHandlers<H> {
         ret self.handlers
     }
+    #attr(borrowed_self)
     pub fn id(self: Self) -> str {
         ret self.id
     }
+    #attr(borrowed_self)
     pub fn classes(self: Self) -> str {
         ret self.classes
     }
+    #attr(borrowed_self)
     pub fn attribute(self: Self, name: str) -> Option[str] {
         let mut index = 0_usize
         while index < self.attributes.len() {
@@ -668,39 +851,51 @@ impl for Widget {
         }
         ret Option[str]::None
     }
+    #attr(borrowed_self)
     pub fn text(self: Self) -> str {
         ret self.text
     }
+    #attr(borrowed_self)
     pub fn cursor(self: Self) -> usize {
         ret self.cursor
     }
+    #attr(borrowed_self)
     pub fn selection(self: Self) -> TextSelection {
         ret self.selection
     }
+    #attr(borrowed_self)
     pub fn style(self: Self) -> Style {
         ret self.style
     }
+    #attr(borrowed_self)
     pub fn direction(self: Self) -> usize {
         ret self.direction
     }
+    #attr(borrowed_self)
     pub fn basis(self: Self) -> f32 {
         ret self.basis
     }
+    #attr(borrowed_self)
     pub fn grow(self: Self) -> f32 {
         ret self.grow
     }
+    #attr(borrowed_self)
     pub fn checked(self: Self) -> bool {
         ret self.checked
     }
+    #attr(borrowed_self)
     pub fn focused(self: Self) -> bool {
         ret self.focused
     }
+    #attr(borrowed_self)
     pub fn disabled(self: Self) -> bool {
         ret self.disabled
     }
+    #attr(borrowed_self)
     pub fn value(self: Self) -> f32 {
         ret self.value
     }
+    #attr(borrowed_self)
     pub fn range_start(self: Self) -> f32 {
         ret self.value
     }
@@ -710,12 +905,15 @@ impl for Widget {
     pub fn range_ticks(self: Self) -> usize {
         ret parse_widget_u64(self.attribute("data-luma-range-ticks").unwrap_or("0"), 0_u64) as usize
     }
+    #attr(borrowed_self)
     pub fn countdown_duration_ms(self: Self) -> u64 {
         ret parse_widget_u64(self.attribute("data-luma-countdown-duration").unwrap_or("0"), 0_u64)
     }
+    #attr(borrowed_self)
     pub fn countdown_cycle(self: Self) -> u64 {
         ret parse_widget_u64(self.attribute("data-luma-countdown-cycle").unwrap_or("0"), 0_u64)
     }
+    #attr(borrowed_self)
     pub fn children(self: Self) -> Vec[Widget] {
         ret self.children
     }
@@ -758,9 +956,41 @@ impl for Widget {
         let _complete = collect_widgets(self, unique, found)
         ret found
     }
+
+    /// Replaces one stable-ID subtree in an immutable widget tree.
+    pub fn replace_by_id(self: Self, expected: str, replacement: Widget) -> Widget {
+        ret self.replace_branch(expected, replacement).0
+    }
+    pub fn replace_branch(self: Self, expected: str, replacement: Widget) ->(Widget, bool) {
+        if expected != "" && self.id() == expected {
+            ret(replacement, true)
+        }
+        let mut index = 0_usize
+        for child in self.children() {
+            let updated = child.replace_branch(expected, replacement)
+            if updated.1 {
+                let mut children = Vec[Widget]::new()
+                let mut child_index = 0_usize
+                for previous in self.children() {
+                    children.push(if child_index == index {
+                            updated.0
+                        } else {
+                            previous
+                        }
+                    )
+                    child_index += 1
+                }
+                ret(self.with_children(children), true)
+            }
+            index += 1
+        }
+        ret(self, false)
+    }
+    #attr(borrowed_self)
     pub fn svg(self: Self) -> SvgDocument {
         ret self.svg
     }
+    #attr(borrowed_self)
     pub fn preferred_size(self: Self) -> Size {
         if self.kind == widget_label() || self.kind == widget_rich_text() {
             ret Size::new((self.text.len() as f32) * 8.0_f32, self.basis)
@@ -780,7 +1010,7 @@ impl for Widget {
 
 fn intrinsic_widget_size(widget: Widget, maximum: bool) -> Size {
     let children = widget.children()
-    let style = widget.style()
+    let style = widget.style
     let padding = style.padding()
     let chrome_width = padding.left() + padding.right() + style.border_width() * 2.0_f32
     let chrome_height = padding.top() + padding.bottom() + style.border_width() * 2.0_f32
@@ -878,11 +1108,34 @@ fn widget_value(kind: usize, id: str, text: str, style: Style, direction: usize,
         kind, id, "", Vec[WidgetAttribute]::new(), text, text.char_len(), TextSelection::caret(text.char_len()),
         style,
         direction, basis, grow, checked, false, false, value, Vec[Widget]::new(), SvgDocument::empty(),
-        default_widget_tag(kind), false, UiEventHandlers::new()
+        default_widget_tag(kind), false, UiEventHandlers::new(), - 1.0_f32
+    }
+}
+
+fn selector_tree_widget(widget: Widget, empty_handlers: UiEventHandlers<H>,
+    empty_svg: SvgDocument,) -> Widget {
+    let mut children = Vec[Widget]::new()
+    for child in widget.children {
+        children.push(selector_tree_widget(child, empty_handlers, empty_svg))
+    }
+    ret Widget {
+        widget.kind, widget.id, widget.classes, widget.attributes,
+        if widget.text == "" {
+            ""
+        } else {
+            "_"
+        }
+        , 0, TextSelection::caret(0),
+        widget.style, widget.direction, widget.basis, widget.grow, widget.checked,
+        widget.focused, widget.disabled, 0, children, empty_svg, widget.tag,
+        widget.style_explicit, empty_handlers, widget.geometry_basis
     }
 }
 
 fn default_widget_tag(kind: usize) -> str {
+    if kind == widget_canvas() {
+        ret "canvas"
+    }
     if kind == widget_panel() {
         ret "div"
     }
@@ -980,7 +1233,7 @@ fn parse_widget_f32(value: str, fallback: f32) -> f32 {
 
 /// Dispatches capture, target and bubble listeners along the retained widget
 /// ancestry. Returns false when a listener prevented the default action.
-pub fn dispatch_widget_event(root: Widget, target: str, event: UiEvent < H >) -> bool {
+pub fn dispatch_widget_event(root: Widget, target: str, event: UiEvent<H>) -> bool {
     let mut path = Vec[Widget]::new()
     if !collect_widget_event_path(root, target, path) {
         ret true
@@ -988,7 +1241,7 @@ pub fn dispatch_widget_event(root: Widget, target: str, event: UiEvent < H >) ->
     ret dispatch_widget_event_path(path, event)
 }
 
-fn dispatch_widget_event_path(path: Vec[Widget], event: UiEvent < H >) -> bool {
+fn dispatch_widget_event_path(path: Vec[Widget], event: UiEvent<H>) -> bool {
     let kind = event.kind()
     let mut index = 0_usize
     while index < path.len() {
@@ -1093,6 +1346,35 @@ pub struct WidgetLayout {
     bounds: Rect
     children: Vec[WidgetLayout]
     paint_bounds: Rect
+    source_index: usize
+}
+
+#attr(test)
+fn scrollbar_geometry_tracks_content_and_clamps_drag() -> bool {
+    let bounds = Rect::new(10.0_f32, 20.0_f32, 200.0_f32, 100.0_f32)
+    let content_bounds = Rect::new(10.0_f32, - 430.0_f32, 180.0_f32, 1000.0_f32)
+    let child = WidgetLayout {
+        Widget::spacer(0.0_f32), content_bounds,
+        Vec[WidgetLayout]::new(), content_bounds, 0
+    }
+    let mut children = Vec[WidgetLayout]::new()
+    children.push(child)
+    let root = Widget::panel("scroll").with_attribute("data-luma-scrollable", "true")
+    .with_computed_style(Style::default().with_scroll(0.0_f32, 450.0_f32))
+    let layout = WidgetLayout {
+        root, bounds, children, bounds, 0
+    }
+    let thumb = layout.scrollbar_thumb()
+    let empty = WidgetLayout {
+        Widget::panel("empty"), bounds,
+        Vec[WidgetLayout]::new(), bounds, 0
+    }
+    ret layout.scroll_max_y() == 900.0_f32 && thumb.height() == 24.0_f32 &&
+    thumb.y() == 58.0_f32 && thumb.right() <= bounds.right() &&
+    layout.scrollbar_offset_at(70.0_f32, 12.0_f32) == 450.0_f32 &&
+    layout.scrollbar_offset_at( - 100.0_f32, 12.0_f32) == 0.0_f32 &&
+    layout.scrollbar_offset_at(1000.0_f32, 12.0_f32) == 900.0_f32 &&
+    empty.scrollbar_thumb().height() == 0.0_f32
 }
 
 struct WidgetPath {
@@ -1100,7 +1382,6 @@ struct WidgetPath {
     indices: Vec[usize]
     bounds: Rect
     clip: Option[Rect]
-    widget: Widget
     disabled: bool
     visible: bool
     pointer_events: bool
@@ -1146,17 +1427,17 @@ fn collect_widget_paths(layout: WidgetLayout, indices: Vec[usize],
     inherited_clip: Option[Rect], generation: usize,
     paths: mut Vec[WidgetPath],) ->() {
     let bounds = layout.bounds()
-    let clip = if layout.widget().style().layout().overflow_hidden() {
+    let widget = layout.widget()
+    let clip = if widget.style.layout().overflow_hidden() {
         intersect_clip(inherited_clip, bounds)
     } else {
         inherited_clip
     }
-    let id = layout.widget().id()
+    let id = widget.id()
     if id != "" {
-        let widget = layout.widget()
         paths.push(WidgetPath {
-                id, indices, bounds, clip, widget, widget.disabled(),
-                widget.style().visible(), widget.style().pointer_events(),
+                id, indices, bounds, clip, widget.disabled(),
+                widget.style.visible(), widget.style.pointer_events(),
                 generation
             }
             ,
@@ -1213,7 +1494,7 @@ fn inherited_clip_at_path(layout: WidgetLayout, indices: Vec[usize],
         ret inherited
     }
     let bounds = layout.bounds()
-    let clip = if layout.widget().style().layout().overflow_hidden() {
+    let clip = if layout.widget().style.layout().overflow_hidden() {
         intersect_clip(inherited, bounds)
     } else {
         inherited
@@ -1289,14 +1570,14 @@ fn point_inside_clip(clip: Option[Rect], x: f32, y: f32) -> bool {
 
 fn widget_paint_bounds(widget: Widget, bounds: Rect,
     children: Vec[WidgetLayout],) -> Rect {
-    let outline = widget.style().outline()
+    let outline = widget.style.outline()
     let outline_extent = outline.width() +
     if outline.offset() > 0.0_f32 {
         outline.offset()
     } else {
         0.0_f32
     }
-    let shadow = widget.style().shadow()
+    let shadow = widget.style.shadow()
     let shadow_extent = if shadow.inset() {
         0.0_f32
     } else {
@@ -1333,7 +1614,7 @@ fn widget_paint_bounds(widget: Widget, bounds: Rect,
     let mut result = Rect::new(bounds.x() - left, bounds.y() - top,
         bounds.width() + left + right, bounds.height() + top + bottom,)
     for child in children {
-        let child_bounds = if widget.style().layout().overflow_hidden() {
+        let child_bounds = if widget.style.layout().overflow_hidden() {
             intersect_rect(child.paint_bounds(), bounds)
         } else {
             child.paint_bounds()
@@ -1424,8 +1705,111 @@ fn widget_attributes_equal(lhs: Vec[WidgetAttribute],
 }
 
 // 0 = unchanged, 1 = paint, 2 = layout, 3 = structure.
+pub fn widget_change_kind(previous: Widget, next: Widget) -> u32 {
+    let mut targets = Vec[str]::new()
+    ret collect_widget_changes(previous, next, targets)
+}
+
 fn collect_widget_changes(previous: Widget, next: Widget,
     targets: mut Vec[str],) -> u32 {
+    ret collect_widget_changes_owned(previous, next, targets, "")
+}
+
+// Selector, focus and paint changes keep assigned geometry when every
+// descriptor which can affect measurement and child ordering is unchanged.
+fn component_paint_compatible(previous: Widget, next: Widget) -> bool {
+    if previous.kind() != next.kind() || previous.id() != next.id() || previous.tag() != next.tag() ||
+    previous.direction() != next.direction() || previous.basis() != next.basis() || previous.grow() != next.grow() ||
+    previous.geometry_basis() != next.geometry_basis() || previous.text() != next.text() ||
+    previous.value() != next.value() || previous.checked() != next.checked() ||
+    !previous.style.layout_equivalent(next.style) || !widget_attributes_equal(previous.attributes, next.attributes) ||
+    !previous.svg().equivalent(next.svg()) || previous.children().len() != next.children().len() {
+        ret false
+    }
+    let mut index = 0_usize
+    for child in previous.children() {
+        match next.children().get(index) {
+            Some(other) => {
+                if !component_paint_compatible(child, other) {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+        index += 1_usize
+    }
+    ret true
+}
+
+#attr(test)
+fn widget_dispatch_policy_preserves_default_and_callback_modes() -> bool {
+    let root = Widget::button("callback", "Button").with_on_click( | event | {
+            event.prevent_default()
+        }
+    )
+    let mut ui = ReactiveUi::new(layout_widget(root, Rect::new(0_f32, 0_f32, 200_f32, 40_f32)))
+    if ui.dispatch_event("callback", UiEvent::new(ui_event_click(), "callback")) {
+        std::io::eprintln("callback policy: initial callback did not prevent default")
+        ret false
+    }
+    ui.set_widget_event_dispatch(false)
+    if !ui.dispatch_event("callback", UiEvent::new(ui_event_click(), "callback")) {
+        std::io::eprintln("callback policy: disabled callback still prevented default")
+        ret false
+    }
+    ui.set_widget_event_dispatch(true)
+    let allowed = ui.dispatch_event("callback", UiEvent::new(ui_event_click(), "callback"))
+    if allowed {
+        std::io::eprintln("callback policy: callback did not resume")
+    }
+    ret !allowed
+}
+
+#attr(test)
+fn retained_component_paint_keeps_bounds_and_refreshes_hit_state() -> bool {
+    let button = Widget::button("paint-child", "Content").with_style(Style::panel().with_width(80_f32).with_height(28_f32))
+    let component = Widget::panel("paint-component").with_style(Style::panel().with_width(180_f32).with_height(60_f32)).with_child(button)
+    let root = Widget::panel("paint-root").with_child(component).with_child(Widget::button("paint-outside", "Outside"))
+    let mut ui = ReactiveUi::new(layout_widget(root, Rect::new(0_f32, 0_f32, 400_f32, 300_f32)))
+    let outside = ui.segment_generation("paint-outside")
+    let before = ui.find_layout("paint-child").unwrap_or(ui.layout()).bounds()
+    let child = button.with_computed_style(button.style().with_background(Color::rgb(10, 20, 30)).with_pointer_events(false))
+    let changed = component.with_classes("selected").with_children(vec![child])
+    let path = vec![0_usize]
+    if !ui.commit_styled_subtree(path, changed, changed) {
+        ret false
+    }
+    let after = ui.find_layout("paint-child").unwrap_or(ui.layout()).bounds()
+    let actual = ui.find_widget("paint-child").unwrap_or(button)
+    if !same_layout_bounds(before, after) || actual.style().background().red() != 10_u8 || actual.style().pointer_events() ||
+    ui.hit(after.x() + 1_f32, after.y() + 1_f32) == "paint-child" || ui.segment_generation("paint-outside") != outside {
+        ret false
+    }
+    let wider = child.with_computed_style(child.style().with_width(100_f32))
+    let resized = component.with_children(vec![wider])
+    if !ui.commit_styled_subtree(path, resized, resized) {
+        ret false
+    }
+    if ui.find_layout("paint-child").unwrap_or(ui.layout()).bounds().width() != 100_f32 ||
+    ui.segment_generation("paint-outside") != outside {
+        ret false
+    }
+    let renamed = component.with_children(vec![wider.with_id("paint-renamed")])
+    if !ui.commit_styled_subtree(path, renamed, renamed) || ui.find_widget("paint-child").is_some() ||
+    ui.find_widget("paint-renamed").is_none() {
+        ret false
+    }
+    let inserted = renamed.with_children(vec![wider.with_id("paint-renamed"), Widget::label("Tail").with_id("paint-tail")])
+    if !ui.commit_styled_subtree(path, inserted, inserted) {
+        ret false
+    }
+    ret ui.find_widget("paint-tail").is_some() && ui.segment_generation("paint-outside") == outside
+}
+
+fn collect_widget_changes_owned(previous: Widget, next: Widget,
+    targets: mut Vec[str], owner: str,) -> u32 {
     if previous.kind() != next.kind() || previous.id() != next.id() || previous.tag() != next.tag() {
         ret 3_u32
     }
@@ -1437,8 +1821,9 @@ fn collect_widget_changes(previous: Widget, next: Widget,
     let mut change = 0_u32
     if previous.direction() != next.direction() ||
     previous.basis() != next.basis() || previous.grow() != next.grow() ||
+    previous.geometry_basis() != next.geometry_basis() ||
     previous.has_explicit_style() != next.has_explicit_style() ||
-    !previous.style().layout_equivalent(next.style()) {
+    !previous.style.layout_equivalent(next.style) {
         change = 2_u32
     }
     let content_changed = previous.text() != next.text() ||
@@ -1452,13 +1837,18 @@ fn collect_widget_changes(previous: Widget, next: Widget,
     !previous.svg().equivalent(next.svg()) ||
     previous.classes() != next.classes() ||
     !widget_attributes_equal(previous.attributes, next.attributes) ||
-    !previous.style().equivalent(next.style())
+    !previous.style.equivalent(next.style)
     if content_changed && change < 1_u32 {
-        if next.id() == "" {
+        if next.id() == "" &&(owner == "" || previous.text() != next.text()) {
             change = 2_u32
         } else {
             change = 1_u32
-            targets.push(next.id())
+            targets.push(if next.id() == "" {
+                    owner
+                } else {
+                    next.id()
+                }
+            )
         }
     }
     let mut index = 0_usize
@@ -1467,8 +1857,13 @@ fn collect_widget_changes(previous: Widget, next: Widget,
             Widget::spacer(0.0_f32),)
         let next_child = next_children.get(index).unwrap_or(
             Widget::spacer(0.0_f32),)
-        let child_change = collect_widget_changes(previous_child, next_child,
-            targets,)
+        let child_change = collect_widget_changes_owned(previous_child, next_child,
+            targets, if next.id() == "" {
+                owner
+            } else {
+                next.id()
+            }
+            ,)
         if child_change > change {
             change = child_change
         }
@@ -1481,22 +1876,122 @@ fn collect_widget_changes(previous: Widget, next: Widget,
 }
 
 impl for WidgetLayout {
+    // Paint/source order normally coincide. Fall back to a search for CSS
+    // order, z-index, hidden nodes and absolute children, without allocating
+    // an owned Option<WidgetLayout> table on each recursive layout call.
+    #attr(borrowed_self)
+    pub fn source_child(self: Self, source: usize) -> Option[WidgetLayout] {
+        match self.children.get(source) {
+            Some(child) => {
+                if child.source_index == source {
+                    ret Option[WidgetLayout]::Some(child)
+                }
+            }
+            None => {
+            }
+        }
+        for child in self.children {
+            if child.source_index == source {
+                ret Option[WidgetLayout]::Some(child)
+            }
+        }
+        ret Option[WidgetLayout]::None
+    }
+    pub fn with_source_index(self: Self, index: usize) -> Self {
+        ret Self {
+            self.widget, self.bounds, self.children, self.paint_bounds, index
+        }
+    }
+    pub fn source_children(self: Self) -> Vec[Option[WidgetLayout]] {
+        let mut result = Vec[Option[WidgetLayout]]::new()
+        for child in self.widget.children() {
+            result.push(Option[WidgetLayout]::None)
+        }
+        for child in self.children {
+            if child.source_index < result.len() {
+                result.set(child.source_index, Option[WidgetLayout]::Some(child))
+            }
+        }
+        ret result
+    }
+    /// Vertical content extent, including the retained scroll translation.
+    pub fn scroll_max_y(self: Self) -> f32 {
+        let mut bottom = self.bounds.bottom()
+        let offset = self.widget.style.layout().scroll().y()
+        for child in self.children {
+            let edge = child.paint_bounds().bottom() + offset
+            if edge > bottom {
+                bottom = edge
+            }
+        }
+        ret bottom - self.bounds.bottom()
+    }
+    /// Shared scrollbar geometry for painting and pointer interaction.
+    pub fn scrollbar_thumb(self: Self) -> Rect {
+        let bounds = self.bounds
+        let maximum = self.scroll_max_y()
+        if self.widget.attribute("data-luma-scrollable").unwrap_or("") != "true" ||
+        maximum <= 0.0_f32 || bounds.height() <= 0.0_f32 {
+            ret Rect::new(0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32)
+        }
+        let raw_height = bounds.height() * bounds.height() /(bounds.height() + maximum)
+        let height = if raw_height < 24.0_f32 {
+            24.0_f32
+        } else {
+            raw_height
+        }
+        let height = if height > bounds.height() {
+            bounds.height()
+        } else {
+            height
+        }
+        let offset = self.widget.style.layout().scroll().y()
+        let offset = if offset < 0.0_f32 {
+            0.0_f32
+        } elif offset > maximum {
+            maximum
+        } else {
+            offset
+        }
+        ret Rect::new(bounds.right() - 10.0_f32,
+            bounds.y() +(bounds.height() - height) * offset / maximum,
+            8.0_f32, height,)
+    }
+    pub fn scrollbar_offset_at(self: Self, pointer_y: f32, grab: f32) -> f32 {
+        let thumb = self.scrollbar_thumb()
+        let travel = self.bounds.height() - thumb.height()
+        if travel <= 0.0_f32 {
+            ret 0.0_f32
+        }
+        let fraction =(pointer_y - self.bounds.y() - grab) / travel
+        ret self.scroll_max_y() * if fraction < 0.0_f32 {
+            0.0_f32
+        } elif fraction > 1.0_f32 {
+            1.0_f32
+        } else {
+            fraction
+        }
+    }
+    #attr(borrowed_self)
     pub fn widget(self: Self) -> Widget {
         ret self.widget
     }
+    #attr(borrowed_self)
     pub fn bounds(self: Self) -> Rect {
         ret self.bounds
     }
+    #attr(borrowed_self)
     pub fn paint_bounds(self: Self) -> Rect {
         ret self.paint_bounds
     }
+    #attr(borrowed_self)
     pub fn children(self: Self) -> Vec[WidgetLayout] {
         ret self.children
     }
     pub fn hit(self: Self, x: f32, y: f32) -> str {
         let inside = x >= self.bounds.x() && y >= self.bounds.y() &&
         x < self.bounds.right() && y < self.bounds.bottom()
-        if self.widget.style().layout().overflow_hidden() && !inside {
+        if self.widget.style.layout().overflow_hidden() && !inside {
             ret ""
         }
         let mut index = self.children.len()
@@ -1514,7 +2009,7 @@ impl for WidgetLayout {
             }
         }
         if inside {
-            if self.widget.disabled() || !self.widget.style().visible() || !self.widget.style().pointer_events()
+            if self.widget.disabled() || !self.widget.style.visible() || !self.widget.style.pointer_events()
             {
                 ret ""
             }
@@ -1569,23 +2064,59 @@ impl for WidgetLayout {
         ret Option[Widget]::None
     }
 
-    fn widget_at_path(self: Self, indices: Vec[usize], depth: usize) ->
+    #attr(borrowed_self)
+    pub fn widget_at_path(self: Self, indices: Vec[usize], depth: usize) ->
     Option[Widget] {
         if depth >= indices.len() {
             ret Option[Widget]::Some(self.widget)
         }
         let index = indices.get(depth).unwrap_or(self.children.len())
-        match self.children.get(index) {
-            Option::Some(child) => {
-                ret child.widget_at_path(indices, depth + 1_usize)
-            }
-            Option::None => {
+        if index < self.children.len() {
+            ret self.children.get_unchecked_borrowed(index).widget_at_path(indices, depth + 1_usize)
+        }
+        ret Option[Widget]::None
+    }
+
+    // Binding identities follow authored order, not paint stacking, CSS order
+    // or the subset of children with display enabled.
+    pub fn source_widget_at_path(self: Self, indices: Vec[usize], depth: usize) -> Option[Widget] {
+        if depth >= indices.len() {
+            ret Option[Widget]::Some(self.widget)
+        }
+        let source = indices.get(depth).unwrap_or(self.widget.children().len())
+        for child in self.children {
+            if child.source_index == source {
+                ret child.source_widget_at_path(indices, depth + 1)
             }
         }
         ret Option[Widget]::None
     }
 
-    fn layout_at_path(self: Self, indices: Vec[usize], depth: usize) ->
+    pub fn patch_source_widget_at_path(self: mut Self, indices: Vec[usize], depth: usize,
+        replacement: Widget,) -> bool {
+        if depth >= indices.len() {
+            self.widget = replacement.with_children(self.widget.children())
+            self.paint_bounds = widget_paint_bounds(self.widget, self.bounds, self.children)
+            ret true
+        }
+        let source = indices.get(depth).unwrap_or(self.widget.children().len())
+        let mut index = 0_usize
+        for child in self.children {
+            if child.source_index == source {
+                let mut updated = child
+                if !updated.patch_source_widget_at_path(indices, depth + 1, replacement) {
+                    ret false
+                }
+                self.children.set(index, updated)
+                self.paint_bounds = widget_paint_bounds(self.widget, self.bounds, self.children)
+                ret true
+            }
+            index += 1
+        }
+        ret false
+    }
+
+    pub fn layout_at_path(self: Self, indices: Vec[usize], depth: usize) ->
     Option[WidgetLayout] {
         if depth >= indices.len() {
             ret Option[WidgetLayout]::Some(self)
@@ -1601,7 +2132,7 @@ impl for WidgetLayout {
         ret Option[WidgetLayout]::None
     }
 
-    fn patch_widget_at_path(self: mut Self, indices: Vec[usize], depth: usize,
+    pub fn patch_widget_at_path(self: mut Self, indices: Vec[usize], depth: usize,
         replacement: Widget,) -> bool {
         if depth >= indices.len() {
             self.widget = replacement.with_children(self.widget.children())
@@ -1627,7 +2158,7 @@ impl for WidgetLayout {
         ret false
     }
 
-    fn replace_subtree_at_path(self: mut Self, indices: Vec[usize],
+    pub fn replace_subtree_at_path(self: mut Self, indices: Vec[usize],
         depth: usize, replacement: Widget,) -> bool {
         if depth >= indices.len() {
             let updated = layout_widget(replacement, self.bounds)
@@ -1654,15 +2185,116 @@ impl for WidgetLayout {
         ret false
     }
 
+    fn refresh_component(self: mut Self, widget: Widget) ->() {
+        self.widget = widget
+        let mut index = 0_usize
+        for previous in self.children {
+            match widget.children().get(previous.source_index) {
+                Some(child) => {
+                    let mut updated = previous
+                    updated.refresh_component(child)
+                    self.children.set(index, updated)
+                }
+                None => {
+                }
+            }
+            index += 1_usize
+        }
+        self.paint_bounds = widget_paint_bounds(self.widget, self.bounds, self.children)
+        ret()
+    }
+
+    /// Refreshes a component whose geometry and source topology were validated.
+    pub fn refresh_component_at_path(self: mut Self, indices: Vec[usize], depth: usize, widget: Widget) -> bool {
+        if depth >= indices.len() {
+            self.refresh_component(widget) ret true
+        }
+        let index = indices.get(depth).unwrap_or(self.children.len())
+        match self.children.get(index) {
+            Some(child) => {
+                let mut updated = child
+                if updated.refresh_component_at_path(indices, depth + 1_usize, widget) {
+                    self.children.set(index, updated)
+                    self.paint_bounds = widget_paint_bounds(self.widget, self.bounds, self.children)
+                    ret true
+                }
+            }
+            None => {
+            }
+        }
+        ret false
+    }
+
     /// Reconstructs the current retained widget tree from layout nodes. Unlike
     /// the original root widget, this includes every subtree replacement made
     /// since the last full layout.
     pub fn retained_widget(self: Self) -> Widget {
+        if self.children.len() == 0_usize {
+            ret self.widget
+        }
         let mut retained_children = Vec[Widget]::new()
-        for child in self.children {
-            retained_children.push(child.retained_widget())
+        let source = self.source_children()
+        let mut index = 0_usize
+        for original in self.widget.children() {
+            match source.get(index).unwrap_or(Option[WidgetLayout]::None) {
+                Some(child) => retained_children.push(child.retained_widget())
+                None => retained_children.push(original)
+            }
+            index += 1
         }
         ret self.widget.with_children(retained_children)
+    }
+
+    // Flex measures only immediate descriptors. Read them from current layout
+    // nodes instead of reconstructing every unchanged descendant. Intrinsic
+    // grid tracks still need a complete subtree for min/max-content sizing.
+    #attr(borrowed_self)
+    pub fn geometry_input(self: Self) -> Widget {
+        if self.children.len() == 0 {
+            ret self.widget
+        }
+        let mut children = Vec[Widget]::with_capacity(self.widget.children().len())
+        let mut index = 0_usize
+        for original in self.widget.children() {
+            let child = match self.source_child(index) {
+                Some(layout) => layout.widget() None => original
+            }
+            children.push(child)
+            index += 1
+        }
+        let flex = self.widget.style().layout().flex()
+        if flex.grid() {
+            let mut placements = Vec[GridPlacement]::new()
+            for child in children {
+                if child.style().layout().flex().displayed() &&
+                !child.style().layout().position().absolute() {
+                    placements.push(child.style().layout().grid_placement())
+                }
+            }
+            if grid_needs_content_sizes(flex.column_template(), flex.row_template(),
+                flex.auto_column_template(), flex.auto_row_template(), placements,) {
+                ret self.retained_widget()
+            }
+        }
+        ret self.widget.with_children(children)
+    }
+
+    // A position-only constraint change cannot alter local flex/grid sizing.
+    // Translate retained boxes, including overflow, without measuring again.
+    pub fn translated(self: Self, dx: f32, dy: f32) -> Self {
+        let mut children = Vec[WidgetLayout]::with_capacity(self.children.len())
+        for child in self.children {
+            children.push(child.translated(dx, dy))
+        }
+        ret Self {
+            self.widget,
+            Rect::new(self.bounds.x() + dx, self.bounds.y() + dy,
+                self.bounds.width(), self.bounds.height(),),
+            children,
+            Rect::new(self.paint_bounds.x() + dx, self.paint_bounds.y() + dy,
+                self.paint_bounds.width(), self.paint_bounds.height(),),
+            self.source_index
+        }
     }
 
     // Replaces paint-only widget state while preserving the geometry of the
@@ -1773,7 +2405,10 @@ impl for WidgetLayout {
     /// Parent and sibling geometry stays intact.
     pub fn relayout_subtree(self: mut Self, id: str) -> bool {
         if self.widget.id() == id {
-            let updated = layout_widget(self.widget, self.bounds)
+            // Paint patches update retained layout nodes, not the original
+            // widget's child snapshots. Reflow must preserve their latest
+            // styles, values and interaction state.
+            let updated = layout_widget(self.retained_widget(), self.bounds)
             self.widget = updated.widget
             self.children = updated.children
             self.paint_bounds = updated.paint_bounds
@@ -1834,21 +2469,36 @@ impl for WidgetLayout {
 fn restyle_widget_layout(previous: WidgetLayout, widget: Widget) -> WidgetLayout {
     let previous_children = previous.children()
     let source_children = widget.children()
-    let content = previous.bounds().inset(widget.style().padding())
-    let scroll = widget.style().layout().scroll()
+    if previous_children.len() == 0_usize && source_children.len() == 0_usize {
+        ret WidgetLayout {
+            widget, previous.bounds(), previous_children,
+            widget_paint_bounds(widget, previous.bounds(), previous_children), previous.source_index
+        }
+    }
+    let content = previous.bounds().inset(widget.style.padding())
+    let scroll = widget.style.layout().scroll()
     let positioned_content = Rect::new(content.x() - scroll.x(), content.y() - scroll.y(), content.width(),
         content.height(),)
-    let mut flow = Vec[Widget]::new()
-    let mut positioned = Vec[Widget]::new()
+    let by_source = previous.source_children()
+    let mut flow = Vec[IndexedWidget]::new()
+    let mut positioned = Vec[IndexedWidget]::new()
     let mut index = 0_usize
     while index < source_children.len() {
         match source_children.get(index) {
             Option[Widget]::Some(child) => {
-                if child.style().layout().flex().displayed() {
-                    if child.style().layout().position().absolute() {
-                        positioned.push(child)
+                if child.style.layout().flex().displayed() {
+                    if child.style.layout().position().absolute() {
+                        positioned.push(IndexedWidget {
+                                child, index
+                            }
+                            ,
+                        )
                     } else {
-                        flow.push(child)
+                        flow.push(IndexedWidget {
+                                child, index
+                            }
+                            ,
+                        )
                     }
                 }
             }
@@ -1859,24 +2509,23 @@ fn restyle_widget_layout(previous: WidgetLayout, widget: Widget) -> WidgetLayout
     }
     flow = ordered_widgets(flow)
     let mut layouts = Vec[WidgetLayout]::new()
-    let mut previous_index = 0_usize
     index = 0_usize
     while index < flow.len() {
         match flow.get(index) {
-            Option[Widget]::Some(child) => {
-                match previous_children.get(previous_index) {
+            Option[IndexedWidget]::Some(item) => {
+                let child = item.widget
+                match by_source.get(item.index).unwrap_or(Option[WidgetLayout]::None) {
                     Option[WidgetLayout]::Some(old_child) => {
                         layouts.push(restyle_widget_layout(old_child, child))
                     }
                     Option[WidgetLayout]::None => {
                         // A structural change is outside the fast-path contract,
                         // but laying out the new subtree keeps the result valid.
-                        layouts.push(layout_widget(child, previous.bounds()))
+                        layouts.push(layout_widget(child, previous.bounds()).with_source_index(item.index))
                     }
                 }
-                previous_index = previous_index + 1_usize
             }
-            Option[Widget]::None => {
+            Option[IndexedWidget]::None => {
             }
         }
         index = index + 1_usize
@@ -1884,10 +2533,10 @@ fn restyle_widget_layout(previous: WidgetLayout, widget: Widget) -> WidgetLayout
     index = 0_usize
     while index < positioned.len() {
         match positioned.get(index) {
-            Option[Widget]::Some(child) => {
-                layouts.push(layout_widget(child, absolute_child_rect(child, positioned_content)))
+            Option[IndexedWidget]::Some(item) => {
+                layouts.push(layout_widget(item.widget, absolute_child_rect(item.widget, positioned_content)).with_source_index(item.index))
             }
-            Option[Widget]::None => {
+            Option[IndexedWidget]::None => {
             }
         }
         index = index + 1_usize
@@ -1895,8 +2544,85 @@ fn restyle_widget_layout(previous: WidgetLayout, widget: Widget) -> WidgetLayout
     let stacked = stacked_layouts(layouts)
     ret WidgetLayout {
         widget, previous.bounds(), stacked,
-        widget_paint_bounds(widget, previous.bounds(), stacked)
+        widget_paint_bounds(widget, previous.bounds(), stacked), previous.source_index
     }
+}
+
+#attr(test)
+fn retained_source_order_survives_stacking_and_reflow() -> bool {
+    let mut root = Widget::panel("root")
+    root.push(Widget::label("first").with_style(Style::default().with_z_index(20).with_order(2)).with_flex(32.0, 0.0))
+    root.push(Widget::label("hidden").with_style(Style::default().with_displayed(false)))
+    root.push(Widget::label("second").with_style(Style::default().with_z_index( - 2)).with_flex(24.0, 0.0))
+    root.push(Widget::button("save", "Save").with_flex(28.0, 0.0))
+    root.push(Widget::button("popup", "Popup").with_style(Style::default().with_absolute(true)
+            .with_top(80.0).with_width(80.0).with_height(90.0).with_z_index(10)))
+    let bounds = Rect::new(0.0, 0.0, 320.0, 240.0)
+    let initial = layout_widget(root, bounds)
+    let original = initial.source_children()
+    let mut current = layout_widget(root, bounds)
+    for pass in 0..20 {
+        let retained = current.retained_widget()
+        if retained.children().len() != root.children().len() {
+            ret false
+        }
+        let mut index = 0_usize
+        for source in root.children() {
+            if retained.children().get(index).unwrap_or(Widget::spacer(0.0)).text() != source.text() {
+                ret false
+            }
+            index += 1
+        }
+        // Data-only reconciliation must use the same mapping as restyling.
+        refresh_layout_data(current, retained)
+        current = current.restyle(retained)
+        let next = current.source_children()
+        for index in 0..original.len() {
+            match original.get(index).unwrap_or(Option[WidgetLayout]::None) {
+                Some(before) => {
+                    match next.get(index).unwrap_or(Option[WidgetLayout]::None) {
+                        Some(after) => {
+                            if before.bounds().x() != after.bounds().x() || before.bounds().y() != after.bounds().y() ||
+                            before.bounds().width() != after.bounds().width() || before.bounds().height() != after.bounds().height() {
+                                ret false
+                            }
+                        }
+                        None => {
+                            ret false
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        let _reflowed = current.relayout_subtree("root")
+    }
+    ret true
+}
+
+fn patch_authored_path(root: Widget, indices: Vec[usize], depth: usize,
+    local: Widget, branch: bool,) -> Widget {
+    if depth == indices.len() {
+        ret if branch {
+            local
+        } else {
+            local.with_children(root.children())
+        }
+    }
+    let selected = indices.get(depth).unwrap_or(root.children().len())
+    let mut children = Vec[Widget]::new()
+    let mut index = 0_usize
+    for child in root.children() {
+        children.push(if index == selected {
+                patch_authored_path(child, indices, depth + 1, local, branch)
+            } else {
+                child
+            }
+        )
+        index += 1
+    }
+    ret root.with_children(children)
 }
 
 /// Owns a persistent layout and records the smallest class of work required
@@ -1905,14 +2631,159 @@ fn restyle_widget_layout(previous: WidgetLayout, widget: Widget) -> WidgetLayout
 pub struct ReactiveUi {
     layout: WidgetLayout
     paths: Vec[WidgetPath]
+    lookup: RetainedWidgetIndex
     paint_targets: Vec[str]
     layout_targets: Vec[str]
-    interaction_bases: Vec[Widget]
     transitions: Vec[StyleTransition]
     range_transitions: Vec[RangeTransition]
     reduced_motion: bool
     structure_dirty: bool
     generation: usize
+    full_repaint: bool
+    declarative_root: Widget
+    hovered_id: str
+    active_id: str
+    focused_id: str
+    keyboard_focus: bool
+    scroll_offsets: Vec[RetainedScroll]
+    damage: Vec[PaintDamage]
+    presentation_pending: bool
+    widget_events: bool
+}
+
+struct PaintDamage {
+    id: str
+    bounds: Rect
+}
+
+struct RetainedScroll {
+    id: str
+    x: f32
+    y: f32
+}
+
+// Persistent ID index for reconciling reordered children. Store path indices,
+// not copies of the large Widget payload, and verify IDs after hash collisions.
+struct RetainedWidgetIndex {
+    ids: Vec[str]
+    heads: Vec[usize]
+    links: Vec[usize]
+}
+
+fn retained_widget_bucket(id: str) -> usize {
+    let mut hash = 1469598103934665603_u64
+    for index in 0_usize..id.len() {
+        hash =(hash ^ id.byte_at(index) as u64) * 1099511628211_u64
+    }
+    ret(hash % 256_u64) as usize
+}
+
+impl for RetainedWidgetIndex {
+    pub fn new(paths: Vec[WidgetPath]) -> Self {
+        let mut ids = Vec[str]::new()
+        let mut heads = Vec[usize]::new()
+        let mut links = Vec[usize]::new()
+        for _index in 0_usize..256_usize {
+            heads.push(0_usize)
+        }
+        for entry in paths {
+            links.push(0_usize)
+            ids.push(entry.id)
+        }
+        let mut remaining = paths.len()
+        while remaining > 0_usize {
+            remaining -= 1_usize
+            match paths.get(remaining) {
+                Some(entry) => {
+                    let bucket = retained_widget_bucket(entry.id)
+                    links.set(remaining, heads.get(bucket).unwrap_or(0_usize))
+                    heads.set(bucket, remaining + 1_usize)
+                }
+                None => {
+                }
+            }
+        }
+        ret Self {
+            ids, heads, links
+        }
+    }
+    pub fn refresh(self: Self, paths: Vec[WidgetPath]) -> Self {
+        if self.ids.len() == paths.len() {
+            let mut same_ids = true
+            let mut index = 0_usize
+            for entry in paths {
+                match self.ids.get(index) {
+                    Some(previous) => {
+                        if previous != entry.id {
+                            same_ids = false
+                            break
+                        }
+                    }
+                    None => {
+                        same_ids = false
+                        break
+                    }
+                }
+                index += 1
+            }
+            if same_ids {
+                ret self
+            }
+        }
+        ret RetainedWidgetIndex::new(paths)
+    }
+    pub fn entry(self: Self, paths: Vec[WidgetPath], id: str) -> Option[WidgetPath] {
+        ret paths.get(self.position(id))
+    }
+    pub fn position(self: Self, id: str) -> usize {
+        if id == "" {
+            ret self.ids.len()
+        }
+        let mut cursor = self.heads.get(retained_widget_bucket(id)).unwrap_or(0_usize)
+        while cursor > 0_usize {
+            match self.ids.get(cursor - 1_usize) {
+                Some(entry) => {
+                    if entry == id {
+                        ret cursor - 1
+                    }
+                }
+                None => {
+                }
+            }
+            cursor = self.links.get(cursor - 1_usize).unwrap_or(0_usize)
+        }
+        ret self.ids.len()
+    }
+    pub fn find(self: Self, paths: Vec[WidgetPath], layout: WidgetLayout, id: str) -> Option[Widget] {
+        ret match self.entry(paths, id) {
+            Some(entry) => layout.widget_at_path(entry.indices, 0)
+            None => Option[Widget]::None
+        }
+    }
+}
+
+#attr(test)
+fn retained_widget_index_preserves_identity_and_collisions() -> bool {
+    let mut root = Widget::panel("root")
+    for index in 0_usize..300_usize {
+        root.push(Widget::button(f"item-{index}", f"Label {index}"))
+    }
+    let layout = layout_widget(root, Rect::new(0.0_f32, 0.0_f32, 600.0_f32, 400.0_f32))
+    let paths = widget_paths(layout, 1_usize)
+    let lookup = RetainedWidgetIndex::new(paths)
+    for index in 0_usize..300_usize {
+        match lookup.find(paths, layout, f"item-{299_usize - index}") {
+            Some(widget) => {
+                if widget.text() != f"Label {299_usize - index}" {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+    ret lookup.find(paths, layout, "absent").is_none() && lookup.find(paths, layout, "").is_none()
 }
 
 struct StyleTransition {
@@ -1932,6 +2803,25 @@ struct StyleTransition {
     value: bool
 }
 
+fn refresh_layout_data(layout: mut WidgetLayout, widget: Widget) ->() {
+    layout.widget = widget
+    let mut index = 0_usize
+    let source = widget.children()
+    for previous in layout.children {
+        match source.get(previous.source_index) {
+            Some(child) => {
+                let mut updated = previous
+                refresh_layout_data(updated, child)
+                layout.children.set(index, updated)
+            }
+            None => {
+            }
+        }
+        index += 1
+    }
+    ret()
+}
+
 struct RangeTransition {
     id: str
     from_start: f32
@@ -1944,11 +2834,199 @@ struct RangeTransition {
 
 impl for ReactiveUi {
     pub fn new(layout: WidgetLayout) -> Self {
+        let paths = widget_paths(layout, 1_usize)
         ret Self {
-            layout, widget_paths(layout, 1_usize), Vec[str]::new(),
-            Vec[str]::new(), Vec[Widget]::new(), Vec[StyleTransition]::new(),
-            Vec[RangeTransition]::new(), false, false, 1_usize
+            layout, paths, RetainedWidgetIndex::new(paths), Vec[str]::new(),
+            Vec[str]::new(), Vec[StyleTransition]::new(),
+            Vec[RangeTransition]::new(), false, false, 1_usize, false,
+            layout.retained_widget(), "", "", "", true, Vec[RetainedScroll]::new(), Vec[PaintDamage]::new(), false, true
         }
+    }
+
+    /// Copies only the changed local descriptor along its ancestry. CSS IDs
+    /// are paint-segment names, not the identity used to locate this node.
+    pub fn bound_content_needs_layout(self: Self, indices: Vec[usize], local: Widget) -> bool {
+        let current = match self.layout.source_widget_at_path(indices, 0) {
+            Some(widget) => widget
+            None => {
+                ret false
+            }
+        }
+        if current.direction() != local.direction() || current.basis() != local.basis() ||
+        current.grow() != local.grow() || current.geometry_basis() != local.geometry_basis() {
+            ret true
+        }
+        if current.text() == local.text() {
+            ret false
+        }
+        if current.children().len() != 0 {
+            ret true
+        }
+        let sizing = current.style().layout()
+        if sizing.width() >= 0.0 && sizing.height() >= 0.0 {
+            ret false
+        }
+        // Flex controls use their preferred size, not the length of their
+        // displayed value. An auto dimension alone is not a dependency on
+        // glyph content. Labels/buttons still reflow when that size changes.
+        let before = current.preferred_size()
+        let after = current.with_text(local.text()).preferred_size()
+        if (sizing.width() < 0.0 && before.width() != after.width()) ||
+        (sizing.height() < 0.0 && before.height() != after.height()) {
+            ret true
+        }
+        // An ancestor grid can consume the leaf's min/max-content size even
+        // when its ordinary preferred dimensions did not change.
+        let mut ancestor = Vec[usize]::new()
+        for index in indices {
+            match self.layout.source_widget_at_path(ancestor, 0) {
+                Some(parent) => {
+                    if parent.style().layout().flex().grid() {
+                        ret true
+                    }
+                }
+                None => {
+                    ret true
+                }
+            }
+            ancestor.push(index)
+        }
+        ret false
+    }
+
+    /// Geometry writes are not selector changes. Preserve displayed CSS and
+    /// override only the sizing property supplied by the retained transaction.
+    pub fn patch_bound_geometry(self: mut Self, indices: Vec[usize], local: Widget) -> bool {
+        self.declarative_root = patch_authored_path(self.declarative_root, indices, 0, local, false)
+        match self.layout.source_widget_at_path(indices, 0) {
+            Some(current) => {
+                let displayed = local.with_computed_style(local.geometry_style(current.style()))
+                .with_focus(current.focused())
+                ret self.layout.patch_source_widget_at_path(indices, 0, displayed)
+            }
+            None => {
+                ret true
+            }
+        }
+    }
+
+    /// Reuses layout results with unchanged constraints. Only changed geometry
+    /// branches receive new hit paths and damage; IDs and lookup indices stay.
+    pub fn reflow_bound_geometry(self: mut Self, dirty: Vec[Vec[usize]]) -> bool {
+        if self.structure_dirty || self.layout_targets.len() > 0 {
+            ret false
+        }
+        let previous = self.layout
+        let next = layout_widget_reusing(previous.widget(), previous.bounds(),
+            Option[WidgetLayout]::Some(previous), dirty, Vec[usize]::new(),)
+        let mut roots = Vec[Vec[usize]]::new()
+        collect_geometry_changes(previous, next, Vec[usize]::new(), roots)
+        if roots.len() == 0 {
+            self.layout = next ret true
+        }
+        self.generation += 1
+        for path in roots {
+            let old = previous.layout_at_path(path, 0).unwrap_or(previous)
+            let updated = next.layout_at_path(path, 0).unwrap_or(next)
+            let clip = inherited_clip_at_path(next, path, 0, Option[Rect]::None)
+            let mut entries = Vec[WidgetPath]::new()
+            collect_widget_paths(updated, path, clip, self.generation, entries)
+            let mut offset = 0_usize
+            let mut count = 0_usize
+            for index in 0..self.paths.len() {
+                let entry = self.paths.get(index).unwrap_or(WidgetPath {
+                        "", Vec[usize]::new(), Rect::new(0, 0, 0, 0), Option[Rect]::None,
+                        false, false, false, 0
+                    }
+                    ,)
+                if path_has_prefix(entry.indices, path) {
+                    if count == 0 {
+                        offset = index
+                    }
+                    count += 1
+                }
+            }
+            if count != entries.len() {
+                self.replace_layout(next) ret true
+            }
+            for index in 0..entries.len() {
+                match entries.get(index) {
+                    Some(entry) => {
+                        self.paths.set(offset + index, entry)
+                    }
+                    None => {
+                    }
+                }
+            }
+            let id = if updated.widget().id() != "" {
+                updated.widget().id()
+            } else {
+                next.widget().id()
+            }
+            self.damage.push(PaintDamage {
+                    id, union_rect(old.paint_bounds(), updated.paint_bounds())
+                }
+                ,
+            )
+            let mut found = false
+            for target in self.paint_targets {
+                found = found || target == id
+            }
+            if !found {
+                self.paint_targets.push(id)
+            }
+        }
+        self.layout = next
+        ret true
+    }
+
+    pub fn patch_bound_node(self: mut Self, indices: Vec[usize], local: Widget,
+        computed: Option[Style], paint: bool,) -> bool {
+        self.declarative_root = patch_authored_path(self.declarative_root, indices, 0, local, false)
+        let current = match self.layout.source_widget_at_path(indices, 0) {
+            Some(widget) => widget
+            None => {
+                // Hidden nodes own state too, but produce no paint damage.
+                ret true
+            }
+        }
+        let displayed = local.with_computed_style(local.geometry_style(computed.unwrap_or(current.style())))
+        .with_focus(current.focused())
+        if current.id() != "" {
+            ret self.patch_widget(current.id(), displayed)
+        }
+        // Anonymous nodes still have exact paths. Damage belongs to their
+        // nearest named ancestor, or to the whole frame when none exists.
+        if !self.layout.patch_source_widget_at_path(indices, 0, displayed) {
+            ret false
+        }
+        if !paint {
+            ret true
+        }
+        let mut depth = indices.len()
+        while depth > 0 {
+            let mut ancestor = Vec[usize]::new()
+            for index in 0..depth {
+                ancestor.push(indices.get(index).unwrap_or(0))
+            }
+            match self.layout.source_widget_at_path(ancestor, 0) {
+                Some(widget) => {
+                    if widget.id() != "" {
+                        self.mark_paint(widget.id()) ret true
+                    }
+                }
+                None => {
+                }
+            }
+            depth -= 1
+        }
+        let root_id = self.layout.widget().id()
+        if root_id != "" {
+            self.mark_paint(root_id)
+        } else {
+            self.full_repaint = true
+        }
+        ret true
     }
 
     /// Enables the accessibility mode in which CSS transitions commit their
@@ -1960,6 +3038,397 @@ impl for ReactiveUi {
 
     pub fn has_active_transitions(self: mut Self) -> bool {
         ret self.transitions.len() > 0_usize || self.range_transitions.len() > 0_usize
+    }
+
+    /// Input modality belongs to this UI, never to a shared stylesheet cache.
+    pub fn keyboard_focus(self: mut Self) -> bool {
+        ret self.keyboard_focus
+    }
+    /// Returns whether the focus indicator needs a new cascade.
+    pub fn set_keyboard_focus(self: mut Self, keyboard: bool) -> bool {
+        let changed = self.keyboard_focus != keyboard
+        self.keyboard_focus = keyboard
+        ret changed
+    }
+
+    /// The application's authored tree, separate from computed and animated styles.
+    pub fn declarative_root(self: mut Self) -> Widget {
+        ret self.declarative_root
+    }
+    pub fn set_declarative_root(self: mut Self, root: Widget) ->() {
+        let mut retained = Vec[RetainedScroll]::new()
+        for offset in self.scroll_offsets {
+            if root.find(offset.id).is_some() {
+                retained.push(offset)
+            }
+        }
+        self.scroll_offsets = retained
+        self.declarative_root = root
+        ret()
+    }
+
+    /// Queues an authored component replacement. CSS/layout is resolved once
+    /// by the window transaction; unstyled nodes never enter the live layout.
+    pub fn stage_subtree(self: mut Self, id: str, replacement: Widget) -> bool {
+        let updated = self.declarative_root.replace_branch(id, replacement)
+        if !updated.1 {
+            ret false
+        }
+        self.declarative_root = updated.0
+        self.mark_paint(id)
+        ret true
+    }
+
+    /// Out-of-flow components can be laid out in their assigned box without
+    /// changing sibling geometry. Validate before any part of a batch commits.
+    pub fn independent_component(self: mut Self, id: str) -> bool {
+        if id == "" {
+            ret false
+        }
+        ret match self.find_widget(id) {
+            Some(widget) => {
+                let layout = widget.style().layout()
+                let position = layout.position()
+                position.absolute() &&(layout.width() >= 0.0 ||(position.left_set() && position.right_set()))
+            }
+            None => false
+        }
+    }
+
+    /// Checks the complete computed replacement before a component commit.
+    pub fn can_commit_styled_subtree(self: mut Self, branch: Widget) -> bool {
+        let current = match self.find_widget(branch.id()) {
+            Some(widget) => widget
+            None => {
+                ret false
+            }
+        }
+        // Scroll transforms move contents inside an unchanged outer box.
+        // Native offsets are restored during commit and must not force a
+        // whole-window transaction for a virtualized component.
+        let scroll = current.style().layout().scroll()
+        let outer_style = branch.style().with_scroll(scroll.x(), scroll.y())
+        if current.kind() != branch.kind() || current.tag() != branch.tag() ||
+        !current.style().layout_equivalent(outer_style) || current.direction() != branch.direction() ||
+        current.basis() != branch.basis() || current.grow() != branch.grow() ||
+        self.needs_animation_transaction(branch) {
+            ret false
+        }
+        if self.independent_component(branch.id()) {
+            ret true
+        }
+        // Ordinary flex boxes also have content-independent outer bounds.
+        // Check the same preferred-size inputs used by their parent rather
+        // than requiring every independently updatable component to be absolute.
+        let sizing = current.style().layout()
+        let before = current.preferred_size()
+        let after = branch.preferred_size()
+        if (sizing.width() < 0.0 && before.width() != after.width()) ||
+        (sizing.height() < 0.0 && before.height() != after.height()) {
+            ret false
+        }
+        let path = match self.path(branch.id()) {
+            Some(value) => value
+            None => {
+                ret false
+            }
+        }
+        let mut ancestor = Vec[usize]::new()
+        for ordinal in path {
+            match self.layout.widget_at_path(ancestor, 0) {
+                Some(parent) => {
+                    // Grid tracks may depend recursively on min/max-content.
+                    if parent.style().layout().flex().grid() {
+                        ret false
+                    }
+                }
+                None => {
+                    ret false
+                }
+            }
+            ancestor.push(ordinal)
+        }
+        ret true
+    }
+
+    /// Commits CSS, content and layout of one independent component. The
+    /// authored path is distinct from paint order and contains unstyled data.
+    pub fn commit_styled_subtree(self: mut Self, source: Vec[usize], authored: Widget, styled: Widget) -> bool {
+        if !self.can_commit_styled_subtree(styled) {
+            ret false
+        }
+        let target = self.preserve_scroll_offsets(styled)
+        let paint_only = match self.find_layout(target.id()) {
+            Some(previous) => component_paint_compatible(previous.retained_widget(), target)
+            None => false
+        }
+        if !self.replace_component(target.id(), target, !paint_only) {
+            ret false
+        }
+        self.declarative_root = patch_authored_path(self.declarative_root, source, 0, authored, true)
+        ret true
+    }
+
+    /// Scroll is retained interaction state, not an inline CSS override.
+    pub fn set_scroll_offset(self: mut Self, id: str, x: f32, y: f32) ->() {
+        let mut retained = Vec[RetainedScroll]::new()
+        for offset in self.scroll_offsets {
+            if offset.id != id {
+                retained.push(offset)
+            }
+        }
+        retained.push(RetainedScroll {
+                id, x, y
+            }
+            ,
+        )
+        self.scroll_offsets = retained
+        ret()
+    }
+    /// Wheel routing for embedded/manual event loops. A declared scroller
+    /// consumes the wheel even at its limits, so input cannot leak to a canvas.
+    pub fn scroll_at(self: mut Self, x: f32, y: f32, delta_y: f32) -> bool {
+        let target = scroll_container_at(self.layout, x, y)
+        if target == "" {
+            ret false
+        }
+        match self.find_layout(target) {
+            Some(layout) => {
+                let previous = layout.widget().style().layout().scroll()
+                let maximum = layout.scroll_max_y()
+                let raw = previous.y() + delta_y
+                let offset = if raw < 0 {
+                    0_f32
+                } elif raw > maximum {
+                    maximum
+                } else {
+                    raw
+                }
+                if offset != previous.y() {
+                    self.set_scroll_offset(target, previous.x(), offset)
+                    let widget = layout.retained_widget()
+                    let _changed = self.replace_subtree(target, widget.with_computed_style(widget.style().with_scroll(previous.x(), offset)))
+                }
+            }
+            None => {
+            }
+        }
+        ret true
+    }
+    pub fn preserve_scroll_offsets(self: mut Self, root: Widget) -> Widget {
+        if self.scroll_offsets.len() == 0_usize {
+            ret root
+        }
+        if root.children().len() == 0_usize {
+            for offset in self.scroll_offsets {
+                if offset.id == root.id() {
+                    ret root.with_computed_style(root.style.with_scroll(offset.x, offset.y))
+                }
+            }
+            ret root
+        }
+        let mut children = Vec[Widget]::new()
+        for child in root.children() {
+            children.push(self.preserve_scroll_offsets(child))
+        }
+        let mut result = root.with_children(children)
+        for offset in self.scroll_offsets {
+            if offset.id == root.id() {
+                result = result.with_computed_style(root.style.with_scroll(offset.x, offset.y))
+            }
+        }
+        ret result
+    }
+
+    /// Keep the displayed style while reconciling new data for an animated target.
+    pub fn prepare_style_targets(self: mut Self, root: Widget) -> Widget {
+        let previous = self.corresponding_widget(root, Option[Widget]::Some(self.layout.retained_widget()))
+        ret self.prepare_style_targets_from(root, previous)
+    }
+    /// True only when a new model needs no animation target transaction.
+    /// Content and closures may differ; geometry still has to be laid out.
+    pub fn style_targets_unchanged(self: mut Self, root: Widget) -> bool {
+        ret !self.has_active_transitions() &&
+        same_animation_targets(self.layout, root)
+    }
+    /// Declaring a transition does not require an animation transaction.
+    /// Only changed animated destinations, running transitions or timers do.
+    pub fn needs_animation_transaction(self: mut Self, root: Widget) -> bool {
+        ret self.has_active_transitions() || self.animation_targets_needed(root)
+    }
+    fn animation_targets_needed(self: mut Self, root: Widget) -> bool {
+        if root.countdown_duration_ms() > 0 {
+            ret true
+        }
+        let transition = root.style().transition()
+        if !self.reduced_motion && transition.properties() != "none" &&
+        transition_duration_ms(transition.durations()) > 0 {
+            if root.id() == "" {
+                ret true
+            }
+            match self.find_widget(root.id()) {
+                Some(previous) => {
+                    if previous.kind() == root.kind() && !previous.style().equivalent(root.style()) {
+                        ret true
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        for child in root.children() {
+            if self.animation_targets_needed(child) {
+                ret true
+            }
+        }
+        ret false
+    }
+    fn prepare_style_targets_from(self: mut Self, root: Widget, previous_option: Option[Widget]) -> Widget {
+        let mut rebuilt = root.with_children(root.children())
+        if root.children().len() > 0_usize {
+            let previous_children = match previous_option {
+                Some(value) => value.children()
+                None => Vec[Widget]::new()
+            }
+            let mut children = Vec[Widget]::new()
+            let mut index = 0_usize
+            for child in root.children() {
+                let candidate = previous_children.get(index)
+                let retained = match candidate {
+                    Some(value) => if value.id() == child.id() && value.kind() == child.kind() {
+                        candidate
+                    } else {
+                        self.find_widget(child.id())
+                    }
+                    None => self.find_widget(child.id())
+                }
+                children.push(self.prepare_style_targets_from(child, retained))
+                index += 1_usize
+            }
+            rebuilt = root.with_children(children)
+        }
+        if root.countdown_duration_ms() > 0_u64 {
+            match previous_option {
+                Some(previous) => {
+                    rebuilt = rebuilt.with_value(previous.value())
+                    .with_attribute("data-luma-countdown-cycle", Debug::fmt(previous.countdown_cycle()))
+                    .with_attribute("data-luma-countdown-duration", Debug::fmt(previous.countdown_duration_ms()))
+                }
+                None => {
+                    rebuilt = rebuilt.with_value(1.0_f32)
+                    .with_attribute("data-luma-countdown-duration", "0")
+                }
+            }
+        }
+        if !self.reduced_motion && root.style.transition().properties() != "none" {
+            match previous_option {
+                Some(previous) => {
+                    // A transition declaration is not an active animation.
+                    // Unchanged styles need neither duration parsing nor
+                    // per-property interpolation during scroll/model updates.
+                    if previous.kind() == root.kind() &&
+                    !previous.style.equivalent(root.style) &&
+                    transition_duration_ms(root.style.transition().durations()) > 0_u64 {
+                        ret rebuilt.with_computed_style(root.style.with_transition_sample(
+                                previous.style, root.style.transition().properties(),))
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        ret rebuilt
+    }
+
+    // Stable trees can be traversed together in linear time. ID lookup is
+    // necessary only after insertion, removal or reordering, not per node
+    // on every hover/animation transaction.
+    fn corresponding_widget(self: mut Self, next: Widget, candidate: Option[Widget]) -> Option[Widget] {
+        match candidate {
+            Some(value) => {
+                if value.id() == next.id() && value.kind() == next.kind() {
+                    ret candidate
+                }
+            }
+            None => {
+            }
+        }
+        ret self.find_widget(next.id())
+    }
+
+    /// A stable ID may be removed or reused for another widget kind.
+    pub fn prune_transitions(self: mut Self, root: Widget, now_ms: u64) ->() {
+        let mut retained = Vec[StyleTransition]::new()
+        for transition in self.transitions {
+            let same_kind = match root.find(transition.id) {
+                Some(next) => match self.find_widget(transition.id) {
+                    Some(previous) => previous.kind() == next.kind()
+                    None => false
+                }
+                None => false
+            }
+            if same_kind {
+                retained.push(transition)
+            } else {
+                dispatch_transition_properties(self, transition.id, ui_event_transition_cancel(),
+                    transition.properties,(now_ms - transition.started_at) as f32 / 1000.0_f32,)
+            }
+        }
+        self.transitions = retained
+        let mut ranges = Vec[RangeTransition]::new()
+        for transition in self.range_transitions {
+            match root.find(transition.id) {
+                Some(next) => {
+                    if next.kind() == widget_range_slider() {
+                        ranges.push(transition)
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        self.range_transitions = ranges
+        ret()
+    }
+
+    /// Update target styles independently of content reconciliation.
+    pub fn apply_style_targets(self: mut Self, root: Widget, now_ms: u64) ->() {
+        self.apply_style_targets_from(root, Option[Widget]::Some(self.layout.retained_widget()), now_ms)
+        ret()
+    }
+    fn apply_style_targets_from(self: mut Self, root: Widget, previous: Option[Widget], now_ms: u64) ->() {
+        match previous {
+            Some(current) => {
+                // Equal displayed styles do not imply equal destinations.
+                // A reversal can return to the current sample before the old
+                // transition has advanced; it must still cancel/retarget it.
+                let mut transitioning = false
+                for transition in self.transitions {
+                    if transition.id == root.id() {
+                        transitioning = true
+                        break
+                    }
+                }
+                if transitioning || !current.style.equivalent(root.style) ||
+                current.countdown_cycle() != root.countdown_cycle() ||
+                (current.countdown_duration_ms() == 0_u64 && root.countdown_duration_ms() > 0_u64) {
+                    let _updated = self.transition_widget(root.id(), root, now_ms)
+                }
+            }
+            None => {
+            }
+        }
+        let previous_children = match previous {
+            Some(value) => value.children()
+            None => Vec[Widget]::new()
+        }
+        let mut index = 0_usize
+        for child in root.children() {
+            let retained = self.corresponding_widget(child, previous_children.get(index))
+            self.apply_style_targets_from(child, retained, now_ms)
+            index += 1_usize
+        }
+        ret()
     }
 
     /// Animates a range control from its retained visual position to committed
@@ -2004,10 +3473,44 @@ impl for ReactiveUi {
                 ret false
             }
         }
-        self.cancel_transition(id, now_ms)
-        let transition = replacement.style().transition()
+        let transition = replacement.style.transition()
         let countdown = replacement.countdown_duration_ms() > 0_u64 &&
-        replacement.countdown_cycle() != current.countdown_cycle()
+        (replacement.countdown_cycle() != current.countdown_cycle() || current.countdown_duration_ms() == 0_u64)
+        // Reconciliation can deliver the same target on every model update.
+        // Keep the existing clock and displayed style instead of restarting
+        // the transition; content and ordinary values remain authoritative.
+        if !countdown && !self.reduced_motion {
+            let mut index = 0_usize
+            for running in self.transitions {
+                let target_matches = replacement.style.with_transition_sample(
+                    running.to, running.properties,).equivalent(replacement.style)
+                if running.id == id &&(running.value || running.properties == transition.properties()) && target_matches {
+                    let value = if running.value {
+                        current.value()
+                    } else {
+                        replacement.value()
+                    }
+                    self.transitions.set(index, StyleTransition {
+                            running.id, running.from, replacement.style, running.from_value,
+                            if running.value {
+                                running.to_value
+                            } else {
+                                replacement.value()
+                            }
+                            ,
+                            running.started_at, running.duration_ms, running.delay_ms,
+                            running.elapsed_offset_ms, running.easing, running.properties,
+                            running.started, running.layout, running.value
+                        }
+                        ,)
+                    ret self.patch_widget(id, replacement.with_computed_style(
+                            replacement.style.with_transition_sample(current.style, running.properties))
+                        .with_value(value),)
+                }
+                index += 1_usize
+            }
+        }
+        self.cancel_transition(id, now_ms)
         let properties = if countdown {
             "value"
         } else {
@@ -2025,7 +3528,7 @@ impl for ReactiveUi {
         // paint-only value animation.
         let value_changed = countdown
         if properties == "none" || duration == 0_u64 ||
-        (current.style().equivalent(replacement.style()) && !value_changed)
+        (current.style.equivalent(replacement.style) && !value_changed)
         {
             ret self.patch_widget(id, replacement)
         }
@@ -2040,18 +3543,19 @@ impl for ReactiveUi {
         } else {
             0_u64
         }
-        let layout_changed = !current.style().layout_equivalent(replacement.style())
+        let start_style = replacement.style.with_transition_sample(current.style, properties)
+        let layout_changed = !start_style.layout_equivalent(replacement.style)
         let from_value = if countdown {
             1.0_f32
         } else {
-            current.value()
+            replacement.value()
         }
-        let staged = replacement.with_style(current.style()).with_value(from_value)
+        let staged = replacement.with_computed_style(start_style).with_value(from_value)
         if !self.patch_widget(id, staged) {
             ret false
         }
         self.transitions.push(StyleTransition {
-                id, current.style(), replacement.style(), from_value, replacement.value(),
+                id, current.style, replacement.style, from_value, replacement.value(),
                 now_ms, duration, delay,
                 if offset > duration {
                     duration
@@ -2099,8 +3603,9 @@ impl for ReactiveUi {
                     Some(widget) => {
                         let interpolated_value = transition.from_value +
                         (transition.to_value - transition.from_value) * eased
-                        let next = widget.with_style(interpolate_style(transition.from, transition.to,
-                                eased,)).with_value(if transition.value {
+                        let sample = interpolate_style(transition.from, transition.to, eased)
+                        let next = widget.with_computed_style(transition.to.with_transition_sample(
+                                sample, transition.properties,)).with_value(if transition.value {
                                 interpolated_value
                             } else {
                                 widget.value()
@@ -2119,7 +3624,7 @@ impl for ReactiveUi {
                 if amount >= 1.0_f32 {
                     match self.find_widget(transition.id) {
                         Some(widget) => {
-                            let committed = widget.with_style(transition.to)
+                            let committed = widget.with_computed_style(transition.to)
                             .with_value(if transition.value {
                                     transition.to_value
                                 } else {
@@ -2207,39 +3712,60 @@ impl for ReactiveUi {
         ret self.structure_dirty
     }
     pub fn is_dirty(self: mut Self) -> bool {
-        ret self.paint_targets.len() > 0_usize || self.layout_targets.len() > 0_usize || self.structure_dirty
+        ret self.presentation_pending || self.needs_preparation()
     }
+    /// GPU backpressure does not invalidate already prepared paint commands.
+    pub fn needs_preparation(self: mut Self) -> bool {
+        ret self.full_repaint || self.paint_targets.len() > 0_usize || self.layout_targets.len() > 0_usize || self.structure_dirty
+    }
+    /// Whether the retained render cache must be rebuilt at the next commit.
+    pub fn needs_full_repaint(self: mut Self) -> bool {
+        ret self.full_repaint
+    }
+    /// Generation of the current retained geometry and hit-test paths.
+    pub fn inspection_revision(self: Self) -> usize {
+        ret self.generation
+    }
+
     pub fn segment_generation(self: mut Self, id: str) -> usize {
-        for entry in self.paths {
-            if entry.id == id {
-                ret entry.generation
-            }
+        ret match self.lookup.entry(self.paths, id) {
+            Some(entry) => entry.generation
+            None => 0_usize
         }
-        ret 0_usize
     }
 
     /// Reconciles a newly rendered tree against retained state. Stable
     /// structure and geometry become paint patches; geometry changes request
     /// layout, and identity/order changes request a structural rebuild.
     pub fn reconcile(self: mut Self, root: Widget) -> u32 {
-        let next = self.preserve_range_transition_values(
-            inherit_widget_styles(root),)
+        ret self.reconcile_styled(inherit_widget_styles(root))
+    }
+
+    /// The cascade already resolved inheritance for the complete tree.
+    /// Retain reconciliation without constructing that tree a second time.
+    pub fn reconcile_styled(self: mut Self, root: Widget) -> u32 {
+        let next = self.preserve_range_transition_values(root)
         let mut targets = Vec[str]::new()
-        let change = collect_widget_changes(
-            self.layout.retained_widget(), next, targets,)
+        let previous = self.layout.retained_widget()
+        let patched = self.reconcile_absolute_islands(previous, next)
+        let change = collect_widget_changes(patched.0, next, targets)
         if change == 0_u32 {
             // Event closures may capture a new graph even when no pixels
             // changed. Refresh retained widget values and hit-path entries
             // without invalidating layout or paint.
-            self.layout = self.layout.restyle(next)
-            self.paths = widget_paths(self.layout, self.generation)
+            refresh_layout_data(self.layout, next)
         } elif change == 1_u32 {
-            self.layout = self.layout.restyle(next)
-            self.generation = self.generation + 1_usize
-            self.paths = widget_paths(self.layout, self.generation)
             for target in targets {
-                self.mark_paint(target)
+                match next.find(target) {
+                    Some(replacement) => {
+                        let _patched = self.patch_widget(target, replacement)
+                    }
+                    None => {
+                    }
+                }
             }
+            // Refresh event captures, but keep geometry and the hit index.
+            refresh_layout_data(self.layout, next)
         } elif change == 2_u32 {
             self.invalidate_layout(self.layout.widget().id())
         } elif change == 3_u32 {
@@ -2248,7 +3774,73 @@ impl for ReactiveUi {
         ret change
     }
 
+    // Out-of-flow islands have independently assigned bounds. Their child
+    // structure can change without laying out every sibling in the window.
+    fn reconcile_absolute_islands(self: mut Self, previous: Widget,
+        next: Widget,) ->(Widget, bool) {
+        if previous.id() != next.id() || previous.kind() != next.kind() || previous.tag() != next.tag() {
+            ret(previous, false)
+        }
+        if next.id() != "" && previous.style.layout().position().absolute() &&
+        next.style.layout().position().absolute() &&
+        previous.direction() == next.direction() && previous.basis() == next.basis() &&
+        previous.grow() == next.grow() && previous.style.layout_equivalent(next.style) {
+            let mut targets = Vec[str]::new()
+            if collect_widget_changes(previous, next, targets) >= 2 && self.replace_subtree(next.id(), next) {
+                ret(next, true)
+            }
+        }
+        let source = previous.children()
+        let desired = next.children()
+        if source.len() != desired.len() {
+            ret(previous, false)
+        }
+        let mut updated = previous
+        let mut changed = false
+        let mut index = 0_usize
+        for child in source {
+            match desired.get(index) {
+                Some(replacement) => {
+                    let result = self.reconcile_absolute_islands(child, replacement)
+                    if result.1 {
+                        let mut children = Vec[Widget]::new()
+                        let mut slot = 0_usize
+                        for original in updated.children() {
+                            children.push(if slot == index {
+                                    result.0
+                                } else {
+                                    original
+                                }
+                            )
+                            slot += 1
+                        }
+                        updated = updated.with_children(children)
+                        changed = true
+                    }
+                }
+                None => {
+                }
+            }
+            index += 1
+        }
+        ret(updated, changed)
+    }
+
+    /// A data-only transaction must refresh closures even when its rendered
+    /// state is identical. Geometry, hit paths and their generations survive.
+    pub fn refresh_unchanged(self: mut Self, root: Widget) -> bool {
+        let mut targets = Vec[str]::new()
+        if collect_widget_changes(self.layout.retained_widget(), root, targets) != 0 {
+            ret false
+        }
+        refresh_layout_data(self.layout, root)
+        ret true
+    }
+
     fn preserve_range_transition_values(self: mut Self, root: Widget) -> Widget {
+        if self.range_transitions.len() == 0_usize {
+            ret root
+        }
         let mut children = Vec[Widget]::new()
         for child in root.children() {
             children.push(self.preserve_range_transition_values(child))
@@ -2271,27 +3863,31 @@ impl for ReactiveUi {
     }
 
     fn path(self: mut Self, id: str) -> Option[Vec[usize]] {
-        for entry in self.paths {
-            if entry.id == id {
-                ret Option[Vec[usize]]::Some(entry.indices)
-            }
+        ret match self.lookup.entry(self.paths, id) {
+            Some(entry) => Option[Vec[usize]]::Some(entry.indices)
+            None => Option[Vec[usize]]::None
         }
-        ret Option[Vec[usize]]::None
     }
 
     pub fn find_widget(self: mut Self, id: str) -> Option[Widget] {
-        for entry in self.paths {
-            if entry.id == id {
-                ret Option[Widget]::Some(entry.widget)
-            }
+        ret match self.paths.get(self.lookup.position(id)) {
+            Some(entry) => self.layout.widget_at_path(entry.indices, 0)
+            None => Option[Widget]::None
         }
-        ret Option[Widget]::None
+    }
+
+    /// Indexed existence checks do not materialize an owned widget descriptor.
+    pub fn contains_widget(self: mut Self, id: str) -> bool {
+        ret self.lookup.position(id) < self.paths.len()
     }
 
     /// Dispatches through the retained path index in O(tree depth), avoiding
     /// reconstruction and recursive search of the complete widget tree for
     /// every pointer/key event.
-    pub fn dispatch_event(self: mut Self, id: str, event: UiEvent < H >) -> bool {
+    pub fn dispatch_event(self: mut Self, id: str, event: UiEvent<H>) -> bool {
+        if !self.widget_events {
+            ret true
+        }
         match self.path(id) {
             Some(indices) => {
                 let mut ancestry = Vec[Widget]::new()
@@ -2304,57 +3900,44 @@ impl for ReactiveUi {
         }
         ret true
     }
-
-    /// Returns the immutable declarative widget underneath transient
-    /// hover/active/focus styling, capturing it on first use.
-    pub fn interaction_base(self: mut Self, id: str) -> Option[Widget] {
-        for widget in self.interaction_bases {
-            if widget.id() == id {
-                ret Option[Widget]::Some(widget)
-            }
-        }
-        match self.find_widget(id) {
-            Option::Some(widget) => {
-                self.interaction_bases.push(widget)
-                ret Option[Widget]::Some(widget)
-            }
-            Option::None => {
-                ret Option[Widget]::None
-            }
-        }
+    /// Skips per-widget callback routing while retaining native default actions.
+    pub fn set_widget_event_dispatch(self: mut Self, enabled: bool) ->() {
+        self.widget_events = enabled ret()
     }
 
-    pub fn release_interaction_base(self: mut Self, id: str) ->() {
-        let mut retained = Vec[Widget]::new()
-        for widget in self.interaction_bases {
-            if widget.id() != id {
-                retained.push(widget)
-            }
+    /// Records interaction identity independently of authored and computed styles.
+    pub fn set_interaction_state(self: mut Self, id: str, hovered: bool, active: bool, focused: bool) ->() {
+        if hovered {
+            self.hovered_id = id
+        } elif self.hovered_id == id {
+            self.hovered_id = ""
         }
-        self.interaction_bases = retained
+        if active {
+            self.active_id = id
+        } elif self.active_id == id {
+            self.active_id = ""
+        }
+        if focused {
+            self.focused_id = id
+        } elif self.focused_id == id {
+            self.focused_id = ""
+        }
         ret()
     }
-
-    /// Replaces the declarative snapshot restored when a transient
-    /// hover/active/focus state ends. Incremental parent-fragment updates use
-    /// this to keep a captured child tied to the newest model value.
-    pub fn set_interaction_base(self: mut Self, widget: Widget) ->() {
-        let id = widget.id()
-        if id == "" {
-            ret()
-        }
-        self.release_interaction_base(id)
-        self.interaction_bases.push(widget)
+    pub fn set_interaction_ids(self: mut Self, hovered: str, active: str, focused: str) ->() {
+        self.hovered_id = hovered
+        self.active_id = active
+        self.focused_id = focused
         ret()
     }
-
-    /// Drops transient pseudo-state snapshots before reconciling a new
-    /// declarative model tree. The runtime reapplies current interaction
-    /// states after the model update, so a stale hover/focus snapshot can
-    /// never restore pre-update content.
-    pub fn clear_interaction_bases(self: mut Self) ->() {
-        self.interaction_bases.clear()
-        ret()
+    pub fn hovered_id(self: mut Self) -> str {
+        ret self.hovered_id
+    }
+    pub fn active_id(self: mut Self) -> str {
+        ret self.active_id
+    }
+    pub fn focused_id(self: mut Self) -> str {
+        ret self.focused_id
     }
 
     /// Hit-tests the retained flat paint-order index. This avoids recursively
@@ -2390,16 +3973,102 @@ impl for ReactiveUi {
         ret Option[WidgetLayout]::None
     }
 
-    pub fn clip_for(self: mut Self, id: str) -> Option[Rect] {
-        for entry in self.paths {
-            if entry.id == id {
-                ret entry.clip
+    /// Tests retained ancestry, including the ancestor itself, in path depth.
+    pub fn target_within(self: mut Self, id: str, ancestor: str) -> bool {
+        let child = match self.path(id) {
+            Some(path) => path
+            None => {
+                ret false
             }
         }
-        ret Option[Rect]::None
+        ret match self.path(ancestor) {
+            Some(parent) => path_has_prefix(child, parent)
+            None => false
+        }
+    }
+
+    /// Nearest named ancestor which requests application scroll events.
+    pub fn scrollable_ancestor(self: mut Self, id: str) -> str {
+        let path = match self.path(id) {
+            Some(path) => path None => {
+                ret ""
+            }
+        }
+        let mut depth = path.len()
+        loop {
+            let mut prefix = Vec[usize]::new()
+            for index in 0..depth {
+                prefix.push(path.get(index).unwrap_or(0_usize))
+            }
+            match self.layout.widget_at_path(prefix, 0_usize) {
+                Some(widget) => {
+                    if widget.id() != "" && widget.attribute("data-luma-scrollable").unwrap_or("") == "true" {
+                        ret widget.id()
+                    }
+                }
+                None => {
+                }
+            }
+            if depth == 0_usize {
+                break
+            }
+            depth -= 1_usize
+        }
+        ret ""
+    }
+
+    /// Stable cache damage excludes entire transient branches, not just roots.
+    pub fn stable_paint_regions(self: mut Self, excluded: Vec[str]) -> Vec[Rect] {
+        let mut regions = Vec[Rect]::new()
+        for id in self.paint_targets {
+            let mut transient = false
+            for root in excluded {
+                transient = transient || self.target_within(id, root)
+            }
+            if !transient {
+                match self.find_layout(id) {
+                    Some(node) => {
+                        let mut bounds = node.paint_bounds()
+                        for previous in self.damage {
+                            if previous.id == id {
+                                bounds = union_rect(bounds, previous.bounds)
+                            }
+                        }
+                        regions.push(bounds)
+                    }
+                    None => {
+                    }
+                }
+            }
+        }
+        ret regions
+    }
+
+    pub fn clip_for(self: mut Self, id: str) -> Option[Rect] {
+        match self.lookup.entry(self.paths, id) {
+            Some(entry) => {
+                ret entry.clip
+            }
+            None => {
+                ret Option[Rect]::None
+            }
+        }
     }
 
     pub fn patch_widget(self: mut Self, id: str, replacement: Widget) -> bool {
+        let current = match self.find_widget(id) {
+            Some(value) => value
+            None => {
+                ret false
+            }
+        }
+        let mut changed_targets = Vec[str]::new()
+        let paint_changed = collect_widget_changes(
+            current.with_children(Vec[Widget]::new()),
+            replacement.with_children(Vec[Widget]::new()), changed_targets,) != 0_u32
+        if paint_changed {
+            self.record_damage(id)
+        }
         match self.path(id) {
             Option::Some(indices) => {
                 if !self.layout.patch_widget_at_path(indices, 0_usize, replacement) {
@@ -2410,34 +4079,36 @@ impl for ReactiveUi {
                 ret false
             }
         }
-        let mut index = 0_usize
-        while index < self.paths.len() {
-            match self.paths.get(index) {
-                Option::Some(entry) => {
-                    if entry.id == id {
-                        self.paths.set(index, WidgetPath {
-                                entry.id, entry.indices, entry.bounds, entry.clip,
-                                replacement, replacement.disabled(), replacement.style().visible(),
-                                replacement.style().pointer_events(),
-                                self.generation + 1_usize
-                            }
-                            ,)
-                        self.generation = self.generation + 1_usize
-                        break
-                    }
-                }
-                Option::None => {
+        let index = self.lookup.position(id)
+        match self.paths.get(index) {
+            Option::Some(entry) => {
+                if entry.id == id {
+                    self.paths.set(index, WidgetPath {
+                            entry.id, entry.indices, entry.bounds, entry.clip,
+                            replacement.disabled(), replacement.style.visible(),
+                            replacement.style.pointer_events(),
+                            self.generation + 1_usize
+                        }
+                        ,)
+                    self.generation = self.generation + 1_usize
                 }
             }
-            index += 1_usize
+            Option::None => {
+            }
         }
-        self.mark_paint(id)
+        if paint_changed {
+            self.mark_paint(id)
+        }
         ret true
     }
     /// Restores a widget and marks it for repaint. This is required when the
     /// previous reactive state has already been committed to the retained cache.
     pub fn restore_widget(self: mut Self, id: str, replacement: Widget) -> bool {
-        ret self.patch_widget(id, replacement)
+        let restored = self.patch_widget(id, replacement)
+        if restored {
+            self.mark_paint(id)
+        }
+        ret restored
     }
     pub fn patch_text(self: mut Self, id: str, value: str) -> bool {
         match self.find_widget(id) {
@@ -2511,12 +4182,20 @@ impl for ReactiveUi {
         }
     }
     pub fn replace_subtree(self: mut Self, id: str, replacement: Widget) -> bool {
+        ret self.replace_component(id, replacement, true)
+    }
+    fn replace_component(self: mut Self, id: str, replacement: Widget, relayout: bool) -> bool {
+        self.record_damage(id)
         match self.path(id) {
             Option::Some(indices) => {
                 let inherited_clip = inherited_clip_at_path(
                     self.layout, indices, 0_usize, Option[Rect]::None,)
-                if !self.layout.replace_subtree_at_path(indices, 0_usize,
-                    replacement,) {
+                let updated = if relayout {
+                    self.layout.replace_subtree_at_path(indices, 0_usize, replacement)
+                } else {
+                    self.layout.refresh_component_at_path(indices, 0_usize, replacement)
+                }
+                if !updated {
                     ret false
                 }
                 self.generation = self.generation + 1_usize
@@ -2535,17 +4214,16 @@ impl for ReactiveUi {
                 // same shape. Its entries are contiguous in preorder, so
                 // overwrite that range without allocating and copying the
                 // complete window hit index.
-                let mut first = self.paths.len()
+                let first = self.lookup.position(id)
                 let mut former_count = 0_usize
-                let mut path_index = 0_usize
+                let mut path_index = first
                 while path_index < self.paths.len() {
                     match self.paths.get(path_index) {
                         Option::Some(entry) => {
                             if path_has_prefix(entry.indices, indices) {
-                                if first == self.paths.len() {
-                                    first = path_index
-                                }
                                 former_count = former_count + 1_usize
+                            } else {
+                                break
                             }
                         }
                         Option::None => {
@@ -2555,16 +4233,28 @@ impl for ReactiveUi {
                 }
                 if first < self.paths.len() &&
                 former_count == replacement_paths.len() {
+                    let mut ids_changed = false
                     let mut replacement_index = 0_usize
                     while replacement_index < replacement_paths.len() {
                         match replacement_paths.get(replacement_index) {
                             Option::Some(entry) => {
+                                match self.paths.get(first + replacement_index) {
+                                    Some(old) => {
+                                        ids_changed = ids_changed || old.id != entry.id
+                                    }
+                                    None => {
+                                        ids_changed = true
+                                    }
+                                }
                                 self.paths.set(first + replacement_index, entry)
                             }
                             Option::None => {
                             }
                         }
                         replacement_index = replacement_index + 1_usize
+                    }
+                    if ids_changed {
+                        self.lookup = RetainedWidgetIndex::new(self.paths)
                     }
                 } else {
                     let mut next_paths = Vec[WidgetPath]::new()
@@ -2587,6 +4277,7 @@ impl for ReactiveUi {
                         }
                     }
                     self.paths = next_paths
+                    self.lookup = RetainedWidgetIndex::new(self.paths)
                 }
             }
             Option::None => {
@@ -2615,7 +4306,7 @@ impl for ReactiveUi {
             }
             self.paint_targets = ordered
         }
-        self.interaction_bases.clear()
+        self.record_damage(id)
         ret true
     }
     pub fn invalidate_layout(self: mut Self, id: str) ->() {
@@ -2651,31 +4342,52 @@ impl for ReactiveUi {
                 ret false
             }
         }
+        if self.layout_targets.len() > 0_usize {
+            self.full_repaint = true
+        }
         self.layout_targets.clear()
         self.generation = self.generation + 1_usize
         self.paths = widget_paths(self.layout, self.generation)
+        self.lookup = self.lookup.refresh(self.paths)
         ret true
     }
     pub fn replace_layout(self: mut Self, value: WidgetLayout) ->() {
         self.layout = value
         self.generation = self.generation + 1_usize
         self.paths = widget_paths(value, self.generation)
+        self.lookup = self.lookup.refresh(self.paths)
         self.paint_targets.clear()
+        self.damage.clear()
         self.layout_targets.clear()
         self.structure_dirty = false
-        self.interaction_bases.clear()
+        self.full_repaint = true
         ret()
     }
     pub fn clear_paint(self: mut Self) ->() {
         self.paint_targets.clear()
+        self.damage.clear()
+        self.full_repaint = false
+        self.presentation_pending = false
         ret()
     }
     /// Marks the current retained layout as committed by a renderer that owns
     /// presentation outside `Window.draw_reactive`.
     pub fn commit_rendered(self: mut Self) ->() {
         self.paint_targets.clear()
+        self.damage.clear()
         self.layout_targets.clear()
         self.structure_dirty = false
+        self.full_repaint = false
+        self.presentation_pending = false
+        ret()
+    }
+    /// Paint commands are complete, but their frame has not been presented.
+    /// Further model changes still invalidate the normal paint/layout state.
+    pub fn commit_prepared(self: mut Self) ->() {
+        self.paint_targets.clear()
+        self.damage.clear()
+        self.full_repaint = false
+        self.presentation_pending = true
         ret()
     }
     /// Clears committed targets while retaining caller-owned transient layers.
@@ -2693,13 +4405,59 @@ impl for ReactiveUi {
             }
         }
         self.paint_targets = retained
+        let mut damage = Vec[PaintDamage]::new()
+        for entry in self.damage {
+            for target in retained {
+                if entry.id == target {
+                    damage.push(entry)
+                }
+            }
+        }
+        self.damage = damage
         ret()
     }
 
+    /// Damage covers both the old and new visual footprint, including
+    /// outlines, shadows and overflowing children, not just layout bounds.
+    pub fn paint_regions(self: mut Self) -> Vec[Rect] {
+        let mut regions = Vec[Rect]::new()
+        for entry in self.damage {
+            regions.push(entry.bounds)
+        }
+        ret regions
+    }
+    fn record_damage(self: mut Self, id: str) ->() {
+        match self.find_layout(id) {
+            Some(layout) => {
+                let bounds = layout.paint_bounds()
+                let mut index = 0_usize
+                for entry in self.damage {
+                    if entry.id == id {
+                        self.damage.set(index, PaintDamage {
+                                id, union_rect(entry.bounds, bounds)
+                            }
+                            ,
+                        )
+                        ret()
+                    }
+                    index += 1_usize
+                }
+                self.damage.push(PaintDamage {
+                        id, bounds
+                    }
+                    ,
+                )
+            }
+            None => {
+            }
+        }
+        ret()
+    }
     fn mark_paint(self: mut Self, id: str) ->() {
         if id == "" {
             ret()
         }
+        self.record_damage(id)
         for target in self.paint_targets {
             if target == id {
                 ret()
@@ -2710,12 +4468,165 @@ impl for ReactiveUi {
     }
 }
 
+fn slider_edge_inset(style: Style) -> f32 {
+    // Include the stroke/AA fringe and reserve inset focus outlines even
+    // while unfocused, so focusing cannot move the slider's endpoints.
+    let outline = - style.outline().offset()
+    let border = style.border_width()
+    ret 1.0_f32 + if outline > border && outline > 0.0_f32 {
+        outline
+    } elif border > 0.0_f32 {
+        border
+    } else {
+        0.0_f32
+    }
+}
+
+/// Shared thumb geometry for slider painting and pointer normalization.
+pub fn slider_thumb_radius(bounds: Rect, style: Style) -> f32 {
+    let inset = slider_edge_inset(style)
+    let available = if bounds.width() < bounds.height() {
+        bounds.width() / 2.0_f32 - inset
+    } else {
+        bounds.height() / 2.0_f32 - inset
+    }
+    ret if available < 0.0_f32 {
+        0.0_f32
+    } elif available < 7.0_f32 {
+        available
+    } else {
+        7.0_f32
+    }
+}
+
+/// Track endpoints keep the complete thumb inside its repaint rectangle.
+pub fn slider_track_bounds(bounds: Rect, style: Style) -> Rect {
+    let desired = slider_edge_inset(style) + slider_thumb_radius(bounds, style)
+    let inset = if desired * 2.0_f32 > bounds.width() {
+        bounds.width() / 2.0_f32
+    } else {
+        desired
+    }
+    ret Rect::new(bounds.x() + inset, bounds.y() + bounds.height() / 2.0_f32,
+        bounds.width() - inset * 2.0_f32, 0.0_f32,)
+}
+
+#attr(test)
+fn slider_geometry_contains_thumb_and_focus_border() -> bool {
+    let bounds = Rect::new(20.0_f32, 30.0_f32, 240.0_f32, 32.0_f32)
+    let style = Style::default().with_border(2.0_f32, Color::rgb(0_u8, 0_u8, 0_u8))
+    .with_outline(2.0_f32, Color::rgb(0_u8, 0_u8, 0_u8), - 2.0_f32)
+    let track = slider_track_bounds(bounds, style)
+    let radius = slider_thumb_radius(bounds, style)
+    let tiny = Rect::new(0.0_f32, 0.0_f32, 4.0_f32, 4.0_f32)
+    ret track.x() - radius >= bounds.x() + 3.0_f32 &&
+    track.right() + radius <= bounds.right() - 3.0_f32 &&
+    slider_track_bounds(tiny, style).width() >= 0.0_f32 &&
+    slider_thumb_radius(tiny, style) == 0.0_f32
+}
+
+fn scroll_container_at(layout: WidgetLayout, x: f32, y: f32) -> str {
+    let bounds = layout.bounds()
+    if x < bounds.x() || x >= bounds.right() || y < bounds.y() || y >= bounds.bottom() {
+        ret ""
+    }
+    let children = layout.children()
+    let mut index = children.len()
+    while index > 0 {
+        index -= 1
+        match children.get(index) {
+            Some(child) => {
+                let target = scroll_container_at(child, x, y) if target != "" {
+                    ret target
+                }
+            }
+            None => {
+            }
+        }
+    }
+    ret if layout.widget().attribute("data-luma-scrollable").unwrap_or("") == "true" {
+        layout.widget().id()
+    } else {
+        ""
+    }
+}
+
 pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
-    let content = bounds.inset(widget.style().padding())
-    let scroll = widget.style().layout().scroll()
+    ret layout_widget_reusing(widget, bounds, Option[WidgetLayout]::None,
+        Vec[Vec[usize]]::new(), Vec[usize]::new(),)
+}
+
+fn same_layout_bounds(left: Rect, right: Rect) -> bool {
+    ret left.x() == right.x() && left.y() == right.y() &&
+    left.width() == right.width() && left.height() == right.height()
+}
+
+fn collect_geometry_changes(previous: WidgetLayout, next: WidgetLayout,
+    path: Vec[usize], roots: mut Vec[Vec[usize]],) ->() {
+    if !same_layout_bounds(previous.bounds(), next.bounds()) {
+        roots.push(path) ret()
+    }
+    if previous.children().len() == next.children().len() &&
+    previous.children().as_ptr() == next.children().as_ptr() {
+        ret()
+    }
+    let mut index = 0_usize
+    for child in next.children() {
+        match previous.children().get(index) {
+            Some(old) => {
+                let mut child_path = Vec[usize]::new()
+                child_path.extend(path) child_path.push(index)
+                collect_geometry_changes(old, child, child_path, roots)
+            }
+            None => {
+                roots.push(path) ret()
+            }
+        }
+        index += 1
+    }
+}
+
+fn layout_widget_reusing(widget: Widget, bounds: Rect, previous: Option[WidgetLayout],
+    dirty: Vec[Vec[usize]], path: Vec[usize],) -> WidgetLayout {
+    let mut affected = false
+    for target in dirty {
+        affected = affected || path_has_prefix(target, path)
+    }
+    match previous {
+        Some(old) => {
+            if !affected && same_layout_bounds(old.bounds(), bounds) {
+                ret old
+            }
+            if !affected && old.bounds().width() == bounds.width() &&
+            old.bounds().height() == bounds.height() {
+                ret old.translated(bounds.x() - old.bounds().x(), bounds.y() - old.bounds().y())
+            }
+        }
+        None => {
+        }
+    }
+    // Keep the local descriptor independent of the temporary sizing input.
+    // Persisting geometry_input() here embeds previous-frame child snapshots
+    // alongside the new layout children and retains a growing history graph.
+    let descriptor = match previous {
+        Some(old) => old.widget() None => widget
+    }
+    let widget = match previous {
+        Some(old) => old.geometry_input() None => widget
+    }
+    // Leaves have no flex/grid work. Avoid constructing all the layout work
+    // vectors (and copying style subobjects) for every icon/text/control.
+    if widget.children().len() == 0 || widget.kind() == widget_rich_text() {
+        let children = Vec[WidgetLayout]::new()
+        ret WidgetLayout {
+            descriptor, bounds, children, widget_paint_bounds(descriptor, bounds, children), 0
+        }
+    }
+    let content = bounds.inset(widget.style.padding())
+    let scroll = widget.style.layout().scroll()
     let scrolled_content = Rect::new(content.x() - scroll.x(), content.y() - scroll.y(), content.width(),
         content.height(),)
-    let widget_flex = widget.style().layout().flex()
+    let widget_flex = widget.style.layout().flex()
     let direction = if widget_flex.direction_set() {
         widget_flex.direction()
     } else {
@@ -2726,17 +4637,25 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
     } else {
         widget.children()
     }
-    let mut children = Vec[Widget]::new()
-    let mut positioned = Vec[Widget]::new()
+    let mut indexed = Vec[IndexedWidget]::new()
+    let mut positioned = Vec[IndexedWidget]::new()
     let mut child_index = 0_usize
     while child_index < all_children.len() {
         match all_children.get(child_index) {
             Option[Widget]::Some(child) => {
-                if child.style().layout().flex().displayed() {
-                    if child.style().layout().position().absolute() {
-                        positioned.push(child)
+                if child.style.layout().flex().displayed() {
+                    if child.style.layout().position().absolute() {
+                        positioned.push(IndexedWidget {
+                                child, child_index
+                            }
+                            ,
+                        )
                     } else {
-                        children.push(child)
+                        indexed.push(IndexedWidget {
+                                child, child_index
+                            }
+                            ,
+                        )
                     }
                 }
             }
@@ -2745,7 +4664,80 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
         }
         child_index = child_index + 1_usize
     }
-    children = ordered_widgets(children)
+    indexed = ordered_widgets(indexed)
+    let mut children = Vec[Widget]::new()
+    for item in indexed {
+        children.push(item.widget)
+    }
+    let rects = child_layout_rects(widget, children, scrolled_content, direction, widget_flex)
+    let mut index = 0_usize
+    let mut layouts = Vec[WidgetLayout]::new()
+    index = 0_usize
+    while index < children.len() {
+        match children.get(index) {
+            Option[Widget]::Some(child) => {
+                match rects.get(index) {
+                    Option[Rect]::Some(rect) => {
+                        let self_align = child.style.layout().flex().self_align()
+                        let effective_align = if self_align >= 0_i32 {
+                            self_align as usize
+                        } else {
+                            widget_flex.align()
+                        }
+                        let child_bounds = if widget_flex.grid() {
+                            styled_grid_rect(child, rect, effective_align)
+                        } else {
+                            styled_child_rect(child, rect, direction, effective_align)
+                        }
+                        let source_index = indexed.get(index).unwrap_or(IndexedWidget {
+                                child, index
+                            }
+                            ,
+                        ).index
+                        let mut child_path = Vec[usize]::new()
+                        child_path.extend(path) child_path.push(source_index)
+                        layouts.push(layout_widget_reusing(child, child_bounds,
+                                match previous {
+                                    Some(old) => old.source_child(source_index) None => Option[WidgetLayout]::None
+                                }
+                                ,
+                                dirty, child_path,).with_source_index(source_index))
+                    }
+                    Option[Rect]::None => {
+                    }
+                }
+            }
+            Option[Widget]::None => {
+            }
+        }
+        index = index + 1_usize
+    }
+    index = 0_usize
+    while index < positioned.len() {
+        match positioned.get(index) {
+            Option[IndexedWidget]::Some(item) => {
+                let mut child_path = Vec[usize]::new()
+                child_path.extend(path) child_path.push(item.index)
+                layouts.push(layout_widget_reusing(item.widget, absolute_child_rect(item.widget, scrolled_content),
+                        match previous {
+                            Some(old) => old.source_child(item.index) None => Option[WidgetLayout]::None
+                        }
+                        ,
+                        dirty, child_path,).with_source_index(item.index))
+            }
+            Option[IndexedWidget]::None => {
+            }
+        }
+        index = index + 1_usize
+    }
+    layouts = stacked_layouts(layouts)
+    ret WidgetLayout {
+        descriptor, bounds, layouts, widget_paint_bounds(descriptor, bounds, layouts), 0
+    }
+}
+
+fn child_layout_rects(widget: Widget, children: Vec[Widget], scrolled_content: Rect,
+    direction: usize, widget_flex: FlexStyle,) -> Vec[Rect] {
     let mut flex_items = Vec[FlexItem]::new()
     let mut cross_extents = Vec[f32]::new()
     let mut grid_placements = Vec[GridPlacement]::new()
@@ -2755,75 +4747,82 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
     while index < children.len() {
         match children.get(index) {
             Option[Widget]::Some(child) => {
-                let layout = child.style().layout()
-                let flex = layout.flex()
-                let margin = layout.margin()
-                let horizontal_parent = direction == horizontal()
-                let explicit = if horizontal_parent {
-                    resolved_width(child, scrolled_content.width())
+                let layout = child.style.layout()
+                if widget_flex.grid() {
+                    grid_placements.push(layout.grid_placement())
                 } else {
-                    resolved_height(child, scrolled_content.height())
-                }
-                let minimum = if horizontal_parent {
-                    resolved_min_width(child)
-                } else {
-                    resolved_min_height(child)
-                }
-                let maximum = if horizontal_parent {
-                    resolved_max_width(child)
-                } else {
-                    resolved_max_height(child)
-                }
-                let margin_size = if horizontal_parent {
-                    margin.left() + margin.right()
-                } else {
-                    margin.top() + margin.bottom()
-                }
-                let default_basis = if flex.basis() >= 0.0_f32 {
-                    flex.basis()
-                } else {
-                    child.basis()
-                }
-                let basis =(if explicit >= 0.0_f32 {
-                        explicit
+                    let flex = layout.flex()
+                    let margin = layout.margin()
+                    let horizontal_parent = direction == horizontal()
+                    let explicit = if horizontal_parent {
+                        child.resolved_width(scrolled_content.width())
                     } else {
-                        default_basis
+                        child.resolved_height(scrolled_content.height())
                     }
-                ) + margin_size
-                let grow = if flex.grow() >= 0.0_f32 {
-                    flex.grow()
-                } else {
-                    child.grow()
-                }
-                let shrink = if flex.shrink() >= 0.0_f32 {
-                    flex.shrink()
-                } else {
-                    1.0_f32
-                }
-                flex_items.push(FlexItem::sized(basis, grow, shrink, minimum + margin_size, maximum +
-                        margin_size,))
-                let cross_explicit = if horizontal_parent {
-                    resolved_height(child, scrolled_content.height())
-                } else {
-                    resolved_width(child, scrolled_content.width())
-                }
-                let cross_default = if horizontal_parent {
-                    child.preferred_size().height()
-                } else {
-                    child.preferred_size().width()
-                }
-                let cross_margin = if horizontal_parent {
-                    margin.top() + margin.bottom()
-                } else {
-                    margin.left() + margin.right()
-                }
-                cross_extents.push((if cross_explicit >= 0.0_f32 {
-                            cross_explicit
+                    let minimum = if horizontal_parent {
+                        child.resolved_min_width()
+                    } else {
+                        child.resolved_min_height()
+                    }
+                    let maximum = if horizontal_parent {
+                        child.resolved_max_width()
+                    } else {
+                        child.resolved_max_height()
+                    }
+                    let margin_size = if horizontal_parent {
+                        margin.left() + margin.right()
+                    } else {
+                        margin.top() + margin.bottom()
+                    }
+                    let default_basis = if flex.basis() >= 0.0_f32 {
+                        flex.basis()
+                    } elif flex.basis() == - 2.0_f32 {
+                        auto_content_extent(child, horizontal_parent)
+                    } else {
+                        child.basis()
+                    }
+                    let basis =(if explicit >= 0.0_f32 {
+                            explicit
                         } else {
-                            cross_default
+                            default_basis
                         }
-                    ) + cross_margin)
-                grid_placements.push(layout.grid_placement())
+                    ) + margin_size
+                    let grow = if flex.grow() >= 0.0_f32 {
+                        flex.grow()
+                    } else {
+                        child.grow()
+                    }
+                    let shrink = if flex.shrink() >= 0.0_f32 {
+                        flex.shrink()
+                    } else {
+                        1.0_f32
+                    }
+                    flex_items.push(FlexItem::sized(basis, grow, shrink, minimum + margin_size, maximum +
+                            margin_size,))
+                    if widget_flex.wrap() {
+                        let cross_explicit = if horizontal_parent {
+                            child.resolved_height(scrolled_content.height())
+                        } else {
+                            child.resolved_width(scrolled_content.width())
+                        }
+                        let cross_default = if horizontal_parent {
+                            child.preferred_size().height()
+                        } else {
+                            child.preferred_size().width()
+                        }
+                        let cross_margin = if horizontal_parent {
+                            margin.top() + margin.bottom()
+                        } else {
+                            margin.left() + margin.right()
+                        }
+                        cross_extents.push((if cross_explicit >= 0.0_f32 {
+                                    cross_explicit
+                                } else {
+                                    cross_default
+                                }
+                            ) + cross_margin)
+                    }
+                }
             }
             Option[Widget]::None => {
             }
@@ -2833,7 +4832,9 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
     let intrinsic_grid = widget_flex.grid() &&
     (widget_flex.column_template() != "" || widget_flex.auto_column_template() != "" ||
         widget_flex.auto_row_template() != "" || has_grid_placement(grid_placements))
-    if intrinsic_grid {
+    if intrinsic_grid && grid_needs_content_sizes(widget_flex.column_template(),
+        widget_flex.row_template(), widget_flex.auto_column_template(),
+        widget_flex.auto_row_template(), grid_placements,) {
         index = 0_usize
         while index < children.len() {
             match children.get(index) {
@@ -2850,12 +4851,12 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
     let row_gap = if widget_flex.row_gap() >= 0.0_f32 {
         widget_flex.row_gap()
     } else {
-        widget.style().gap()
+        widget.style.gap()
     }
     let column_gap = if widget_flex.column_gap() >= 0.0_f32 {
         widget_flex.column_gap()
     } else {
-        widget.style().gap()
+        widget.style.gap()
     }
     let main_gap = if direction == horizontal() {
         column_gap
@@ -2867,7 +4868,7 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
     } else {
         column_gap
     }
-    let rects = if widget_flex.grid() {
+    ret if widget_flex.grid() {
         if intrinsic_grid {
             grid_layout_intrinsic_placed(scrolled_content, widget_flex.column_template(), widget_flex.row_template(),
                 widget_flex.auto_column_template(), widget_flex.auto_row_template(), row_gap, column_gap,
@@ -2882,50 +4883,6 @@ pub fn layout_widget(widget: Widget, bounds: Rect) -> WidgetLayout {
     } else {
         flex_layout_directional(scrolled_content, direction, main_gap, widget_flex.justify(), flex_items,
             widget_flex.direction_reverse(),)
-    }
-    let mut layouts = Vec[WidgetLayout]::new()
-    index = 0_usize
-    while index < children.len() {
-        match children.get(index) {
-            Option[Widget]::Some(child) => {
-                match rects.get(index) {
-                    Option[Rect]::Some(rect) => {
-                        let self_align = child.style().layout().flex().self_align()
-                        let effective_align = if self_align >= 0_i32 {
-                            self_align as usize
-                        } else {
-                            widget_flex.align()
-                        }
-                        let child_bounds = if widget_flex.grid() {
-                            styled_grid_rect(child, rect, effective_align)
-                        } else {
-                            styled_child_rect(child, rect, direction, effective_align)
-                        }
-                        layouts.push(layout_widget(child, child_bounds))
-                    }
-                    Option[Rect]::None => {
-                    }
-                }
-            }
-            Option[Widget]::None => {
-            }
-        }
-        index = index + 1_usize
-    }
-    index = 0_usize
-    while index < positioned.len() {
-        match positioned.get(index) {
-            Option[Widget]::Some(child) => {
-                layouts.push(layout_widget(child, absolute_child_rect(child, scrolled_content)))
-            }
-            Option[Widget]::None => {
-            }
-        }
-        index = index + 1_usize
-    }
-    layouts = stacked_layouts(layouts)
-    ret WidgetLayout {
-        widget, bounds, layouts, widget_paint_bounds(widget, bounds, layouts)
     }
 }
 
@@ -2954,7 +4911,7 @@ fn stacked_layouts(source: Vec[WidgetLayout]) -> Vec[WidgetLayout] {
     while ordered_index < source.len() {
         match source.get(ordered_index) {
             Option[WidgetLayout]::Some(layout) => {
-                let z = layout.widget().style().layout().position().z_index()
+                let z = layout.widget().style.layout().position().z_index()
                 if z < previous_z {
                     ordered = false
                 }
@@ -2984,7 +4941,7 @@ fn stacked_layouts(source: Vec[WidgetLayout]) -> Vec[WidgetLayout] {
                     if !is_used {
                         match source.get(index) {
                             Option[WidgetLayout]::Some(layout) => {
-                                let z = layout.widget().style().layout().position().z_index()
+                                let z = layout.widget().style.layout().position().z_index()
                                 if best == source.len() || z < best_z {
                                     best = index best_z = z
                                 }
@@ -3014,20 +4971,25 @@ fn stacked_layouts(source: Vec[WidgetLayout]) -> Vec[WidgetLayout] {
     ret result
 }
 
-fn ordered_widgets(source: Vec[Widget]) -> Vec[Widget] {
+struct IndexedWidget {
+    widget: Widget
+    index: usize
+}
+
+fn ordered_widgets(source: Vec[IndexedWidget]) -> Vec[IndexedWidget] {
     let mut ordered = true
     let mut previous_order = - 2147483648_i32
     let mut ordered_index = 0_usize
     while ordered_index < source.len() {
         match source.get(ordered_index) {
-            Option[Widget]::Some(widget) => {
-                let order = widget.style().layout().flex().order()
+            Option[IndexedWidget]::Some(widget) => {
+                let order = widget.widget.style.layout().flex().order()
                 if order < previous_order {
                     ordered = false
                 }
                 previous_order = order
             }
-            Option[Widget]::None => {
+            Option[IndexedWidget]::None => {
             }
         }
         ordered_index = ordered_index + 1_usize
@@ -3035,7 +4997,7 @@ fn ordered_widgets(source: Vec[Widget]) -> Vec[Widget] {
     if ordered {
         ret source
     }
-    let mut result = Vec[Widget]::new()
+    let mut result = Vec[IndexedWidget]::new()
     let mut used = Vec[bool]::new()
     let mut index = 0_usize
     while index < source.len() {
@@ -3050,13 +5012,13 @@ fn ordered_widgets(source: Vec[Widget]) -> Vec[Widget] {
                 Option[bool]::Some(is_used) => {
                     if !is_used {
                         match source.get(index) {
-                            Option[Widget]::Some(widget) => {
-                                let order = widget.style().layout().flex().order()
+                            Option[IndexedWidget]::Some(widget) => {
+                                let order = widget.widget.style.layout().flex().order()
                                 if best == source.len() || order < best_order {
                                     best = index best_order = order
                                 }
                             }
-                            Option[Widget]::None => {
+                            Option[IndexedWidget]::None => {
                             }
                         }
                     }
@@ -3070,15 +5032,42 @@ fn ordered_widgets(source: Vec[Widget]) -> Vec[Widget] {
             break
         }
         match source.get(best) {
-            Option[Widget]::Some(widget) => {
+            Option[IndexedWidget]::Some(widget) => {
                 result.push(widget) used.set(best, true)
             }
-            Option[Widget]::None => {
+            Option[IndexedWidget]::None => {
                 break
             }
         }
     }
     ret result
+}
+
+fn same_animation_targets(layout: WidgetLayout, next: Widget) -> bool {
+    let previous = layout.widget()
+    if previous.id() != next.id() || previous.kind() != next.kind() ||
+    previous.children().len() != next.children().len() ||
+    !previous.style.equivalent(next.style) ||
+    previous.countdown_cycle() != next.countdown_cycle() ||
+    // An idle/completed countdown still owns its sampled value. Let the
+    // animation transaction preserve it instead of resetting to model value.
+    previous.countdown_duration_ms() > 0 || next.countdown_duration_ms() > 0 {
+        ret false
+    }
+    let source = next.children()
+    for old in layout.children() {
+        match source.get(old.source_index) {
+            Some(child) => {
+                if !same_animation_targets(old, child) {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+    ret true
 }
 
 pub fn inherit_widget_styles(root: Widget) -> Widget {
@@ -3088,19 +5077,22 @@ pub fn inherit_widget_styles(root: Widget) -> Widget {
 fn inherit_widget_node(widget: Widget, parent: Option[Style]) -> Widget {
     let styled = match parent {
         Option[Style]::Some(parent_style) => {
-            widget.with_computed_style(widget.style().inherit_text(parent_style))
+            widget.with_computed_style(widget.style.inherit_text(parent_style))
         }
         Option[Style]::None => {
             widget
         }
     }
     let source = styled.children()
+    if source.len() == 0_usize {
+        ret styled
+    }
     let mut children = Vec[Widget]::new()
     let mut index = 0_usize
     while index < source.len() {
         match source.get(index) {
             Option[Widget]::Some(child) => {
-                children.push(inherit_widget_node(child, Option[Style]::Some(styled.style())))
+                children.push(inherit_widget_node(child, Option[Style]::Some(styled.style)))
             }
             Option[Widget]::None => {
             }
@@ -3111,22 +5103,36 @@ fn inherit_widget_node(widget: Widget, parent: Option[Style]) -> Widget {
 }
 
 fn absolute_child_rect(widget: Widget, containing: Rect) -> Rect {
-    let layout = widget.style().layout()
+    // The containing block resolves percentages/insets, not a size ceiling.
+    // Explicit popup dimensions may overflow it; ancestor clips apply later.
+    let layout = widget.style.layout()
     let position = layout.position()
     let margin = layout.margin()
     let available_width = containing.width() - margin.left() - margin.right()
     let available_height = containing.height() - margin.top() - margin.bottom()
-    let explicit_width = resolved_width(widget, available_width)
-    let explicit_height = resolved_height(widget, available_height)
-    let automatic_width = if position.left_set() && position.right_set() {
+    let explicit_width = widget.resolved_width(available_width)
+    let explicit_height = widget.resolved_height(available_height)
+    let automatic_width = if explicit_width >= 0 {
+        explicit_width
+    } elif position.left_set() && position.right_set() {
         available_width - position.left() - position.right()
     } else {
-        widget.preferred_size().width()
+        if widget.children().len() > 0 {
+            auto_content_extent(widget, true)
+        } else {
+            widget.preferred_size().width()
+        }
     }
-    let automatic_height = if position.top_set() && position.bottom_set() {
+    let automatic_height = if explicit_height >= 0 {
+        explicit_height
+    } elif position.top_set() && position.bottom_set() {
         available_height - position.top() - position.bottom()
     } else {
-        widget.basis()
+        if widget.children().len() > 0 {
+            auto_content_extent(widget, false)
+        } else {
+            widget.basis()
+        }
     }
     let width = clamp_dimension(if explicit_width >= 0.0_f32 {
             explicit_width
@@ -3134,14 +5140,14 @@ fn absolute_child_rect(widget: Widget, containing: Rect) -> Rect {
             automatic_width
         }
         ,
-        resolved_min_width(widget), resolved_max_width(widget), available_width,)
+        widget.resolved_min_width(), widget.resolved_max_width(), widget.resolved_max_width(),)
     let height = clamp_dimension(if explicit_height >= 0.0_f32 {
             explicit_height
         } else {
             automatic_height
         }
         ,
-        resolved_min_height(widget), resolved_max_height(widget), available_height,)
+        widget.resolved_min_height(), widget.resolved_max_height(), widget.resolved_max_height(),)
     let x = if position.left_set() {
         containing.x() + position.left() + margin.left()
     } elif position.right_set() {
@@ -3161,17 +5167,17 @@ fn absolute_child_rect(widget: Widget, containing: Rect) -> Rect {
 
 fn styled_child_rect(widget: Widget, allocated: Rect, parent_direction: usize, align: usize) -> Rect
 {
-    let layout = widget.style().layout()
+    let layout = widget.style.layout()
     let inner = allocated.inset(layout.margin())
     let explicit_width = if parent_direction == horizontal() {
         - 1.0_f32
     } else {
-        resolved_width(widget, inner.width())
+        widget.resolved_width(inner.width())
     }
     let explicit_height = if parent_direction == vertical() {
         - 1.0_f32
     } else {
-        resolved_height(widget, inner.height())
+        widget.resolved_height(inner.height())
     }
     let requested_width = if explicit_width >= 0.0_f32 {
         explicit_width
@@ -3183,9 +5189,9 @@ fn styled_child_rect(widget: Widget, allocated: Rect, parent_direction: usize, a
     } else {
         inner.height()
     }
-    let width = clamp_dimension(requested_width, resolved_min_width(widget), resolved_max_width(widget),
+    let width = clamp_dimension(requested_width, widget.resolved_min_width(), widget.resolved_max_width(),
         inner.width(),)
-    let height = clamp_dimension(requested_height, resolved_min_height(widget), resolved_max_height(widget),
+    let height = clamp_dimension(requested_height, widget.resolved_min_height(), widget.resolved_max_height(),
         inner.height(),)
     let x = if parent_direction == vertical() && align == align_center() {
         inner.x() +(inner.width() - width) / 2.0_f32
@@ -3205,7 +5211,7 @@ fn styled_child_rect(widget: Widget, allocated: Rect, parent_direction: usize, a
 }
 
 fn relative_child_rect(widget: Widget, bounds: Rect) -> Rect {
-    let position = widget.style().layout().position()
+    let position = widget.style.layout().position()
     if !position.relative() {
         ret bounds
     }
@@ -3227,24 +5233,24 @@ fn relative_child_rect(widget: Widget, bounds: Rect) -> Rect {
 }
 
 fn styled_grid_rect(widget: Widget, allocated: Rect, align: usize) -> Rect {
-    let layout = widget.style().layout()
+    let layout = widget.style.layout()
     let inner = allocated.inset(layout.margin())
-    let explicit_width = resolved_width(widget, inner.width())
-    let explicit_height = resolved_height(widget, inner.height())
+    let explicit_width = widget.resolved_width(inner.width())
+    let explicit_height = widget.resolved_height(inner.height())
     let width = clamp_dimension(if explicit_width >= 0.0_f32 {
             explicit_width
         } else {
             inner.width()
         }
         ,
-        resolved_min_width(widget), resolved_max_width(widget), inner.width(),)
+        widget.resolved_min_width(), widget.resolved_max_width(), inner.width(),)
     let height = clamp_dimension(if explicit_height >= 0.0_f32 {
             explicit_height
         } else {
             inner.height()
         }
         ,
-        resolved_min_height(widget), resolved_max_height(widget), inner.height(),)
+        widget.resolved_min_height(), widget.resolved_max_height(), inner.height(),)
     let x = if align == align_center() {
         inner.x() +(inner.width() - width) / 2.0_f32
     } elif align == align_end() {
@@ -3262,75 +5268,85 @@ fn styled_grid_rect(widget: Widget, allocated: Rect, align: usize) -> Rect {
     ret relative_child_rect(widget, Rect::new(x, y, width, height))
 }
 
-fn resolved_width(widget: Widget, available: f32) -> f32 {
-    let layout = widget.style().layout()
-    let value = if layout.relative().width() >= 0.0_f32 {
-        available * layout.relative().width()
-    } else {
-        layout.width()
+impl for Widget {
+    #attr(borrowed_self)
+    pub fn resolved_width(self: Self, available: f32) -> f32 {
+        let layout = self.style.layout()
+        let value = if layout.relative().width() >= 0.0_f32 {
+            available * layout.relative().width()
+        } else {
+            layout.width()
+        }
+        ret if value >= 0.0_f32 && layout.content_box() {
+            value + self.box_width_extra()
+        } else {
+            value
+        }
     }
-    ret if value >= 0.0_f32 && layout.content_box() {
-        value + box_width_extra(widget)
-    } else {
-        value
-    }
-}
 
-fn resolved_height(widget: Widget, available: f32) -> f32 {
-    let layout = widget.style().layout()
-    let value = if layout.relative().height() >= 0.0_f32 {
-        available * layout.relative().height()
-    } else {
-        layout.height()
+    #attr(borrowed_self)
+    pub fn resolved_height(self: Self, available: f32) -> f32 {
+        let layout = self.style.layout()
+        let value = if layout.relative().height() >= 0.0_f32 {
+            available * layout.relative().height()
+        } else {
+            layout.height()
+        }
+        ret if value >= 0.0_f32 && layout.content_box() {
+            value + self.box_height_extra()
+        } else {
+            value
+        }
     }
-    ret if value >= 0.0_f32 && layout.content_box() {
-        value + box_height_extra(widget)
-    } else {
-        value
-    }
-}
 
-fn box_width_extra(widget: Widget) -> f32 {
-    let style = widget.style()
-    ret style.padding().left() + style.padding().right() + style.border_width() * 2.0_f32
-}
+    #attr(borrowed_self)
+    fn box_width_extra(self: Self) -> f32 {
+        let style = self.style
+        ret style.padding().left() + style.padding().right() + style.border_width() * 2.0_f32
+    }
 
-fn box_height_extra(widget: Widget) -> f32 {
-    let style = widget.style()
-    ret style.padding().top() + style.padding().bottom() + style.border_width() * 2.0_f32
-}
+    #attr(borrowed_self)
+    fn box_height_extra(self: Self) -> f32 {
+        let style = self.style
+        ret style.padding().top() + style.padding().bottom() + style.border_width() * 2.0_f32
+    }
 
-fn resolved_min_width(widget: Widget) -> f32 {
-    let extra = if widget.style().layout().content_box() {
-        box_width_extra(widget)
-    } else {
-        0.0_f32
+    #attr(borrowed_self)
+    pub fn resolved_min_width(self: Self) -> f32 {
+        let extra = if self.style.layout().content_box() {
+            self.box_width_extra()
+        } else {
+            0.0_f32
+        }
+        ret self.style.layout().min_width() + extra
     }
-    ret widget.style().layout().min_width() + extra
-}
-fn resolved_min_height(widget: Widget) -> f32 {
-    let extra = if widget.style().layout().content_box() {
-        box_height_extra(widget)
-    } else {
-        0.0_f32
+    #attr(borrowed_self)
+    pub fn resolved_min_height(self: Self) -> f32 {
+        let extra = if self.style.layout().content_box() {
+            self.box_height_extra()
+        } else {
+            0.0_f32
+        }
+        ret self.style.layout().min_height() + extra
     }
-    ret widget.style().layout().min_height() + extra
-}
-fn resolved_max_width(widget: Widget) -> f32 {
-    let extra = if widget.style().layout().content_box() {
-        box_width_extra(widget)
-    } else {
-        0.0_f32
+    #attr(borrowed_self)
+    pub fn resolved_max_width(self: Self) -> f32 {
+        let extra = if self.style.layout().content_box() {
+            self.box_width_extra()
+        } else {
+            0.0_f32
+        }
+        ret self.style.layout().max_width() + extra
     }
-    ret widget.style().layout().max_width() + extra
-}
-fn resolved_max_height(widget: Widget) -> f32 {
-    let extra = if widget.style().layout().content_box() {
-        box_height_extra(widget)
-    } else {
-        0.0_f32
+    #attr(borrowed_self)
+    pub fn resolved_max_height(self: Self) -> f32 {
+        let extra = if self.style.layout().content_box() {
+            self.box_height_extra()
+        } else {
+            0.0_f32
+        }
+        ret self.style.layout().max_height() + extra
     }
-    ret widget.style().layout().max_height() + extra
 }
 
 fn clamp_dimension(value: f32, minimum: f32, maximum: f32, available: f32) -> f32 {
@@ -3544,4 +5560,64 @@ fn transition_whitespace(value: str) -> bool {
 fn transition_ends_with(value: str, suffix: str) -> bool {
     ret value.char_len() >= suffix.char_len() &&
     value.slice(value.char_len() - suffix.char_len(), suffix.char_len()) == suffix
+}
+
+// Explicit CSS auto uses content; an unspecified basis keeps constructor geometry.
+fn auto_content_extent(widget: Widget, horizontal_axis: bool) -> f32 {
+    if widget.children().len() == 0 {
+        let size = widget.max_content_size()
+        if horizontal_axis && widget.kind() == widget_icon_button() && widget.text() != "" {
+            let height = widget.resolved_height(0)
+            let icon = if height > 0 && height < 36 {
+                height - 14
+            } else {
+                22_f32
+            }
+            // Match the icon button's renderer: leading inset, icon, gap, caption.
+            ret(widget.text().char_len() as f32) * widget.style().font_size() * 0.56_f32 + 10_f32 + icon + 9_f32 + 8_f32
+        }
+        ret if horizontal_axis {
+            size.width()
+        } else {
+            size.height()
+        }
+    }
+    let mut extent = 0_f32 let direction = widget.direction() == horizontal()
+    let mut visible_children = 0_usize
+    for child in widget.children() {
+        if !child.style().layout().flex().displayed() || child.style().layout().position().absolute() {
+            continue
+        }
+        visible_children += 1_usize
+        let explicit = if horizontal_axis {
+            child.resolved_width(0)
+        } else {
+            child.resolved_height(0)
+        }
+        let size = if explicit >= 0 {
+            explicit
+        } else {
+            auto_content_extent(child, horizontal_axis)
+        }
+        let margin = child.style().layout().margin()
+        let outer = size + if horizontal_axis {
+            margin.left() + margin.right()
+        } else {
+            margin.top() + margin.bottom()
+        }
+        if direction == horizontal_axis {
+            extent += outer
+        } elif outer > extent {
+            extent = outer
+        }
+    }
+    if direction == horizontal_axis && visible_children > 1 {
+        extent += widget.style().gap() *((visible_children - 1_usize) as f32)
+    }
+    let padding = widget.style().padding()
+    ret extent + if horizontal_axis {
+        padding.left() + padding.right() + widget.style().border_width() * 2
+    } else {
+        padding.top() + padding.bottom() + widget.style().border_width() * 2
+    }
 }

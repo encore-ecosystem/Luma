@@ -1,0 +1,27 @@
+//! Vector overlay commands do not mutate layout or create another presentation.
+import core::option::Option
+import core::vec::Vec
+import luma::{Color, DisplayCommand, DisplayList, DisplayPoint, Rect, Style, Widget, Window, layout_widget}
+
+fn main() -> u32 {
+    let window = Window::create("Display overlay contract", 100, 80)
+    if !window.available() { ret 1 }
+    let layout = window.layout(Widget::panel("root"))
+    let mut list = DisplayList::new()
+    let mut path = Vec[DisplayPoint]::new()
+    path.push(DisplayPoint::new(10, 10))
+    path.push(DisplayPoint::new(30, 20))
+    list.path(path, 1, Color::rgb(255, 0, 0), false)
+    list.triangle(DisplayPoint::new(10, 10), DisplayPoint::new(30, 10), DisplayPoint::new(20, 30), Color::rgba(255, 0, 0, 32))
+    list.styled_text(10, 10, "X", Style::default().with_font_size(12))
+    // A client clear_clip must not escape the enclosing overlay clip.
+    list.clear_clip()
+    let frame = window.prepare_frame(layout, false)
+    let overlay = frame.with_display_overlay(list, Rect::new(5, 5, 90, 70))
+    let empty = frame.with_display_overlay(DisplayList::new(), Rect::new(5, 5, 90, 70))
+    let invalid = frame.with_display_overlay(list, Rect::new(5, 5, 0, 70))
+    let valid = frame.display_overlay_count() == 0 && overlay.display_overlay_count() == 1 &&
+        empty.display_overlay_count() == 0 && invalid.display_overlay_count() == 0 && window.presented_frames() == 0 && list.len() == 4
+    let _destroyed = window.destroy()
+    ret if valid { 0 } else { 2 }
+}

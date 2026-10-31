@@ -1,0 +1,59 @@
+//! Absolute popups derive their bounds from visible rows, not constructor basis.
+import luma::{Rect, StyleSheet, Widget, layout_widget}
+
+fn popup(rows: usize, caption: str) -> Widget {
+    let mut result = Widget::panel("popup").with_classes("popup")
+    let mut index = 0_usize
+    while index < rows {
+        result.push(Widget::button("row-" + index.fmt(), caption).with_classes("row"))
+        index += 1_usize
+    }
+    result.push(Widget::button("hidden", "Hidden").with_classes("hidden"))
+    result.push(Widget::panel("overlay").with_classes("overlay"))
+    ret result
+}
+
+fn main() -> u32 {
+    let sheet = StyleSheet::parse("#root { padding: 0; border: 0; } .popup { position: absolute; top: 25px; left: 12px; width: auto; height: auto; min-width: 100px; flex-direction: column; padding: 5px; border: 1px solid #555555; gap: 2px; } .row { height: 28px; flex: 0 0 28px; font-size: 13px; padding: 4px 8px; } .hidden { display: none; } .overlay { position: absolute; width: 800px; height: 800px; } .fixed { width: 240px; height: 80px; } .stretch { left: 12px; right: 18px; top: 25px; bottom: 15px; } .limited { max-height: 60px; }")
+    let mut counts = Vec[usize]::new()
+    counts.push(1_usize) counts.push(5_usize) counts.push(6_usize) counts.push(11_usize)
+    for rows in counts {
+        let mut root = Widget::panel("root")
+        root.push(popup(rows, "Menu action"))
+        let layout = layout_widget(sheet.apply(root, "", "", ""), Rect::new(0, 0, 640, 480))
+        let bounds = layout.find_bounds("popup").unwrap_or(Rect::new(0, 0, 0, 0))
+        let expected = 12_f32 +(rows as f32) * 28_f32 +((rows - 1_usize) as f32) * 2_f32
+        if bounds.height() != expected || bounds.width() < 100 || bounds.x() != 12 || bounds.y() != 25 {
+            println("popup rows=" + rows.fmt() + " height=" + bounds.height().fmt() + " expected=" + expected.fmt() + " width=" + bounds.width().fmt() + " x=" + bounds.x().fmt() + " y=" + bounds.y().fmt())
+            ret 1
+        }
+    }
+    let mut short_root = Widget::panel("root")
+    short_root.push(popup(1_usize, "Short"))
+    let short_layout = layout_widget(sheet.apply(short_root, "", "", ""), Rect::new(0, 0, 640, 480))
+    let mut long_root = Widget::panel("root")
+    long_root.push(popup(1_usize, "A much longer translated menu action"))
+    let long_layout = layout_widget(sheet.apply(long_root, "", "", ""), Rect::new(0, 0, 640, 480))
+    let empty = Rect::new(0, 0, 0, 0)
+    if long_layout.find_bounds("popup").unwrap_or(empty).width() <= short_layout.find_bounds("popup").unwrap_or(empty).width() {
+        ret 2
+    }
+    let mut modes = Vec[str]::new()
+    modes.push("fixed") modes.push("stretch") modes.push("limited")
+    for mode in modes {
+        let mut root = Widget::panel("root")
+        root.push(popup(5_usize, "Action").with_added_classes(mode))
+        let layout = layout_widget(sheet.apply(root, "", "", ""), Rect::new(0, 0, 640, 480))
+        let bounds = layout.find_bounds("popup").unwrap_or(empty)
+        if mode == "fixed" &&(bounds.width() != 240 || bounds.height() != 80) {
+            ret 3
+        }
+        if mode == "stretch" &&(bounds.width() != 610 || bounds.height() != 440) {
+            ret 4
+        }
+        if mode == "limited" && bounds.height() != 60 {
+            ret 5
+        }
+    }
+    ret 0
+}

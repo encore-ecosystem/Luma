@@ -1,0 +1,90 @@
+//! Cascade ordering and cache dependencies during page changes.
+import luma::{StyleSheet, Widget}
+
+fn tree(leading: Widget) -> Widget {
+    let mut root = Widget::panel("root")
+    root.push(leading)
+    root.push(Widget::label("Target").with_id("target"))
+    ret root
+}
+
+fn red(root: Widget) -> u8 {
+    ret root.find("target").unwrap_or(Widget::spacer(0.0)).style().foreground().red()
+}
+
+fn main() -> u32 {
+    let base = StyleSheet::parse("#target { color: #110000; } label { color: #220000; }")
+    let source = tree(Widget::label("First").with_id("first"))
+    if red(base.apply(source, "", "", "")) != 17 {
+        ret 1
+    }
+    let merged = base.merge(StyleSheet::parse("#target { color: #330000; } label { color: #440000; }"))
+    if red(merged.apply(source, "", "", "")) != 51 {
+        ret 2
+    }
+
+    let variables = StyleSheet::parse("#target { --ink: #550000; } label { --ink: #660000; color: var(--ink); }")
+    if red(variables.apply(source, "", "", "")) != 85 {
+        ret 3
+    }
+
+    let adjacent = StyleSheet::parse("label { color: #000000; } .lead:hover + #target { color: #770000; }")
+    let with_lead = tree(Widget::label("First").with_id("first").with_classes("lead"))
+    if red(adjacent.apply(with_lead, "", "", "")) != 0 {
+        ret 4
+    }
+    if red(adjacent.apply(with_lead, "first", "", "")) != 119 {
+        ret 5
+    }
+    if red(adjacent.apply(source, "first", "", "")) != 0 {
+        ret 6
+    }
+
+    let independent = StyleSheet::parse("label { color: #880000; }")
+    let _initial = independent.apply(source, "", "", "")
+    let misses = independent.cache_misses()
+    let changed = tree(Widget::label("Second").with_id("second"))
+    if red(independent.apply(changed, "", "", "")) != 136 {
+        ret 7
+    }
+    if independent.cache_misses() > misses + 1 {
+        ret 8
+    }
+    let warm_misses = independent.cache_misses()
+    let _hovered = independent.apply(changed, "second", "", "")
+    // Only the hovered node and its ancestor change their own state. The
+    // unrelated target must reuse its flat-selector cascade.
+    if independent.cache_misses() > warm_misses + 2 {
+        ret 9
+    }
+
+    let contextual = StyleSheet::parse("label { color: #110000; } .dark #target { color: #990000; }")
+    if red(contextual.apply(source, "", "", "")) != 17 ||
+    red(contextual.apply(source.with_classes("dark"), "", "", "")) != 153 {
+        ret 10
+    }
+
+    let inherited = StyleSheet::parse(":root { --ink: #220000; } #root:hover { --ink: #aa0000; } label { color: var(--ink); }")
+    if red(inherited.apply(source, "", "", "")) != 34 ||
+    red(inherited.apply(source, "first", "", "")) != 170 ||
+    red(inherited.apply(source, "", "", "")) != 34 {
+        ret 11
+    }
+
+    let recycled = StyleSheet::parse("label { color: #440000; } #special { color: #bb0000; }")
+    let _first_item = recycled.apply(Widget::label("One").with_id("item-1"), "", "", "")
+    let first_misses = recycled.cache_misses()
+    let next_item = recycled.apply(Widget::label("Two").with_id("item-2"), "", "", "")
+    if next_item.style().foreground().red() != 68 || recycled.cache_misses() != first_misses {
+        ret 12
+    }
+    if recycled.apply(Widget::label("Special").with_id("special"), "", "", "").style().foreground().red() != 187 {
+        ret 13
+    }
+    let attribute_id = StyleSheet::parse("label { color: #440000; } [id=\"special\"] { color: #cc0000; }")
+    let _ordinary = attribute_id.apply(Widget::label("One").with_id("item-1"), "", "", "")
+    if attribute_id.apply(Widget::label("Special").with_id("special"), "", "", "").style().foreground().red() != 204 {
+        ret 14
+    }
+    ret 0
+}

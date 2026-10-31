@@ -1,0 +1,79 @@
+version = 2
+
+[[packages]]
+name = "luma"
+ref = "path@../.."
+version = "0.0.1"
+features = ["fonts"]
+
+[[packages]]
+name = "std"
+ref = "index@std@>=0.0.8"
+version = "0.0.8"
+archive = "http://127.0.0.1:8137/archives/aebaf85350327d57a665d1ca95760783ff14803c160a78ab45f532df08c7458f.tar.gz"
+checksum = "aebaf85350327d57a665d1ca95760783ff14803c160a78ab45f532df08c7458f"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "json"
+ref = "index@json@>=0.0.3"
+version = "0.0.4"
+archive = "http://127.0.0.1:8137/archives/509f25e7f49650a1e487b42b0a96b4fd62004245739d126941c4e07f17b19b12.tar.gz"
+checksum = "509f25e7f49650a1e487b42b0a96b4fd62004245739d126941c4e07f17b19b12"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "core"
+ref = "sys@core"
+version = "0.0.0"
+
+[[packages]]
+name = "color"
+ref = "workspace@color"
+version = "0.0.0"
+source = "embedded@luma"
+path = "workspace/color"
+
+[[packages]]
+name = "ui_native"
+ref = "workspace@ui_native"
+version = "0.0.0"
+source = "embedded@luma"
+path = "workspace/ui_native"
+
+[[packages]]
+name = "vulkan"
+ref = "index@vulkan@>=0.1.1"
+version = "0.1.1"
+archive = "http://127.0.0.1:8137/archives/db116f49be56e729ae425168790e5b9ff02d04ac446048b01448a7d6ac84f175.tar.gz"
+checksum = "db116f49be56e729ae425168790e5b9ff02d04ac446048b01448a7d6ac84f175"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "sdl"
+ref = "index@sdl@>=0.1.0"
+version = "0.1.0"
+archive = "http://127.0.0.1:8137/archives/e885102779a6a4ceb961966b31a1aea661c74cbe7063bc1503daf0ab8f1174ed.tar.gz"
+checksum = "e885102779a6a4ceb961966b31a1aea661c74cbe7063bc1503daf0ab8f1174ed"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "gpu"
+ref = "index@gpu@>=0.1.1"
+version = "0.1.1"
+archive = "http://127.0.0.1:8137/archives/667c967b6a42b359f808a16f0b4958798f6f48e7931facc770224231f9d02bce.tar.gz"
+checksum = "667c967b6a42b359f808a16f0b4958798f6f48e7931facc770224231f9d02bce"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "platform"
+ref = "sys@platform"
+version = "0.0.0"
+
+[[packages]]
+name = "serialize"
+ref = "index@serialize@0.1.0"
+version = "0.1.0"
+archive = "http://127.0.0.1:8137/archives/520ebd77d581c301155a6f4664fc071a9808b0e15ff91f0461180b42ddd4ed7d.tar.gz"
+checksum = "520ebd77d581c301155a6f4664fc071a9808b0e15ff91f0461180b42ddd4ed7d"
+registry = "http://127.0.0.1:8137/index"

@@ -1,0 +1,131 @@
+//! Reusable inspection and ordered synthetic input for retained applications.
+import core::option::Option
+import core::vec::Vec
+
+import refrain::application::Event
+import refrain::geometry::Rect
+import refrain::widget::{WidgetLayout, widget_image}
+
+pub struct UiInspectionNode {
+    id: str
+    parent: str
+    text: str
+    role: str
+    kind: usize
+    bounds: Rect
+    disabled: bool
+}
+pub struct UiInspection {
+    nodes: Vec[UiInspectionNode]
+    total: usize
+}
+fn inspect_branch(layout: WidgetLayout, parent: str, clip: Rect, query: str, offset: usize, limit: usize, result: mut UiInspection) ->() {
+    let widget = layout.widget() let bounds = layout.bounds()
+    if !widget.style().visible() {
+        ret()
+    }
+    let x = if bounds.x() > clip.x() {
+        bounds.x()
+    } else {
+        clip.x()
+    }
+    let y = if bounds.y() > clip.y() {
+        bounds.y()
+    } else {
+        clip.y()
+    }
+    let right = if bounds.right() < clip.right() {
+        bounds.right()
+    } else {
+        clip.right()
+    }
+    let bottom = if bounds.bottom() < clip.bottom() {
+        bounds.bottom()
+    } else {
+        clip.bottom()
+    }
+    let visible = right > x && bottom > y
+    // Images store opaque RGBA bytes in text; expose their accessible name.
+    // Searching the pixel payload as Unicode can stall inspection of a frame.
+    let text = if widget.kind() == widget_image() {
+        widget.attribute("alt").unwrap_or(widget.attribute("aria-label").unwrap_or(""))
+    } else {
+        widget.text()
+    }
+    if visible &&(widget.id() != "" || text != "") &&(query == "" || widget.id().contains(query) || text.contains(query)) {
+        if result.total >= offset && result.nodes.len() < limit {
+            result.nodes.push(UiInspectionNode {
+                    widget.id(), parent, text, widget.attribute("role").unwrap_or(""), widget.kind(), Rect::new(x, y, right - x, bottom - y), widget.disabled()
+                }
+                ,
+            )
+        }
+        result.total += 1
+    }
+    if !visible && widget.style().layout().overflow_hidden() {
+        ret()
+    }
+    let child_clip = if widget.style().layout().overflow_hidden() {
+        Rect::new(x, y, right - x, bottom - y)
+    } else {
+        clip
+    }
+    let child_parent = if widget.id() != "" {
+        widget.id()
+    } else {
+        parent
+    }
+    for child in layout.children() {
+        inspect_branch(child, child_parent, child_clip, query, offset, limit, result)
+    }
+}
+/// Inspect only visible retained geometry. No layout, style or paint is triggered.
+pub fn inspect_ui(layout: WidgetLayout, offset: usize, limit: usize, query: str) -> UiInspection {
+    let mut result = UiInspection { Vec[UiInspectionNode]::new(), 0 }
+    inspect_branch(layout, "", layout.bounds(), query, offset, if limit > 200 {
+            200_usize
+        } else {
+            limit
+        }
+        , result,)
+    ret result
+}
+/// Application-thread input queue. Each event traverses the application's normal
+/// event loop, preserving down/move/up and keyboard focus ordering.
+pub struct UiInputQueue {
+    events: Vec[Event]
+    cursor: usize
+}
+
+impl for UiInputQueue {
+    pub fn new() -> Self {
+        ret Self { Vec[Event]::new(), 0 }
+    }
+    pub fn pending(self: Self) -> bool {
+        ret self.cursor < self.events.len()
+    }
+    pub fn append(self: mut Self, events: Vec[Event]) -> bool {
+        if self.events.len() - self.cursor + events.len() > 256 {
+            ret false
+        }
+        if self.cursor > 0 {
+            let mut remaining = Vec[Event]::new()
+            let first = self.cursor let count = self.events.len()
+            for i in first..count {
+                remaining.push(self.events.get_unchecked_borrowed(i))
+            }
+            self.events = remaining self.cursor = 0
+        }
+        for event in events {
+            self.events.push(event)
+        }
+        ret true
+    }
+    pub fn next(self: mut Self) -> Option[Event] {
+        if !self.pending() {
+            ret Option[Event]::None
+        }
+        let event = self.events.get(self.cursor) self.cursor += 1
+        ret event
+    }
+}

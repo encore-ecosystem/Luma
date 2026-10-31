@@ -133,6 +133,25 @@ int main(int argc, char **argv) {
         pause_ms(500);
     } else if (strcmp(argv[1], "click") == 0 && argc == 4) {
         click(device, atoi(argv[2]), atoi(argv[3]));
+    } else if (strcmp(argv[1], "drag") == 0 && argc >= 6 && argc <= 9) {
+        int x = atoi(argv[2]), y = atoi(argv[3]);
+        int end_x = atoi(argv[4]), end_y = atoi(argv[5]);
+        int steps = argc >= 8 ? atoi(argv[7]) : 30;
+        long interval_ms = argc >= 9 ? atol(argv[8]) : 20;
+        if (steps < 1 || steps > 10000 || interval_ms < 1 || interval_ms > 1000) return 3;
+        point(device, x, y);
+        pause_ms(150);
+        button(device, true);
+        for (int step = 1; step <= steps; ++step) {
+            point(device, x + (end_x - x) * step / steps,
+                y + (end_y - y) * step / steps);
+            pause_ms(interval_ms);
+        }
+        puts("holding pointer down");
+        fflush(stdout);
+        pause_ms(argc >= 7 ? atol(argv[6]) : 500);
+        button(device, false);
+        pause_ms(150);
     } else if (strcmp(argv[1], "active") == 0 && argc == 5) {
         point(device, atoi(argv[2]), atoi(argv[3]));
         pause_ms(150);

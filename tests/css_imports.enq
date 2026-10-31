@@ -1,0 +1,65 @@
+//! Imported rules use the same cascade, variables and revision as inline CSS.
+
+import core::result::Result
+import luma::{Button, StyleSheet}
+import std::os::{mkdir_all, write_file}
+
+fn main() -> u32 {
+    let root = "target/css-import-cascade/"
+    mkdir_all(root + "nested")
+    write_file(root + "theme.css", ":root { --ink: #112233; } .imported { background: var(--ink); } .imported:hover { background: #334455; }")
+    write_file(root + "nested/button.css", "@import '../theme.css'; .imported.active { background: #556677; } .imported:focus { outline: 2px solid #abcdef; } .imported:disabled { opacity: 0.4; }")
+    write_file(root + "main.css", "@import 'nested/button.css'; .imported.active:hover { background: #778899; }")
+    let sheet = match StyleSheet::from_file(root + "main.css") {
+        Result::Ok(value) => value
+        Result::Err(_) => {
+            ret 1
+        }
+    }
+    let button = Button::new("import-button", "Import").with_classes("imported")
+    if sheet.style(button, false, false, false).background().red() != 17_u8 {
+        ret 2
+    }
+    if sheet.style(button, true, false, false).background().red() != 51_u8 {
+        ret 3
+    }
+    let selected = button.with_classes("imported active")
+    if sheet.style(selected, false, false, false).background().red() != 85_u8 {
+        ret 4
+    }
+    if sheet.style(selected, true, false, false).background().red() != 119_u8 {
+        ret 5
+    }
+    if sheet.style(button, false, false, true).outline().width() != 2_f32 {
+        ret 6
+    }
+    if sheet.style(button.with_disabled(true), false, false, false).opacity() > 0.41_f32 {
+        ret 7
+    }
+
+    write_file(root + "theme.css", ":root { --ink: #ee2233; } .imported { background: var(--ink); }")
+    let changed = sheet.reload()
+    if changed.revision() == sheet.revision() || changed.style(button, false, false, false).background().red() != 238_u8 {
+        ret 8
+    }
+    write_file(root + "theme.css", "@import 'missing.css';")
+    let retained = changed.reload()
+    if retained.revision() != changed.revision() || retained.style(button, false, false, false).background().red() != 238_u8 {
+        ret 9
+    }
+    let recovered = StyleSheet::parse("@import 'missing.css'; .imported { background: #abcdef; }")
+    if recovered.style(button, false, false, false).background().red() != 171_u8 {
+        ret 10
+    }
+    match StyleSheet::try_parse("@import 'missing.css';") {
+        Result::Err(message) => {
+            if !message.contains("from_file") {
+                ret 11
+            }
+        }
+        Result::Ok(_) => {
+            ret 12
+        }
+    }
+    ret 0
+}

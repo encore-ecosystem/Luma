@@ -1,0 +1,147 @@
+//! State staging must not expose intermediate frames or restart transitions.
+import luma::{Color, ReactiveUi, Rect, RendererKind, Style, StyleSheet, TransitionStyle, Widget, Window, layout_widget}
+
+fn animation_contract() -> bool {
+    let from = Style::default().with_background(Color::rgb(0_u8, 0_u8, 0_u8))
+    let to = from.with_background(Color::rgb(200_u8, 0_u8, 0_u8))
+    .with_outline(2.0_f32, Color::rgb(9_u8, 10_u8, 11_u8), - 2.0_f32)
+    .with_transition(TransitionStyle::new("background-color", "100ms", "0ms", "linear"))
+    let mut ui = ReactiveUi::new(layout_widget(
+            Widget::slider("control", 0.0_f32).with_computed_style(from),
+            Rect::new(0.0_f32, 0.0_f32, 200.0_f32, 40.0_f32),))
+    let _started = ui.transition_widget("control",
+        Widget::slider("control", 0.25_f32).with_computed_style(to), 1000_u64,)
+    if ui.find_widget("control").unwrap_or(Widget::spacer(0.0_f32)).value() != 0.25_f32 {
+        ret false
+    }
+    let _advanced = ui.advance_transitions(1050_u64)
+    let _reconciled = ui.transition_widget("control",
+        Widget::slider("control", 0.75_f32).with_computed_style(
+            to.with_outline(3.0_f32, Color::rgb(9_u8, 10_u8, 11_u8), - 2.0_f32)), 1050_u64,)
+    let middle = ui.find_widget("control").unwrap_or(Widget::spacer(0.0_f32))
+    if middle.value() != 0.75_f32 || middle.style().background().red() != 100_u8 ||
+    middle.style().outline().width() != 3.0_f32 {
+        ret false
+    }
+    let _finished = ui.advance_transitions(1100_u64)
+    let final = ui.find_widget("control").unwrap_or(Widget::spacer(0.0_f32))
+    ret !ui.has_active_transitions() && final.style().background().red() == 200_u8 &&
+    final.value() == 0.75_f32 && !final.has_explicit_style()
+}
+
+fn cache_contract() -> bool {
+    let authored = Widget::label("Attributes").with_attribute("data-state", "idle")
+    let changed_attribute = authored.with_attribute("data-state", "active")
+    if authored.attribute("data-state").unwrap_or("") != "idle" ||
+    changed_attribute.attribute("data-state").unwrap_or("") != "active" {
+        ret false
+    }
+    let sheet = StyleSheet::parse("label { color: #112233; } panel:has(.selected) { background: #ff0000; } label:empty { color: #00ff00; }")
+    let mut root = Widget::panel("container")
+    root.push(Widget::label("First").with_id("label"))
+    let initial = sheet.apply(root, "", "", "")
+    let hits = sheet.cache_hits()
+    let cached = sheet.apply(root, "", "", "")
+    if sheet.cache_hits() <= hits || !cached.style().equivalent(initial.style()) {
+        ret false
+    }
+    let mut changed = Widget::panel("container")
+    changed.push(Widget::label("").with_id("label").with_classes("selected"))
+    let selected = sheet.apply(changed, "", "", "")
+    if selected.style().background().red() != 255_u8 ||
+    selected.find("label").unwrap_or(Widget::spacer(0.0_f32)).style().foreground().green() != 255_u8 {
+        ret false
+    }
+    let inheritance = StyleSheet::parse("label { background: #000000; }")
+    let first = Widget::label("Text").with_computed_style(Style::default().with_font_size(12.0_f32))
+    let second = Widget::label("Text").with_computed_style(Style::default().with_font_size(23.0_f32))
+    let _cached = inheritance.style(first, false, false, false)
+    ret inheritance.style(second, false, false, false).font_size() == 23.0_f32
+}
+
+fn main() -> u32 {
+    if !animation_contract() {
+        ret 1_u32
+    }
+    if !cache_contract() {
+        ret 5_u32
+    }
+    let normal = Widget::button("damage", "Button").with_computed_style(Style::default())
+    let outlined = normal.with_computed_style(Style::default().with_outline(
+            4.0_f32, Color::rgb(0_u8, 0_u8, 0_u8), 6.0_f32,))
+    let mut damage_ui = ReactiveUi::new(layout_widget(outlined,
+            Rect::new(20.0_f32, 20.0_f32, 80.0_f32, 40.0_f32),))
+    damage_ui.commit_rendered()
+    let _restored = damage_ui.reconcile(normal)
+    let damage = damage_ui.paint_regions().get(0_usize).unwrap_or(Rect::new(0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32))
+    if damage.x() > 10.0_f32 || damage.y() > 10.0_f32 || damage.right() < 110.0_f32 || damage.bottom() < 70.0_f32 {
+        ret 8_u32
+    }
+    let window = Window::create_with_renderer("Frame transaction", 240_u32, 120_u32,
+        RendererKind::Software,)
+    if !window.available() {
+        ret 2_u32
+    }
+    let mut timer = ReactiveUi::new(layout_widget(Widget::panel("timer-host"),
+            Rect::new(0.0_f32, 0.0_f32, 100.0_f32, 20.0_f32),))
+    let countdown = Widget::countdown("timer", 100_u64, 1_u64)
+    timer = window.stage_animated_reactive(timer, countdown, 2000_u64)
+    let _half_tick = timer.advance_transitions(2050_u64)
+    timer = window.stage_animated_reactive(timer, countdown, 2050_u64)
+    let half = timer.find_widget("timer").unwrap_or(Widget::spacer(0.0_f32)).value()
+    if half < 0.49_f32 || half > 0.51_f32 {
+        window.destroy()
+        ret 9_u32
+    }
+    let _last_tick = timer.advance_transitions(2100_u64)
+    if timer.has_active_transitions() || timer.find_widget("timer").unwrap_or(
+        Widget::spacer(1.0_f32)).value() != 0.0_f32 {
+        window.destroy()
+        ret 10_u32
+    }
+    let mut root = Widget::panel("root")
+    root.push(Widget::button("first", "Before"))
+    let mut ui = window.reactive(root)
+    let before = window.presented_frames()
+    let sheet = StyleSheet::parse("button { background: #000000; transition: background-color 100ms linear; } button:focus { outline: 2px solid #ff0000; } button:hover { background: #c80000; }")
+    ui.set_declarative_root(root)
+    ui = window.stage_animated_reactive(ui, sheet.apply(root, "first", "", "first"), 1000_u64)
+    let _advanced = ui.advance_transitions(1050_u64)
+    let mut model = Widget::panel("root")
+    model.push(Widget::button("first", "During animation"))
+    ui.set_declarative_root(model)
+    ui = window.stage_animated_reactive(ui, sheet.apply(model, "first", "", "first"), 1050_u64)
+    let _finished = ui.advance_transitions(1100_u64)
+    let animated = ui.find_widget("first").unwrap_or(Widget::spacer(0.0_f32))
+    if ui.has_active_transitions() || animated.text() != "During animation" ||
+    animated.style().background().red() != 200_u8 || animated.style().outline().width() != 2.0_f32 ||
+    window.presented_frames() != before {
+        window.destroy()
+        ret 6_u32
+    }
+    ui.set_scroll_offset("root", 0.0_f32, 17.0_f32)
+    ui = window.stage_animated_reactive(ui, sheet.apply(model, "", "", "first"), 1100_u64)
+    if ui.layout().widget().style().layout().scroll().y() != 17.0_f32 {
+        window.destroy()
+        ret 7_u32
+    }
+    let mut next = Widget::panel("root")
+    next.push(Widget::button("first", "After"))
+    next.push(Widget::label("New child").with_id("second"))
+    ui = window.stage_styled_reactive(ui, window.style_view(next, "", "", ""))
+    ui = window.stage_relayout_reactive(ui)
+    if window.presented_frames() != before || !ui.is_dirty() || !ui.needs_full_repaint() {
+        window.destroy()
+        ret 3_u32
+    }
+    ui = window.draw_reactive(ui)
+    let valid = window.presented_frames() == before + 1_u64 && !ui.is_dirty() &&
+    ui.find_widget("first").unwrap_or(Widget::spacer(0.0_f32)).text() == "After" &&
+    ui.find_widget("second").is_some()
+    window.destroy()
+    ret if valid {
+        0_u32
+    } else {
+        4_u32
+    }
+}

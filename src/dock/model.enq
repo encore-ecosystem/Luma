@@ -1,0 +1,1084 @@
+//! Backend-independent docking state. Moving panels changes topology only;
+//! panel contents, subscriptions, and rendering resources belong to the host.
+import core::option::Option
+import core::panic::panic
+import core::vec::Vec
+import refrain::geometry::{Rect, Size}
+import refrain::reactive::graph::reactive_identity
+
+pub struct PanelId {
+    key: str
+}
+
+impl for PanelId {
+    pub fn new(key: str) -> Self {
+        ret Self { key }
+    }
+    pub fn key(self: Self) -> str {
+        ret self.key
+    }
+    pub fn same(self: Self, other: Self) -> bool {
+        ret self.key == other.key
+    }
+}
+pub struct WindowId {
+    key: u64
+}
+
+impl for WindowId {
+    pub fn new(key: u64) -> Self {
+        ret Self { key }
+    }
+    pub fn key(self: Self) -> u64 {
+        ret self.key
+    }
+    pub fn same(self: Self, other: Self) -> bool {
+        ret self.key == other.key
+    }
+}
+pub struct DockNodeId {
+    slot: usize
+    generation: u64
+    owner: u64
+}
+
+impl for DockNodeId {
+    pub fn empty() -> Self {
+        ret Self { 0, 0, 0 }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.generation != 0
+    }
+    pub fn same(self: Self, other: Self) -> bool {
+        ret self.slot == other.slot && self.generation == other.generation && self.owner == other.owner
+    }
+    pub fn key(self: Self) -> str {
+        ret f "{self.owner}-{self.slot}-{self.generation}"
+    }
+}
+pub enum DockPlacement {
+    Center Left Right Top Bottom
+}
+pub struct DockPanel {
+    id: PanelId
+    title: str
+    minimum: Size
+}
+
+impl for DockPanel {
+    pub fn new(key: str, title: str, minimum: Size) -> Self {
+        ret Self { PanelId::new(key), title, minimum }
+    }
+    pub fn id(self: Self) -> PanelId {
+        ret self.id
+    }
+    pub fn title(self: Self) -> str {
+        ret self.title
+    }
+    pub fn minimum(self: Self) -> Size {
+        ret self.minimum
+    }
+}
+pub struct DockNode {
+    id: DockNodeId
+    live: bool
+    parent: DockNodeId
+    tabs: Vec[PanelId]
+    active: usize
+    first: DockNodeId
+    second: DockNodeId
+    horizontal: bool
+    fraction: f32
+}
+
+impl for DockNode {
+    pub fn id(self: Self) -> DockNodeId {
+        ret self.id
+    }
+    pub fn parent(self: Self) -> DockNodeId {
+        ret self.parent
+    }
+    pub fn is_tabs(self: Self) -> bool {
+        ret !self.first.valid()
+    }
+    pub fn tabs(self: Self) -> Vec[PanelId] {
+        ret self.tabs
+    }
+    pub fn active(self: Self) -> Option[PanelId] {
+        ret self.tabs.get(self.active)
+    }
+    pub fn first(self: Self) -> DockNodeId {
+        ret self.first
+    }
+    pub fn second(self: Self) -> DockNodeId {
+        ret self.second
+    }
+    pub fn horizontal(self: Self) -> bool {
+        ret self.horizontal
+    }
+    pub fn fraction(self: Self) -> f32 {
+        ret self.fraction
+    }
+}
+pub struct DockWindow {
+    id: WindowId
+    root: DockNodeId
+}
+
+impl for DockWindow {
+    pub fn id(self: Self) -> WindowId {
+        ret self.id
+    }
+    pub fn root(self: Self) -> DockNodeId {
+        ret self.root
+    }
+}
+pub struct DockRegion {
+    node: DockNodeId
+    bounds: Rect
+}
+
+impl for DockRegion {
+    pub fn node(self: Self) -> DockNodeId {
+        ret self.node
+    }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+}
+struct RegisteredPanel {
+    panel: DockPanel
+    home: DockNodeId
+}
+
+/// Portable layout records use array indices, never live arena identities.
+pub struct DockLayoutNode {
+    tabs: Vec[PanelId]
+    active: PanelId
+    first: Option[usize]
+    second: Option[usize]
+    horizontal: bool
+    fraction: f32
+}
+pub struct DockLayoutWindow {
+    window: WindowId
+    root: Option[usize]
+}
+pub struct DockLayoutHome {
+    panel: PanelId
+    group: usize
+}
+pub struct DockLayout {
+    nodes: Vec[DockLayoutNode]
+    windows: Vec[DockLayoutWindow]
+    homes: Vec[DockLayoutHome]
+}
+
+/// One panel has one location, regardless of the number of native host windows.
+pub struct DockWorkspace {
+    main: WindowId
+    panels: Vec[RegisteredPanel]
+    nodes: Vec[DockNode]
+    free: Vec[usize]
+    windows: Vec[DockWindow]
+    revision: u64
+    identity: u64
+}
+
+impl for DockWorkspace {
+    pub fn new(main: WindowId) -> DockWorkspace<H> {
+        let mut windows = Vec[DockWindow]::new()
+        windows.push(DockWindow { main, DockNodeId::empty() })
+        ret DockWorkspace<H> {
+            main, Vec[RegisteredPanel]::new(), Vec[DockNode]::new(),
+            Vec[usize]::new(), windows, 0, reactive_identity()
+        }
+    }
+    pub fn revision(self: Self&) -> u64 {
+        ret self.revision
+    }
+    pub fn windows(self: Self&) -> Vec[DockWindow] {
+        ret self.windows
+    }
+    pub fn main_window(self: Self&) -> WindowId {
+        ret self.main
+    }
+    pub fn snapshot(self: Self&) -> DockLayout {
+        let mut ids = Vec[DockNodeId]::new()
+        for node in self.nodes {
+            if node.live {
+                ids.push(node.id)
+            }
+        }
+        let mut nodes = Vec[DockLayoutNode]::new()
+        for id in ids {
+            match self.node(id) {
+                Some(node) => {
+                    let mut tabs = Vec[PanelId]::new() tabs.extend(node.tabs)
+                    nodes.push(DockLayoutNode {
+                            tabs, node.active().unwrap_or(PanelId::new("")),
+                            layout_index(ids, node.first), layout_index(ids, node.second), node.horizontal, node.fraction
+                        }
+                        ,)
+                }
+                None => {
+                }
+            }
+        }
+        let mut windows = Vec[DockLayoutWindow]::new()
+        for window in self.windows {
+            windows.push(DockLayoutWindow { window.id, layout_index(ids, window.root) })
+        }
+        let mut homes = Vec[DockLayoutHome]::new()
+        for panel in self.panels {
+            if !self.owner(panel.home).unwrap_or(WindowId::new(0)).same(self.main) {
+                continue
+            }
+            match self.node(panel.home) {
+                Some(node) => {
+                    if node.is_tabs() {
+                        match layout_index(ids, node.id) {
+                            Some(index) => {
+                                homes.push(DockLayoutHome { panel.panel.id, index })
+                            }
+                            None => {
+                            }
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        ret DockLayout { nodes, windows, homes }
+    }
+    /// Validate and prepare the whole graph before changing this workspace.
+    /// Every successful restore invalidates old DockNodeIds, but panel IDs and
+    /// their retained content stay stable. Invalid input changes no revision.
+    pub fn restore(self: mut Self&, layout: DockLayout) -> bool {
+        let count = layout.nodes.len()
+        if count > self.panels.len() * 2 || layout.windows.len() == 0 ||
+        layout.windows.len() > self.panels.len() + 1 || layout.homes.len() > self.panels.len() {
+            ret false
+        }
+        let identity = reactive_identity()
+        let mut nodes = Vec[DockNode]::new()
+        let mut visible = Vec[PanelId]::new()
+        let mut index = 0_usize
+        for source in layout.nodes {
+            if source.fraction - source.fraction != 0 || source.fraction < 0 || source.fraction > 1 {
+                ret false
+            }
+            let id = DockNodeId { index, 1, identity }
+            let mut tabs = Vec[PanelId]::new()
+            let mut active = 0_usize
+            let mut first = DockNodeId::empty() let mut second = DockNodeId::empty()
+            match source.first {
+                Some(a) => {
+                    let b = match source.second {
+                        Some(value) => value None => {
+                            ret false
+                        }
+                    }
+                    if a >= count || b >= count || a == b || source.tabs.len() != 0 || source.active.key != "" ||
+                    source.fraction - source.fraction != 0 || source.fraction < 0 || source.fraction > 1 {
+                        ret false
+                    }
+                    first = DockNodeId { a, 1, identity } second = DockNodeId { b, 1, identity }
+                }
+                None => {
+                    if source.second.is_some() || source.tabs.len() == 0 {
+                        ret false
+                    }
+                    let mut selected = false
+                    for panel in source.tabs {
+                        if self.panel(panel).is_none() || contains_panel(visible, panel) {
+                            ret false
+                        }
+                        if panel.same(source.active) {
+                            active = tabs.len() selected = true
+                        }
+                        tabs.push(panel) visible.push(panel)
+                    }
+                    if !selected {
+                        ret false
+                    }
+                }
+            }
+            nodes.push(DockNode {
+                    id, true, DockNodeId::empty(), tabs, active,
+                    first, second, source.horizontal, source.fraction
+                }
+                ,)
+            index += 1
+        }
+        let mut windows = Vec[DockWindow]::new()
+        let mut seen = Vec[bool]::new() let mut owners = Vec[WindowId]::new()
+        for _index in 0..count {
+            seen.push(false) owners.push(WindowId::new(0))
+        }
+        let mut main = false
+        for source in layout.windows {
+            if source.window.key == 0 {
+                ret false
+            }
+            for previous in windows {
+                if previous.id.same(source.window) {
+                    ret false
+                }
+            }
+            main = main || source.window.same(self.main)
+            let mut root = DockNodeId::empty()
+            match source.root {
+                Some(slot) => {
+                    if slot >= count {
+                        ret false
+                    }
+                    root = DockNodeId { slot, 1, identity }
+                    let mut queue = Vec[(usize, DockNodeId)]::new()
+                    queue.push((slot, DockNodeId::empty()))
+                    let mut cursor = 0_usize
+                    while cursor < queue.len() {
+                        let entry = queue.get(cursor).unwrap_or((count, DockNodeId::empty()))
+                        if entry.0 >= count || seen.get(entry.0).unwrap_or(true) {
+                            ret false
+                        }
+                        seen.set(entry.0, true) owners.set(entry.0, source.window)
+                        let mut node = match nodes.get(entry.0) {
+                            Some(value) => value None => {
+                                ret false
+                            }
+                        }
+                        node.parent = entry.1
+                        if !node.is_tabs() {
+                            queue.push((node.first.slot, node.id)) queue.push((node.second.slot, node.id))
+                        }
+                        nodes.set(entry.0, node) cursor += 1
+                    }
+                }
+                None => {
+                    if !source.window.same(self.main) {
+                        ret false
+                    }
+                }
+            }
+            windows.push(DockWindow { source.window, root })
+        }
+        if !main {
+            ret false
+        }
+        for visited in seen {
+            if !visited {
+                ret false
+            }
+        }
+        let mut home_panels = Vec[PanelId]::new()
+        for home in layout.homes {
+            if self.panel(home.panel).is_none() || contains_panel(home_panels, home.panel) ||
+            !owners.get(home.group).unwrap_or(WindowId::new(0)).same(self.main) {
+                ret false
+            }
+            match nodes.get(home.group) {
+                Some(node) => {
+                    if !node.is_tabs() {
+                        ret false
+                    }
+                }
+                None => {
+                    ret false
+                }
+            }
+            home_panels.push(home.panel)
+        }
+        let mut panels = Vec[RegisteredPanel]::new()
+        for registered in self.panels {
+            let mut home = DockNodeId::empty()
+            for source in layout.homes {
+                if source.panel.same(registered.panel.id) {
+                    home = DockNodeId {
+                        source.group, 1, identity
+                    }
+                }
+            }
+            panels.push(RegisteredPanel { registered.panel, home })
+        }
+        self.nodes = nodes self.panels = panels self.windows = windows
+        self.free = Vec[usize]::new() self.identity = identity self.revision += 1
+        ret true
+    }
+    pub fn node(self: Self&, id: DockNodeId) -> Option[DockNode] {
+        if id.owner != self.identity {
+            ret Option[DockNode]::None
+        }
+        match self.nodes.get(id.slot) {
+            Some(node) => {
+                if node.live && node.id.same(id) {
+                    ret Option[DockNode]::Some(node)
+                }
+            }
+            None => {
+            }
+        }
+        ret Option[DockNode]::None
+    }
+    fn known_node(self: mut Self&, id: DockNodeId) -> DockNode {
+        match self.nodes.get(id.slot) {
+            Some(node) => {
+                if node.live && node.id.same(id) {
+                    ret node
+                }
+            }
+            None => {
+            }
+        }
+        panic("invalid internal dock node")
+        ret DockNode {
+            DockNodeId::empty(), false, DockNodeId::empty(), Vec[PanelId]::new(),
+            0, DockNodeId::empty(), DockNodeId::empty(), true, 0.5
+        }
+    }
+    fn known_owner(self: Self&, id: DockNodeId) -> WindowId {
+        match self.owner(id) {
+            Some(window) => {
+                ret window
+            }
+            None => {
+            }
+        }
+        panic("orphaned internal dock node")
+        ret WindowId::new(0)
+    }
+    pub fn panel(self: Self&, id: PanelId) -> Option[DockPanel] {
+        for entry in self.panels {
+            if entry.panel.id.same(id) {
+                ret Option[DockPanel]::Some(entry.panel)
+            }
+        }
+        ret Option[DockPanel]::None
+    }
+    pub fn register(self: mut Self&, panel: DockPanel) -> bool {
+        if panel.id.key == "" || self.panel(panel.id).is_some() ||
+        !finite_extent(panel.minimum.width()) || !finite_extent(panel.minimum.height()) {
+            ret false
+        }
+        self.panels.push(RegisteredPanel { panel, DockNodeId::empty() })
+        ret true
+    }
+    pub fn window(self: Self&, id: WindowId) -> Option[DockWindow] {
+        for window in self.windows {
+            if window.id.same(id) {
+                ret Option[DockWindow]::Some(window)
+            }
+        }
+        ret Option[DockWindow]::None
+    }
+    pub fn open_window(self: mut Self&, id: WindowId) -> bool {
+        if id.key == 0 || self.window(id).is_some() {
+            ret false
+        }
+        self.windows.push(DockWindow { id, DockNodeId::empty() })
+        self.revision += 1
+        ret true
+    }
+    fn set_root(self: mut Self&, window: WindowId, root: DockNodeId) ->() {
+        let mut index = 0_usize
+        for entry in self.windows {
+            if entry.id.same(window) {
+                self.windows.set(index, DockWindow { window, root })
+            }
+            index += 1
+        }
+    }
+    fn allocate(self: mut Self&, tabs: Vec[PanelId]) -> DockNodeId {
+        let slot = self.free.pop().unwrap_or(self.nodes.len())
+        let generation = match self.nodes.get(slot) {
+            Some(old) => old.id.generation + 1 None => 1_u64
+        }
+        let id = DockNodeId { slot, generation, self.identity }
+        let node = DockNode {
+            id, true, DockNodeId::empty(), tabs, 0,
+            DockNodeId::empty(), DockNodeId::empty(), true, 0.5
+        }
+        if slot == self.nodes.len() {
+            self.nodes.push(node)
+        } else {
+            self.nodes.set(slot, node)
+        }
+        ret id
+    }
+    fn release(self: mut Self&, id: DockNodeId) ->() {
+        if self.node(id).is_none() {
+            ret()
+        }
+        let mut dead = self.known_node(id)
+        dead.live = false
+        dead.tabs = Vec[PanelId]::new()
+        self.nodes.set(id.slot, dead)
+        self.free.push(id.slot)
+    }
+    pub fn location(self: Self&, panel: PanelId) -> Option[DockNodeId] {
+        for node in self.nodes {
+            if node.live && node.is_tabs() {
+                for tab in node.tabs {
+                    if tab.same(panel) {
+                        ret Option[DockNodeId]::Some(node.id)
+                    }
+                }
+            }
+        }
+        ret Option[DockNodeId]::None
+    }
+    pub fn owner(self: Self&, id: DockNodeId) -> Option[WindowId] {
+        let mut cursor = id
+        // Parent links are maintained only by validated topology operations.
+        for _step in 0..self.nodes.len() {
+            let node = match self.node(cursor) {
+                Some(value) => value None => {
+                    ret Option[WindowId]::None
+                }
+            }
+            if !node.parent.valid() {
+                for window in self.windows {
+                    if window.root.same(cursor) {
+                        ret Option[WindowId]::Some(window.id)
+                    }
+                }
+                ret Option[WindowId]::None
+            }
+            cursor = node.parent
+        }
+        ret Option[WindowId]::None
+    }
+    fn first_group(self: Self&, root: DockNodeId) -> DockNodeId {
+        let mut cursor = root
+        for _step in 0..self.nodes.len() {
+            match self.node(cursor) {
+                Some(node) => {
+                    if node.is_tabs() {
+                        ret cursor
+                    }
+                    cursor = node.first
+                }
+                None => {
+                    ret DockNodeId::empty()
+                }
+            }
+        }
+        ret DockNodeId::empty()
+    }
+    /// Shows a previously hidden panel without creating a second instance.
+    pub fn show(self: mut Self&, panel: PanelId, window: WindowId) -> bool {
+        if self.panel(panel).is_none() || self.location(panel).is_some() {
+            ret false
+        }
+        let host = match self.window(window) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let target = self.first_group(host.root)
+        if target.valid() {
+            let mut group = self.known_node(target)
+            group.tabs.push(panel)
+            group.active = group.tabs.len() - 1
+            self.nodes.set(target.slot, group)
+        } else {
+            let mut tabs = Vec[PanelId]::new()
+            tabs.push(panel)
+            let root = self.allocate(tabs)
+            self.set_root(window, root)
+        }
+        self.revision += 1
+        ret true
+    }
+    pub fn activate(self: mut Self&, panel: PanelId) -> bool {
+        let id = match self.location(panel) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let mut node = self.known_node(id)
+        let mut index = 0_usize
+        for tab in node.tabs {
+            if tab.same(panel) {
+                if node.active != index {
+                    node.active = index self.nodes.set(id.slot, node) self.revision += 1
+                }
+                ret true
+            }
+            index += 1
+        }
+        ret false
+    }
+    fn replace(self: mut Self&, old: DockNodeId, replacement: DockNodeId, window: WindowId) ->() {
+        let node = self.known_node(old)
+        if node.parent.valid() {
+            let mut parent = self.known_node(node.parent)
+            if parent.first.same(old) {
+                parent.first = replacement
+            } else {
+                parent.second = replacement
+            }
+            self.nodes.set(parent.id.slot, parent)
+        } else {
+            self.set_root(window, replacement)
+        }
+        if replacement.valid() {
+            let mut next = self.known_node(replacement)
+            next.parent = node.parent
+            self.nodes.set(replacement.slot, next)
+        }
+    }
+    fn remove_tab(self: mut Self&, panel: PanelId, id: DockNodeId) ->() {
+        let mut node = self.known_node(id)
+        let selected = node.active()
+        let mut tabs = Vec[PanelId]::new()
+        for tab in node.tabs {
+            if !tab.same(panel) {
+                tabs.push(tab)
+            }
+        }
+        node.tabs = tabs
+        node.active = 0
+        let mut index = 0_usize
+        for tab in node.tabs {
+            match selected {
+                Some(active) => {
+                    if active.same(tab) {
+                        node.active = index
+                    }
+                }
+                None => {
+                }
+            }
+            index += 1
+        }
+        self.nodes.set(id.slot, node)
+    }
+    fn collapse(self: mut Self&, id: DockNodeId) ->() {
+        let node = self.known_node(id)
+        if node.tabs.len() != 0 || !node.is_tabs() {
+            ret()
+        }
+        let window = self.known_owner(id)
+        if node.parent.valid() {
+            let parent = self.known_node(node.parent)
+            let sibling = if parent.first.same(id) {
+                parent.second
+            } else {
+                parent.first
+            }
+            self.replace(parent.id, sibling, window)
+            self.release(parent.id)
+        } else {
+            self.set_root(window, DockNodeId::empty())
+        }
+        self.release(id)
+    }
+    pub fn hide(self: mut Self&, panel: PanelId) -> bool {
+        let source = match self.location(panel) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        self.remember_home(panel, source)
+        self.remove_tab(panel, source)
+        self.collapse(source)
+        self.revision += 1
+        ret true
+    }
+    fn remember_home(self: mut Self&, panel: PanelId, source: DockNodeId) ->() {
+        if !self.owner(source).unwrap_or(WindowId::new(0)).same(self.main) {
+            ret()
+        }
+        let mut index = 0_usize
+        for entry in self.panels {
+            if entry.panel.id.same(panel) {
+                self.panels.set(index, RegisteredPanel {
+                        entry.panel, source
+                    }
+                    ,
+                )
+            }
+            index += 1
+        }
+    }
+    /// Commit a drop only after the native host has prepared any new window.
+    /// The insertion index is the final tab position after removing the source.
+    pub fn dock(self: mut Self&, panel: PanelId, target: DockNodeId, placement: DockPlacement, ordinal: usize) -> bool {
+        let source = match self.location(panel) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let destination = match self.node(target) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let center = match placement {
+            DockPlacement::Center => true _ => false
+        }
+        if center && !destination.is_tabs() {
+            ret false
+        }
+        let same = source.same(target)
+        let length = destination.tabs.len() - if same {
+            1_usize
+        } else {
+            0_usize
+        }
+        if (center && ordinal > length) ||(!center && same && destination.tabs.len() == 1) {
+            ret false
+        }
+        self.remember_home(panel, source)
+        self.remove_tab(panel, source)
+        if center {
+            let mut node = self.known_node(target)
+            let mut tabs = Vec[PanelId]::new()
+            let mut index = 0_usize
+            for tab in node.tabs {
+                if index == ordinal {
+                    tabs.push(panel)
+                }
+                tabs.push(tab) index += 1
+            }
+            if index == ordinal {
+                tabs.push(panel)
+            }
+            node.tabs = tabs node.active = ordinal
+            self.nodes.set(target.slot, node)
+        } else {
+            let window = self.known_owner(target)
+            let mut tabs = Vec[PanelId]::new()
+            tabs.push(panel)
+            let group = self.allocate(tabs)
+            let split = self.allocate(Vec[PanelId]::new())
+            self.replace(target, split, window)
+            let before = match placement {
+                DockPlacement::Left => true DockPlacement::Top => true _ => false
+            }
+            let horizontal = match placement {
+                DockPlacement::Left => true DockPlacement::Right => true _ => false
+            }
+            let mut branch = self.known_node(split)
+            branch.first = if before {
+                group
+            } else {
+                target
+            }
+            branch.second = if before {
+                target
+            } else {
+                group
+            }
+            branch.horizontal = horizontal
+            self.nodes.set(split.slot, branch)
+            let mut a = self.known_node(group) a.parent = split self.nodes.set(group.slot, a)
+            let mut b = self.known_node(target) b.parent = split self.nodes.set(target.slot, b)
+        }
+        if !same {
+            self.collapse(source)
+        }
+        self.revision += 1
+        ret true
+    }
+    pub fn detach(self: mut Self&, panel: PanelId, window: WindowId) -> bool {
+        let source = match self.location(panel) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        if !self.open_window(window) {
+            ret false
+        }
+        self.remember_home(panel, source)
+        self.remove_tab(panel, source)
+        self.collapse(source)
+        let mut tabs = Vec[PanelId]::new() tabs.push(panel)
+        let root = self.allocate(tabs)
+        self.set_root(window, root)
+        ret true
+    }
+    /// Closing a satellite returns its panels, never deleting their state.
+    pub fn close_window(self: mut Self&, window: WindowId) -> bool {
+        if window.same(self.main) || self.window(window).is_none() {
+            ret false
+        }
+        let returning = self.panels_in(window)
+        for panel in returning {
+            let mut target = DockNodeId::empty()
+            for entry in self.panels {
+                if entry.panel.id.same(panel) && self.node(entry.home).is_some() &&
+                self.owner(entry.home).unwrap_or(window).same(self.main) {
+                    target = entry.home
+                }
+            }
+            if !target.valid() {
+                match self.window(self.main) {
+                    Some(main) => {
+                        target = self.first_group(main.root)
+                    }
+                    None => {
+                    }
+                }
+            }
+            if target.valid() {
+                let ordinal = self.known_node(target).tabs.len()
+                let _moved = self.dock(panel, target, DockPlacement::Center, ordinal)
+            } else {
+                let _hidden = self.hide(panel)
+                let _shown = self.show(panel, self.main)
+            }
+        }
+        let mut remaining = Vec[DockWindow]::new()
+        for entry in self.windows {
+            if !entry.id.same(window) {
+                remaining.push(entry)
+            }
+        }
+        self.windows = remaining
+        self.revision += 1
+        ret true
+    }
+    pub fn resize(self: mut Self&, id: DockNodeId, fraction: f32) -> bool {
+        if self.node(id).is_none() {
+            ret false
+        }
+        let mut node = self.known_node(id)
+        if node.is_tabs() || fraction != fraction || fraction < 0 || fraction > 1 {
+            ret false
+        }
+        if node.fraction != fraction {
+            node.fraction = fraction self.nodes.set(id.slot, node) self.revision += 1
+        }
+        ret true
+    }
+    pub fn minimum(self: Self&, id: DockNodeId) -> Size {
+        ret self.minimum_excluding(id, PanelId::new(""))
+    }
+    fn minimum_excluding(self: Self&, id: DockNodeId, excluded: PanelId) -> Size {
+        let node = match self.node(id) {
+            Some(value) => value None => {
+                ret Size::zero()
+            }
+        }
+        if node.is_tabs() {
+            let mut width = 0.0_f32 let mut height = 0.0_f32
+            let mut count = 0_usize
+            for tab in node.tabs {
+                if tab.same(excluded) {
+                    continue
+                }
+                count += 1
+                match self.panel(tab) {
+                    Some(panel) => {
+                        width = larger(width, panel.minimum.width()) height = larger(height, panel.minimum.height())
+                    }
+                    None => {
+                    }
+                }
+            }
+            ret if count == 0 {
+                Size::zero()
+            } else {
+                Size::new(width, height + 28)
+            }
+        }
+        let a = self.minimum_excluding(node.first, excluded) let b = self.minimum_excluding(node.second, excluded)
+        if a.width() == 0 && a.height() == 0 {
+            ret b
+        }
+        if b.width() == 0 && b.height() == 0 {
+            ret a
+        }
+        ret if node.horizontal {
+            Size::new(a.width() + b.width() + 2, larger(a.height(), b.height()))
+        } else {
+            Size::new(larger(a.width(), b.width()), a.height() + b.height() + 2)
+        }
+    }
+    pub fn regions(self: Self&, window: WindowId, bounds: Rect) -> Vec[DockRegion] {
+        let mut output = Vec[DockRegion]::new()
+        match self.window(window) {
+            Some(host) => {
+                self.collect_regions(host.root, bounds, output)
+            }
+            None => {
+            }
+        }
+        ret output
+    }
+    pub fn panels_in(self: Self&, window: WindowId) -> Vec[PanelId] {
+        let mut output = Vec[PanelId]::new()
+        match self.window(window) {
+            Some(host) => {
+                self.collect_panels(host.root, output)
+            }
+            None => {
+            }
+        }
+        ret output
+    }
+    fn collect_panels(self: Self&, id: DockNodeId, output: mut Vec[PanelId]) ->() {
+        let node = match self.node(id) {
+            Some(value) => value None => {
+                ret()
+            }
+        }
+        if node.is_tabs() {
+            for panel in node.tabs {
+                output.push(panel)
+            }
+        } else {
+            self.collect_panels(node.first, output) self.collect_panels(node.second, output)
+        }
+    }
+    /// Preview is read-only. Impossible splits are not offered as drop targets.
+    pub fn preview(self: Self&, panel: PanelId, target: DockNodeId, placement: DockPlacement,
+        bounds: Rect,) -> Option[Rect] {
+        let source = match self.panel(panel) {
+            Some(value) => value None => {
+                ret Option[Rect]::None
+            }
+        }
+        let node = match self.node(target) {
+            Some(value) => value None => {
+                ret Option[Rect]::None
+            }
+        }
+        if self.location(panel).is_none() {
+            ret Option[Rect]::None
+        }
+        let needed = source.minimum
+        let other = self.minimum_excluding(target, panel)
+        let center = match placement {
+            DockPlacement::Center => true _ => false
+        }
+        if center && !node.is_tabs() {
+            ret Option[Rect]::None
+        }
+        if center {
+            if bounds.width() < larger(needed.width(), other.width()) ||
+            bounds.height() < larger(needed.height() + 28, other.height()) {
+                ret Option[Rect]::None
+            }
+            ret Option[Rect]::Some(bounds)
+        }
+        if self.location(panel).unwrap_or(DockNodeId::empty()).same(target) && node.tabs.len() == 1 {
+            ret Option[Rect]::None
+        }
+        let horizontal = match placement {
+            DockPlacement::Left => true DockPlacement::Right => true _ => false
+        }
+        let before = match placement {
+            DockPlacement::Left => true DockPlacement::Top => true _ => false
+        }
+        if horizontal {
+            if bounds.width() < needed.width() + other.width() + 2 ||
+            bounds.height() < larger(needed.height() + 28, other.height()) {
+                ret Option[Rect]::None
+            }
+            let width = bounded((bounds.width() - 2) / 2, needed.width(), bounds.width() - other.width() - 2)
+            ret Option[Rect]::Some(Rect::new(if before {
+                        bounds.x()
+                    } else {
+                        bounds.right() - width
+                    }
+                    ,
+                    bounds.y(), width, bounds.height(),))
+        }
+        if bounds.height() < needed.height() + 28 + other.height() + 2 ||
+        bounds.width() < larger(needed.width(), other.width()) {
+            ret Option[Rect]::None
+        }
+        let height = bounded((bounds.height() - 2) / 2, needed.height() + 28, bounds.height() - other.height() - 2)
+        ret Option[Rect]::Some(Rect::new(bounds.x(), if before {
+                    bounds.y()
+                } else {
+                    bounds.bottom() - height
+                }
+                ,
+                bounds.width(), height,))
+    }
+    fn collect_regions(self: Self&, id: DockNodeId, bounds: Rect, output: mut Vec[DockRegion]) ->() {
+        let node = match self.node(id) {
+            Some(value) => value None => {
+                ret()
+            }
+        }
+        output.push(DockRegion { id, bounds })
+        if node.is_tabs() {
+            ret()
+        }
+        let a = self.minimum(node.first) let b = self.minimum(node.second)
+        let extent = larger(0, if node.horizontal {
+                bounds.width()
+            } else {
+                bounds.height()
+            }
+            - 2,)
+        let low = if node.horizontal {
+            a.width()
+        } else {
+            a.height()
+        }
+        let high = extent - if node.horizontal {
+            b.width()
+        } else {
+            b.height()
+        }
+        let first = if low > high {
+            extent * node.fraction
+        } else {
+            bounded(extent * node.fraction, low, high)
+        }
+        if node.horizontal {
+            self.collect_regions(node.first, Rect::new(bounds.x(), bounds.y(), first, bounds.height()), output)
+            self.collect_regions(node.second, Rect::new(bounds.x() + first + 2, bounds.y(), extent - first, bounds.height()), output)
+        } else {
+            self.collect_regions(node.first, Rect::new(bounds.x(), bounds.y(), bounds.width(), first), output)
+            self.collect_regions(node.second, Rect::new(bounds.x(), bounds.y() + first + 2, bounds.width(), extent - first), output)
+        }
+    }
+    pub fn capacity(self: Self&) -> usize {
+        ret self.nodes.len()
+    }
+}
+fn layout_index(ids: Vec[DockNodeId], id: DockNodeId) -> Option[usize] {
+    let mut index = 0_usize
+    for candidate in ids {
+        if candidate.same(id) {
+            ret Option[usize]::Some(index)
+        }
+        index += 1
+    }
+    ret Option[usize]::None
+}
+fn contains_panel(panels: Vec[PanelId], panel: PanelId) -> bool {
+    for candidate in panels {
+        if candidate.same(panel) {
+            ret true
+        }
+    }
+    ret false
+}
+fn finite_extent(value: f32) -> bool {
+    ret value >= 0 && value - value == 0
+}
+fn larger(a: f32, b: f32) -> f32 {
+    ret if a > b {
+        a
+    } else {
+        b
+    }
+}
+fn bounded(value: f32, low: f32, high: f32) -> f32 {
+    ret if value < low {
+        low
+    } elif value > high {
+        high
+    } else {
+        value
+    }
+}

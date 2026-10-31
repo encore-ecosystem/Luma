@@ -1,0 +1,220 @@
+//! Reusable time/track coordinates and immutable authoring records.
+//! The host owns asset types, interpolation and command/history policy.
+import core::result::Result
+import core::vec::Vec
+
+pub struct TimelineTrack {
+    id: u64
+    label: str
+    locked: bool
+    muted: bool
+}
+pub struct TimelineItem {
+    id: u64
+    track: u64
+    start: f64
+    end: f64
+    label: str
+    key: bool
+    locked: bool
+}
+pub struct TimelineDocument {
+    tracks: Vec[TimelineTrack]
+    items: Vec[TimelineItem]
+    duration: f64
+    frame_rate: f64
+}
+pub struct TimelinePlacement {
+    id: u64
+    track: u64
+    start: f64
+    end: f64
+}
+pub struct TimelineView {
+    left: f64
+    span: f64
+    first_track: usize
+    label_width: f32
+    row_height: f32
+    ruler_height: f32
+    snapping: bool
+}
+fn clamp(value: f64, minimum: f64, maximum: f64) -> f64 {
+    ret if value < minimum {
+        minimum
+    } elif value > maximum {
+        maximum
+    } else {
+        value
+    }
+}
+pub fn timeline_snap(time: f64, frame_rate: f64) -> f64 {
+    if !(time >= 0_f64 && time <= 86400_f64) || !(frame_rate >= 1_f64 && frame_rate <= 1000_f64) {
+        ret 0_f64
+    }
+    ret(((time * frame_rate + 0.5_f64) as u64) as f64) / frame_rate
+}
+
+impl for TimelineDocument {
+    pub fn validate(self: Self) -> Result[bool, str] {
+        if !(self.duration > 0_f64 && self.duration <= 86400_f64) || !(self.frame_rate >= 1_f64 && self.frame_rate <= 1000_f64) || self.tracks.len() > 4096_usize || self.items.len() > 65536_usize {
+            ret Result::Err("Invalid timeline limits")
+        }
+        for i in 0_usize..self.tracks.len() {
+            let track = self.tracks.get_unchecked_borrowed(i)
+            if track.id == 0_u64 || track.label == "" {
+                ret Result::Err("Invalid timeline track")
+            }
+            for j in 0_usize..i {
+                if self.tracks.get_unchecked_borrowed(j).id == track.id {
+                    ret Result::Err("Duplicate timeline track")
+                }
+            }
+        }
+        // ID validation uses a sorted scalar scratch array, not a quadratic scan
+        // over a potentially large sequence. Document arrays remain unchanged.
+        let mut ids = Vec[u64]::with_capacity(self.items.len())
+        for item in self.items {
+            if item.id == 0_u64 || !(item.start >= 0_f64 && item.end >= item.start && item.end <= self.duration) ||(item.key && item.start != item.end) ||(!item.key && item.start == item.end) {
+                ret Result::Err("Invalid timeline item")
+            }
+            let mut found = false for track in self.tracks {
+                if track.id == item.track {
+                    found = true break
+                }
+            }
+            if !found {
+                ret Result::Err("Missing timeline track")
+            }
+            ids.push(item.id)
+        }
+        // In-place heapsort bounds work to O(n log n), with no shared-storage clone.
+        let length = ids.len()
+        if length > 1_usize {
+            let mut root = length / 2_usize
+            while root > 0_usize {
+                root -= 1_usize sift(ids, root, length)
+            }
+            let mut end = length
+            while end > 1_usize {
+                end -= 1_usize let last = ids.get_unchecked_borrowed(end) ids.set(end, ids.get_unchecked_borrowed(0_usize)) ids.set(0_usize, last) sift(ids, 0_usize, end)
+            }
+            for i in 1_usize..length {
+                if ids.get_unchecked_borrowed(i) == ids.get_unchecked_borrowed(i - 1_usize) {
+                    ret Result::Err("Duplicate timeline item")
+                }
+            }
+        }
+        ret Result::Ok(true)
+    }
+    pub fn editable(self: Self, item: TimelineItem) -> bool {
+        if item.locked {
+            ret false
+        }
+        for track in self.tracks {
+            if track.id == item.track {
+                ret !track.locked
+            }
+        }
+        ret false
+    }
+    pub fn placement(self: Self, item: TimelineItem, time: f64, target: u64, mode: u32, snapping: bool) -> Result[TimelinePlacement, str] {
+        if !(item.start >= 0_f64 && item.end >= item.start && item.end <= self.duration) || !self.editable(item) || !(time >= - 86400_f64 && time <= 86400_f64) || mode > 2_u32 {
+            ret Result::Err("Timeline item cannot be edited")
+        }
+        let mut track = item.track
+        if mode == 0_u32 {
+            let mut found = false for row in self.tracks {
+                if row.id == target && !row.locked {
+                    track = target found = true break
+                }
+            }
+            if !found {
+                ret Result::Err("Timeline target track is locked or absent")
+            }
+        }
+        let duration = item.end - item.start
+        let minimum = if duration < 1_f64 / self.frame_rate {
+            duration
+        } else {
+            1_f64 / self.frame_rate
+        }
+        let mut point = clamp(time, 0_f64, self.duration)
+        if snapping {
+            point = clamp(timeline_snap(point, self.frame_rate), 0_f64, self.duration)
+        }
+        let mut start = item.start let mut end = item.end
+        if item.key {
+            start = point end = point
+        } elif mode == 0_u32 {
+            start = clamp(point, 0_f64, self.duration - duration) end = start + duration
+        } elif mode == 1_u32 {
+            start = clamp(point, 0_f64, end - minimum)
+        } else {
+            end = clamp(point, start + minimum, self.duration)
+        }
+        ret Result::Ok(TimelinePlacement { item.id, track, start, end })
+    }
+}
+fn sift(values: mut Vec[u64], initial: usize, count: usize) ->() {
+    let mut root = initial
+    while root < count / 2_usize {
+        let mut child = root * 2_usize + 1_usize
+        if child + 1_usize < count && values.get_unchecked_borrowed(child) < values.get_unchecked_borrowed(child + 1_usize) {
+            child += 1_usize
+        }
+        if values.get_unchecked_borrowed(root) >= values.get_unchecked_borrowed(child) {
+            ret()
+        }
+        let current = values.get_unchecked_borrowed(root) values.set(root, values.get_unchecked_borrowed(child)) values.set(child, current) root = child
+    }
+}
+
+impl for TimelineView {
+    pub fn new() -> Self {
+        ret Self { 0_f64, 10_f64, 0_usize, 160_f32, 32_f32, 26_f32, true }
+    }
+    pub fn time(self: Self, x: f32, width: f32) -> f64 {
+        if !(width > self.label_width + 1_f32) || !(self.span > 0_f64) {
+            ret self.left
+        }
+        ret self.left +(((x - self.label_width) /(width - self.label_width)) as f64) * self.span
+    }
+    pub fn project(self: Self, time: f64, width: f32) -> f32 {
+        if !(self.span > 0_f64) {
+            ret self.label_width
+        }
+        ret self.label_width +(((time - self.left) / self.span) as f32) *(width - self.label_width)
+    }
+    pub fn zoom(self: mut Self, factor: f64, anchor_x: f32, width: f32, duration: f64) ->() {
+        if !(factor > 0_f64 && factor < 100_f64) || !(duration > 0_f64 && duration <= 86400_f64) {
+            ret()
+        }
+        let anchor = self.time(anchor_x, width)
+        let span = clamp(self.span * factor, 0.001_f64, duration)
+        let fraction = clamp((anchor - self.left) / self.span, 0_f64, 1_f64)
+        self.left = clamp(anchor - fraction * span, 0_f64, duration - span) self.span = span
+    }
+    pub fn pan(self: mut Self, delta: f64, duration: f64) ->() {
+        if !(delta >= - 86400_f64 && delta <= 86400_f64) || duration < self.span {
+            ret()
+        }
+        self.left = clamp(self.left + delta, 0_f64, duration - self.span)
+    }
+    pub fn fit(self: mut Self, duration: f64) ->() {
+        if duration > 0_f64 && duration <= 86400_f64 {
+            self.left = 0_f64 self.span = duration
+        }
+    }
+    pub fn row(self: Self, y: f32, count: usize) -> usize {
+        if y < self.ruler_height || !(self.row_height > 0_f32) {
+            ret count
+        }
+        let at =(((y - self.ruler_height) / self.row_height) as usize) + self.first_track
+        ret if at < count {
+            at
+        } else {
+            count
+        }
+    }
+}

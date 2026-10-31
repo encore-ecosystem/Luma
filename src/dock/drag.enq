@@ -1,0 +1,91 @@
+//! A panel drag is speculative until drop. Native backends supply window-local
+//! coordinates; no global pointer position or platform handle is required.
+import core::option::Option
+import refrain::dock::model::{DockNodeId, DockPlacement, DockWorkspace, PanelId, WindowId}
+import refrain::geometry::{Point, Rect}
+
+pub struct DockDrag {
+    panel: Option[PanelId]
+    source: WindowId
+    origin: Point
+    active: bool
+}
+
+impl for DockDrag {
+    pub fn new() -> DockDrag<H> {
+        ret DockDrag<H>{ Option[PanelId]::None, WindowId::new(0), Point::new(0, 0), false }
+    }
+    pub fn panel(self: Self&) -> Option[PanelId] {
+        ret self.panel
+    }
+    pub fn source(self: Self&) -> WindowId {
+        ret self.source
+    }
+    pub fn active(self: Self&) -> bool {
+        ret self.active
+    }
+    pub fn armed(self: Self&) -> bool {
+        ret self.panel.is_some()
+    }
+    pub fn begin(self: mut Self&, workspace: DockWorkspace&, panel: PanelId,
+        window: WindowId, x: f32, y: f32,) -> bool {
+        if self.armed() || x - x != 0 || y - y != 0 {
+            ret false
+        }
+        let group = workspace.location(panel).unwrap_or(DockNodeId::empty())
+        if !workspace.owner(group).unwrap_or(WindowId::new(0)).same(window) {
+            ret false
+        }
+        self.panel = Option[PanelId]::Some(panel)
+        self.source = window self.origin = Point::new(x, y) self.active = false
+        ret true
+    }
+    /// The six-point threshold distinguishes tab selection from a transfer.
+    pub fn motion(self: mut Self&, x: f32, y: f32) -> bool {
+        if !self.armed() || x - x != 0 || y - y != 0 {
+            ret false
+        }
+        let dx = x - self.origin.x() let dy = y - self.origin.y()
+        self.active = self.active || dx * dx + dy * dy >= 36
+        ret self.active
+    }
+    pub fn preview(self: Self&, workspace: DockWorkspace&, target: DockNodeId,
+        placement: DockPlacement, bounds: Rect,) -> Option[Rect] {
+        if !self.active {
+            ret Option[Rect]::None
+        }
+        match self.panel {
+            Some(panel) => {
+                ret workspace.preview(panel, target, placement, bounds)
+            }
+            None => {
+                ret Option[Rect]::None
+            }
+        }
+    }
+    pub fn cancel(self: mut Self&) ->() {
+        self.panel = Option[PanelId]::None
+        self.source = WindowId::new(0) self.active = false
+    }
+    /// A click activates the tab. A drag commits one model transaction. Stale
+    /// or invalid destinations leave the source in place, then release capture.
+    pub fn finish(self: mut Self&, workspace: mut DockWorkspace&, target: DockNodeId,
+        placement: DockPlacement, ordinal: usize,) -> bool {
+        let panel = match self.panel {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let group = workspace.location(panel).unwrap_or(DockNodeId::empty())
+        let current_source = workspace.owner(group).unwrap_or(WindowId::new(0))
+        let accepted = if !current_source.same(self.source) {
+            false
+        } elif self.active {
+            workspace.dock(panel, target, placement, ordinal)
+        } else {
+            workspace.activate(panel)
+        }
+        self.cancel()
+        ret accepted
+    }
+}

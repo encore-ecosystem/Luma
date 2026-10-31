@@ -3,7 +3,7 @@
 import color::Color
 import core::option::Option
 import core::vec::Vec
-import geometry::Insets
+import refrain::geometry::Insets
 import refrain::interaction::TextEditor
 import refrain::layout::{horizontal, vertical}
 import refrain::style::Style
@@ -13,11 +13,19 @@ import std::os::{file_exists, home_dir, mkdir, read_dir}
 import ui_native::native_path_is_directory
 
 pub struct FilePickerEntry {
-    name: str path: str directory: bool
+    name: str
+    path: str
+    directory: bool
 }
 pub struct FilePickerIcons {
-    folder: SvgDocument file: SvgDocument home: SvgDocument up: SvgDocument refresh: SvgDocument add:
-    SvgDocument hidden: SvgDocument
+    folder: SvgDocument
+    file: SvgDocument
+    home: SvgDocument
+    up: SvgDocument
+    refresh: SvgDocument
+    add:
+    SvgDocument
+    hidden: SvgDocument
 }
 pub struct FilePicker {
     directory: str
@@ -338,7 +346,7 @@ impl for FilePicker {
                                 icons.file
                             }
                             ,).with_flex(30.0_f32, 0.0_f32)
-                        .with_style(picker_entry_style(self.selected == entry.path)))
+                        .with_style(picker_entry_style(self.selected == entry.path).with_min_height(30.0_f32)))
                 }
                 Option::None => {
                 }

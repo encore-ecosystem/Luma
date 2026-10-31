@@ -1,0 +1,393 @@
+//! UI-thread-owned dependencies with reusable, generation-checked identities.
+import core::option::Option
+import core::panic::panic
+import core::vec::Vec
+
+extern fn luma_reactive_identity() -> u64
+
+#attr(safe)
+pub fn reactive_identity() -> u64 {
+    unsafe {
+        ret luma_reactive_identity()
+    }
+}
+
+/// A stale key cannot address a subsequently mounted source or observer.
+pub struct ReactiveKey {
+    slot: usize
+    generation: u64
+    owner: u64
+}
+
+impl for ReactiveKey {
+    pub fn index(self: Self) -> usize {
+        ret self.slot
+    }
+    pub fn same(self: Self, other: Self) -> bool {
+        ret self.slot == other.slot && self.generation == other.generation && self.owner == other.owner
+    }
+}
+
+struct SourceSlot {
+    generation: u64
+    live: bool
+    observers: Vec[ReactiveKey]
+}
+
+struct ObserverSlot {
+    generation: u64
+    live: bool
+    dirty: bool
+    queued: bool
+    sources: Vec[ReactiveKey]
+    reads: Vec[ReactiveKey]
+    output: Option[ReactiveKey]
+}
+
+/// One window's graph. No mutable graph is shared with a worker thread.
+pub struct ReactiveGraph {
+    identity: u64
+    sources: Vec[SourceSlot]
+    observers: Vec[ObserverSlot]
+    free_sources: Vec[usize]
+    free_observers: Vec[usize]
+    pending: Vec[usize]
+    stack: Vec[ReactiveKey]
+    invalidations: u64
+}
+
+fn contains(keys: Vec[ReactiveKey], expected: ReactiveKey) -> bool {
+    for key in keys {
+        if key.same(expected) {
+            ret true
+        }
+    }
+    ret false
+}
+
+fn without(keys: Vec[ReactiveKey], expected: ReactiveKey) -> Vec[ReactiveKey] {
+    let mut result = Vec[ReactiveKey]::new()
+    for key in keys {
+        if !key.same(expected) {
+            result.push(key)
+        }
+    }
+    ret result
+}
+
+fn source_at(slots: Vec[SourceSlot], index: usize) -> SourceSlot {
+    match slots.get(index) {
+        Some(slot) => {
+            ret slot
+        }
+        None => {
+        }
+    }
+    panic("invalid reactive source slot")
+    ret SourceSlot {
+        0, false, Vec[ReactiveKey]::new()
+    }
+}
+
+fn observer_at(slots: Vec[ObserverSlot], index: usize) -> ObserverSlot {
+    match slots.get(index) {
+        Some(slot) => {
+            ret slot
+        }
+        None => {
+        }
+    }
+    panic("invalid reactive observer slot")
+    ret ObserverSlot {
+        0, false, false, false, Vec[ReactiveKey]::new(), Vec[ReactiveKey]::new(), Option[ReactiveKey]::None
+    }
+}
+
+impl for ReactiveGraph {
+    pub fn new() -> ReactiveGraph < H > {
+        let identity = reactive_identity()
+        ret ReactiveGraph < H > {
+            identity, Vec[SourceSlot]::new(), Vec[ObserverSlot]::new(),
+            Vec[usize]::new(), Vec[usize]::new(), Vec[usize]::new(),
+            Vec[ReactiveKey]::new(), 0
+        }
+    }
+
+    pub fn identity(self: Self &) -> u64 {
+        ret self.identity
+    }
+
+    pub fn source(self: mut Self &) -> ReactiveKey {
+        match self.free_sources.pop() {
+            Some(index) => {
+                let old = source_at(self.sources, index)
+                let generation = old.generation + 1
+                self.sources.set(index, SourceSlot {
+                        generation, true, Vec[ReactiveKey]::new()
+                    }
+                    ,
+                )
+                ret ReactiveKey {
+                    index, generation, self.identity
+                }
+            }
+            None => {
+                let index = self.sources.len()
+                self.sources.push(SourceSlot {
+                        1, true, Vec[ReactiveKey]::new()
+                    }
+                    ,
+                )
+                ret ReactiveKey {
+                    index, 1, self.identity
+                }
+            }
+        }
+    }
+
+    pub fn observer(self: mut Self &) -> ReactiveKey {
+        let index = self.free_observers.pop().unwrap_or(self.observers.len())
+        let generation = match self.observers.get(index) {
+            Some(old) => old.generation + 1
+            None => 1_u64
+        }
+        let queued = match self.observers.get(index) {
+            Some(old) => old.queued
+            None => false
+        }
+        let slot = ObserverSlot {
+            generation, true, true, queued,
+            Vec[ReactiveKey]::new(), Vec[ReactiveKey]::new(), Option[ReactiveKey]::None
+        }
+        if index == self.observers.len() {
+            self.observers.push(slot)
+        } else {
+            self.observers.set(index, slot)
+        }
+        ret ReactiveKey {
+            index, generation, self.identity
+        }
+    }
+
+    pub fn has_source(self: Self &, key: ReactiveKey) -> bool {
+        if key.owner != self.identity {
+            ret false
+        }
+        ret match self.sources.get(key.slot) {
+            Some(slot) => slot.live && slot.generation == key.generation
+            None => false
+        }
+    }
+
+    pub fn has_observer(self: Self &, key: ReactiveKey) -> bool {
+        if key.owner != self.identity {
+            ret false
+        }
+        ret match self.observers.get(key.slot) {
+            Some(slot) => slot.live && slot.generation == key.generation
+            None => false
+        }
+    }
+
+    pub fn is_dirty(self: Self &, key: ReactiveKey) -> bool {
+        if !self.has_observer(key) {
+            ret false
+        }
+        ret observer_at(self.observers, key.slot).dirty
+    }
+
+    /// Computations publish a source so consumers are invalidated transitively.
+    pub fn connect_output(self: mut Self &, observer: ReactiveKey, source: ReactiveKey) -> bool {
+        if !self.has_observer(observer) || !self.has_source(source) {
+            ret false
+        }
+        let mut slot = observer_at(self.observers, observer.slot)
+        slot.output = Option[ReactiveKey]::Some(source)
+        self.observers.set(observer.slot, slot)
+        ret true
+    }
+
+    /// Returns false for an invalid observer or a recursive computation.
+    pub fn begin(self: mut Self &, key: ReactiveKey) -> bool {
+        if !self.has_observer(key) || contains(self.stack, key) {
+            ret false
+        }
+        let mut slot = observer_at(self.observers, key.slot)
+        slot.reads = Vec[ReactiveKey]::new()
+        self.observers.set(key.slot, slot)
+        self.stack.push(key)
+        ret true
+    }
+
+    /// A read records only the innermost evaluating observer.
+    pub fn read(self: mut Self &, source: ReactiveKey) -> bool {
+        if !self.has_source(source) {
+            ret false
+        }
+        match self.stack.last() {
+            Some(observer) => {
+                let mut slot = observer_at(self.observers, observer.slot)
+                if !contains(slot.reads, source) {
+                    slot.reads.push(source)
+                }
+                self.observers.set(observer.slot, slot)
+            }
+            None => {
+            }
+        }
+        ret true
+    }
+
+    /// Commit the reads transactionally; conditional reads remove old edges.
+    pub fn end(self: mut Self &, key: ReactiveKey) -> bool {
+        if !self.has_observer(key) {
+            ret false
+        }
+        match self.stack.last() {
+            Some(current) => {
+                if !current.same(key) {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+        let _popped = self.stack.pop()
+        let mut observer = observer_at(self.observers, key.slot)
+        for source in observer.sources {
+            if self.has_source(source) && !contains(observer.reads, source) {
+                let mut slot = source_at(self.sources, source.slot)
+                slot.observers = without(slot.observers, key)
+                self.sources.set(source.slot, slot)
+            }
+        }
+        for source in observer.reads {
+            if self.has_source(source) && !contains(observer.sources, source) {
+                let mut slot = source_at(self.sources, source.slot)
+                slot.observers.push(key)
+                self.sources.set(source.slot, slot)
+            }
+        }
+        observer.sources = observer.reads
+        observer.reads = Vec[ReactiveKey]::new()
+        observer.dirty = false
+        self.observers.set(key.slot, observer)
+        ret true
+    }
+
+    /// Work is proportional to subscribers, not to all mounted UI nodes.
+    pub fn write(self: mut Self &, source: ReactiveKey) -> bool {
+        if !self.has_source(source) {
+            ret false
+        }
+        let mut work = Vec[ReactiveKey]::new()
+        work.push(source)
+        let mut cursor = 0_usize
+        while cursor < work.len() {
+            let current = work.get(cursor).unwrap_or(source)
+            cursor += 1
+            let clients = source_at(self.sources, current.slot).observers
+            for key in clients {
+                if self.has_observer(key) {
+                    let mut observer = observer_at(self.observers, key.slot)
+                    if !observer.dirty {
+                        observer.dirty = true
+                        self.invalidations += 1
+                        if !observer.queued {
+                            observer.queued = true
+                            self.pending.push(key.slot)
+                        }
+                        match observer.output {
+                            Some(output) => {
+                                if self.has_source(output) {
+                                    work.push(output)
+                                }
+                            }
+                            None => {
+                            }
+                        }
+                        self.observers.set(key.slot, observer)
+                    }
+                }
+            }
+        }
+        ret true
+    }
+
+    /// Taking work does not mark it clean; only a completed evaluation does.
+    pub fn take_pending(self: mut Self &) -> Vec[ReactiveKey] {
+        let pending = self.pending
+        self.pending = Vec[usize]::new()
+        let mut result = Vec[ReactiveKey]::new()
+        for index in pending {
+            let mut observer = observer_at(self.observers, index)
+            observer.queued = false
+            if observer.live && observer.dirty {
+                result.push(ReactiveKey {
+                        index, observer.generation, self.identity
+                    }
+                    ,
+                )
+            }
+            self.observers.set(index, observer)
+        }
+        ret result
+    }
+
+    pub fn dispose_observer(self: mut Self &, key: ReactiveKey) -> bool {
+        if !self.has_observer(key) || contains(self.stack, key) {
+            ret false
+        }
+        let old = observer_at(self.observers, key.slot)
+        for source in old.sources {
+            if self.has_source(source) {
+                let mut slot = source_at(self.sources, source.slot)
+                slot.observers = without(slot.observers, key)
+                self.sources.set(source.slot, slot)
+            }
+        }
+        self.observers.set(key.slot, ObserverSlot {
+                old.generation, false, false,
+                old.queued, Vec[ReactiveKey]::new(), Vec[ReactiveKey]::new(), Option[ReactiveKey]::None
+            }
+            ,)
+        self.free_observers.push(key.slot)
+        ret true
+    }
+
+    pub fn dispose_source(self: mut Self &, key: ReactiveKey) -> bool {
+        if !self.has_source(key) {
+            ret false
+        }
+        let _invalidated = self.write(key)
+        let old = source_at(self.sources, key.slot)
+        for observer in old.observers {
+            if self.has_observer(observer) {
+                let mut slot = observer_at(self.observers, observer.slot)
+                slot.sources = without(slot.sources, key)
+                self.observers.set(observer.slot, slot)
+            }
+        }
+        self.sources.set(key.slot, SourceSlot {
+                old.generation, false, Vec[ReactiveKey]::new()
+            }
+            ,
+        )
+        self.free_sources.push(key.slot)
+        ret true
+    }
+
+    pub fn invalidations(self: Self &) -> u64 {
+        ret self.invalidations
+    }
+    pub fn source_capacity(self: Self &) -> usize {
+        ret self.sources.len()
+    }
+    pub fn observer_capacity(self: Self &) -> usize {
+        ret self.observers.len()
+    }
+    pub fn pending_count(self: Self &) -> usize {
+        ret self.pending.len()
+    }
+}

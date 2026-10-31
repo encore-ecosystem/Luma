@@ -1,15 +1,8 @@
 [project]
 name = "luma_demo"
 version = "0.1.0"
-description = "Complete Luma demonstration"
-dependencies = [
-    "path@..[fonts]",
-]
+description = "Minimal Luma interaction latency reproducer"
+dependencies = ["path@..", "index@std"]
 
 [lint]
-default = "warn"
 dependencies = "allow"
-
-[lint.rules]
-unused-mut = "allow"
-missing-public-docstring = "allow"

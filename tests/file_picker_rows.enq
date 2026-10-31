@@ -1,0 +1,28 @@
+//! Long directory listings scroll instead of squeezing every row into the list.
+import luma::{FilePicker, FilePickerIcons, SvgDocument, Rect, layout_widget}
+import std::os::{mkdir_all, write_file}
+import std::time::perf_counter_ms
+fn main() -> u32 {
+    let directory = f "target/file-picker-rows-{perf_counter_ms()}"
+    let _directory = mkdir_all(directory)
+    for index in 0..32 {
+        let _file = write_file(f "{directory}/entry-{index}.txt", "row")
+    }
+    let icon = SvgDocument::empty()
+    let picker = FilePicker::new(directory)
+    let layout = layout_widget(picker.view(FilePickerIcons::new(icon, icon, icon, icon, icon, icon, icon)), Rect::new(0, 0, 360, 220))
+    let list = layout.find_bounds("file-picker-list").unwrap_or(Rect::new(0, 0, 0, 0))
+    let first = layout.find_bounds("file-picker-entry-0").unwrap_or(Rect::new(0, 0, 0, 0))
+    let second = layout.find_bounds("file-picker-entry-1").unwrap_or(Rect::new(0, 0, 0, 0))
+    let last = layout.find_bounds("file-picker-entry-31").unwrap_or(Rect::new(0, 0, 0, 0))
+    if first.height() != 30 || second.height() != 30 || second.y() < first.bottom() {
+        ret 1
+    }
+    if last.bottom() <= list.bottom() {
+        ret 2
+    }
+    if layout.hit(last.x() + 5, last.y() + 5) == "file-picker-entry-31" {
+        ret 3
+    }
+    ret 0
+}

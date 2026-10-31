@@ -1,0 +1,423 @@
+//! Window-local docking gestures. Geometry comes from the displayed layout;
+//! pointer motion never rebuilds panel contents or commits a speculative drop.
+import core::option::Option
+import refrain::dock::drag::DockDrag
+import refrain::dock::host::DockHost
+import refrain::dock::model::{DockNodeId, DockPlacement, DockWorkspace, PanelId, WindowId}
+import refrain::geometry::Rect
+import refrain::widget::ReactiveUi
+
+pub struct DockDrop {
+    target: DockNodeId
+    placement: DockPlacement
+    ordinal: usize
+    bounds: Rect
+}
+
+impl for DockDrop {
+    pub fn target(self: Self) -> DockNodeId {
+        ret self.target
+    }
+    pub fn placement(self: Self) -> DockPlacement {
+        ret self.placement
+    }
+    pub fn ordinal(self: Self) -> usize {
+        ret self.ordinal
+    }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+}
+
+pub enum DockRelease {
+    Ignored
+    Cancelled
+    Committed
+    Detach(PanelId)
+}
+
+pub struct DockInteraction {
+    drag: DockDrag<H>
+    split: DockNodeId
+    window: WindowId
+    origin: f32
+    extent: f32
+    size: f32
+    original_fraction: f32
+    horizontal: bool
+    preview: Option[DockDrop]
+}
+
+impl for DockInteraction {
+    pub fn new() -> DockInteraction<H> {
+        ret DockInteraction<H> {
+            DockDrag::new(), DockNodeId::empty(), WindowId::new(0),
+            0, 0, 0, 0, false, Option[DockDrop]::None
+        }
+    }
+    pub fn captured(self: Self&) -> bool {
+        ret self.drag.armed() || self.split.valid()
+    }
+    pub fn dragging(self: Self&) -> bool {
+        ret self.drag.active()
+    }
+    pub fn resizing(self: Self&) -> bool {
+        ret self.split.valid()
+    }
+    pub fn panel(self: Self&) -> Option[PanelId] {
+        ret self.drag.panel()
+    }
+    pub fn preview(self: Self&) -> Option[DockDrop] {
+        ret self.preview
+    }
+    pub fn horizontal(self: Self&) -> bool {
+        ret self.horizontal
+    }
+
+    pub fn press(self: mut Self&, host: DockHost&, window: WindowId,
+        ui: mut ReactiveUi, x: f32, y: f32,) -> bool {
+        if self.captured() || !finite(x) || !finite(y) {
+            ret false
+        }
+        let hit = ui.hit(x, y)
+        let workspace = host.workspace()
+        match host.tab_target(hit) {
+            Some(panel) => {
+                ret self.drag.begin(workspace, panel, window, x, y)
+            }
+            None => {
+            }
+        }
+        let split = match host.splitter_target(window, hit) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let node = match workspace.node(split) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let bounds = match ui.find_layout(host.node_element(split)) {
+            Some(value) => value.bounds() None => {
+                ret false
+            }
+        }
+        let first = match ui.find_layout(host.node_element(node.first())) {
+            Some(value) => value.bounds() None => {
+                ret false
+            }
+        }
+        self.horizontal = node.horizontal()
+        self.extent =(if self.horizontal {
+                bounds.width()
+            } else {
+                bounds.height()
+            }
+        ) - 2
+        if self.extent <= 0 {
+            ret false
+        }
+        self.split = split self.window = window
+        self.origin = if self.horizontal {
+            x
+        } else {
+            y
+        }
+        // Start from what the user actually sees, not a fraction that may
+        // have been clamped by minimum sizes during the preceding layout.
+        self.size = if self.horizontal {
+            first.width()
+        } else {
+            first.height()
+        }
+        self.original_fraction = node.fraction()
+        ret true
+    }
+
+    /// Returns true when this gesture owns the input. A host applies geometry
+    /// only if the model revision changed; a drag preview is overlay-only.
+    pub fn motion(self: mut Self&, host: DockHost&, window: WindowId,
+        ui: mut ReactiveUi, x: f32, y: f32,) -> bool {
+        if !self.captured() || !finite(x) || !finite(y) {
+            ret false
+        }
+        let workspace = host.workspace()
+        if self.split.valid() {
+            if !window.same(self.window) {
+                ret true
+            }
+            let node = match workspace.node(self.split) {
+                Some(value) => value None => {
+                    self.clear() ret true
+                }
+            }
+            let left = workspace.minimum(node.first()) let right = workspace.minimum(node.second())
+            let minimum = if self.horizontal {
+                left.width()
+            } else {
+                left.height()
+            }
+            let maximum = self.extent -(if self.horizontal {
+                    right.width()
+                } else {
+                    right.height()
+                }
+            )
+            let pointer = if self.horizontal {
+                x
+            } else {
+                y
+            }
+            let size = if maximum < minimum {
+                self.size
+            } else {
+                clamp(self.size + pointer - self.origin, minimum, maximum)
+            }
+            let _resized = workspace.resize(self.split, clamp(size / self.extent, 0, 1))
+            ret true
+        }
+        let _active = self.drag.motion(x, y)
+        self.preview = Option[DockDrop]::None
+        if self.drag.active() {
+            match self.drag.panel() {
+                Some(panel) => {
+                    self.preview = drop_at(host, window, ui, panel, x, y)
+                }
+                None => {
+                }
+            }
+        }
+        ret true
+    }
+
+    pub fn release(self: mut Self&, host: DockHost&, window: WindowId,
+        ui: mut ReactiveUi, x: f32, y: f32,) -> DockRelease {
+        if !self.captured() {
+            ret DockRelease::Ignored
+        }
+        if !finite(x) || !finite(y) {
+            self.cancel(host.workspace()) ret DockRelease::Cancelled
+        }
+        if self.split.valid() && !window.same(self.window) {
+            self.cancel(host.workspace()) ret DockRelease::Cancelled
+        }
+        let _updated = self.motion(host, window, ui, x, y)
+        if self.split.valid() {
+            self.clear() ret DockRelease::Committed
+        }
+        let workspace = host.workspace()
+        if !self.drag.active() {
+            let selected = self.drag.finish(workspace, DockNodeId::empty(), DockPlacement::Center, 0)
+            self.clear()
+            ret if selected {
+                DockRelease::Committed
+            } else {
+                DockRelease::Cancelled
+            }
+        }
+        match self.preview {
+            Some(drop) => {
+                let accepted = self.drag.finish(workspace, drop.target, drop.placement, drop.ordinal)
+                self.clear()
+                ret if accepted {
+                    DockRelease::Committed
+                } else {
+                    DockRelease::Cancelled
+                }
+            }
+            None => {
+                // An invalid in-window target cancels. Only a drop outside
+                // every hosted root requests a new native window; its creation
+                // must succeed before the application calls workspace.detach.
+                let panel = self.drag.panel()
+                let source = self.drag.source()
+                let outside = match host.window_root(window) {
+                    Some(root) => {
+                        let tree = host.bindings().tree()
+                        match tree.widget(root) {
+                            Some(widget) => {
+                                match ui.find_layout(widget.id()) {
+                                    Some(layout) => !contains(layout.bounds(), x, y)
+                                    None => false
+                                }
+                            }
+                            None => false
+                        }
+                    }
+                    None => false
+                }
+                self.clear()
+                if outside {
+                    match panel {
+                        Some(value) => {
+                            let group = workspace.location(value).unwrap_or(DockNodeId::empty())
+                            if workspace.owner(group).unwrap_or(WindowId::new(0)).same(source) {
+                                ret DockRelease::Detach(value)
+                            }
+                        }
+                        None => {
+                        }
+                    }
+                }
+                ret DockRelease::Cancelled
+            }
+        }
+    }
+    pub fn cancel(self: mut Self&, workspace: mut DockWorkspace&) ->() {
+        if self.split.valid() {
+            let _restored = workspace.resize(self.split, self.original_fraction)
+        }
+        self.clear()
+    }
+    fn clear(self: mut Self&) ->() {
+        self.drag.cancel() self.split = DockNodeId::empty()
+        self.preview = Option[DockDrop]::None self.window = WindowId::new(0)
+    }
+}
+
+fn drop_at(host: DockHost&, window: WindowId, ui: mut ReactiveUi, panel: PanelId,
+    x: f32, y: f32,) -> Option[DockDrop] {
+    let workspace = host.workspace()
+    let root = match workspace.window(window) {
+        Some(value) => value.root() None => {
+            ret Option[DockDrop]::None
+        }
+    }
+    let root_bounds = match ui.find_layout(host.node_element(root)) {
+        Some(value) => value.bounds() None => {
+            ret Option[DockDrop]::None
+        }
+    }
+    if !contains(root_bounds, x, y) {
+        ret Option[DockDrop]::None
+    }
+    // Tab strips take priority over edge targets and reorder at the actual
+    // displayed midpoint, even when tabs have shrunk to fit their group.
+    for candidate in workspace.panels_in(window) {
+        match ui.find_layout(host.tab_element(candidate)) {
+            Some(layout) => {
+                let bounds = layout.bounds()
+                if contains(bounds, x, y) {
+                    let group = workspace.location(candidate).unwrap_or(DockNodeId::empty())
+                    let node = match workspace.node(group) {
+                        Some(value) => value None => {
+                            ret Option[DockDrop]::None
+                        }
+                    }
+                    let mut ordinal = 0_usize
+                    for tab in node.tabs() {
+                        if tab.same(candidate) {
+                            break
+                        }
+                        if !tab.same(panel) {
+                            ordinal += 1
+                        }
+                    }
+                    if x >= bounds.x() + bounds.width() * 0.5 && !candidate.same(panel) {
+                        ordinal += 1
+                    }
+                    let group_bounds = match ui.find_layout(host.node_element(group)) {
+                        Some(layout) => layout.bounds() None => bounds
+                    }
+                    ret Option[DockDrop]::Some(DockDrop {
+                            group, DockPlacement::Center, ordinal,
+                            workspace.preview(panel, group, DockPlacement::Center, group_bounds).unwrap_or(bounds)
+                        }
+                        ,)
+                }
+            }
+            None => {
+            }
+        }
+    }
+    let edge = placement(root_bounds, x, y, 18)
+    if edge != DockPlacement::Center {
+        match workspace.preview(panel, root, edge, root_bounds) {
+            Some(bounds) => {
+                ret Option[DockDrop]::Some(DockDrop { root, edge, 0, bounds })
+            }
+            None => {
+            }
+        }
+    }
+    for region in workspace.regions(window, root_bounds) {
+        match drop_in_group(host, window, ui, panel, region.node(), x, y) {
+            Some(drop) => {
+                ret Option[DockDrop]::Some(drop)
+            }
+            None => {
+            }
+        }
+    }
+    ret Option[DockDrop]::None
+}
+fn drop_in_group(host: DockHost&, window: WindowId, ui: mut ReactiveUi, panel: PanelId,
+    group: DockNodeId, x: f32, y: f32,) -> Option[DockDrop] {
+    let workspace = host.workspace()
+    let node = match workspace.node(group) {
+        Some(value) => value None => {
+            ret Option[DockDrop]::None
+        }
+    }
+    if !node.is_tabs() {
+        ret Option[DockDrop]::None
+    }
+    let bounds = match ui.find_layout(host.node_element(group)) {
+        Some(value) => value.bounds() None => {
+            ret Option[DockDrop]::None
+        }
+    }
+    if !contains(bounds, x, y) {
+        ret Option[DockDrop]::None
+    }
+    let shortest = if bounds.width() < bounds.height() {
+        bounds.width()
+    } else {
+        bounds.height()
+    }
+    let edge = placement(bounds, x, y, clamp(shortest * 0.22, 18, 80))
+    let preview = match workspace.preview(panel, group, edge, bounds) {
+        Some(value) => value None => {
+            ret Option[DockDrop]::None
+        }
+    }
+    let mut ordinal = 0_usize
+    for tab in node.tabs() {
+        if !tab.same(panel) {
+            ordinal += 1
+        }
+    }
+    ret Option[DockDrop]::Some(DockDrop { group, edge, ordinal, preview })
+}
+fn contains(bounds: Rect, x: f32, y: f32) -> bool {
+    ret x >= bounds.x() && y >= bounds.y() && x < bounds.right() && y < bounds.bottom()
+}
+fn finite(value: f32) -> bool {
+    ret value - value == 0
+}
+fn clamp(value: f32, low: f32, high: f32) -> f32 {
+    ret if value < low {
+        low
+    } elif value > high {
+        high
+    } else {
+        value
+    }
+}
+fn placement(bounds: Rect, x: f32, y: f32, edge: f32) -> DockPlacement {
+    let mut distance = edge let mut result = DockPlacement::Center
+    if x - bounds.x() < distance {
+        distance = x - bounds.x() result = DockPlacement::Left
+    }
+    if bounds.right() - x < distance {
+        distance = bounds.right() - x result = DockPlacement::Right
+    }
+    if y - bounds.y() < distance {
+        distance = y - bounds.y() result = DockPlacement::Top
+    }
+    if bounds.bottom() - y < distance {
+        result = DockPlacement::Bottom
+    }
+    ret result
+}

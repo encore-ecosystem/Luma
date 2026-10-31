@@ -1,6 +1,4 @@
-import luma:: {
-    Color, Insets, ReactiveUi, Rect, Style, TransitionStyle, Widget, layout_widget, vertical
-}
+import luma::{Color, Insets, ReactiveUi, Rect, Style, TransitionStyle, Widget, layout_widget, vertical}
 
 fn tree(text: str) -> Widget {
     let mut root = Widget::panel("root").with_direction(vertical())
@@ -73,15 +71,13 @@ fn main() -> u32 {
         ret 57_u32
     }
 
-    // A transient interaction snapshot must not survive a declarative model
-    // update. Otherwise leaving hover/focus can restore stale text or values.
+    // Authored model state has its own lifetime, without transient snapshots.
     ui = ReactiveUi::new(layout_widget(tree("Count: 1"), bounds))
-    let _base = ui.interaction_base("value")
-    ui.clear_interaction_bases()
+    ui.set_declarative_root(tree("Count: 2"))
     if ui.reconcile(tree("Count: 2")) != 1_u32 {
         ret 58_u32
     }
-    if ui.interaction_base("value").unwrap_or(
+    if ui.declarative_root().find("value").unwrap_or(
         Widget::spacer(0.0_f32),).text() != "Count: 2" {
         ret 59_u32
     }
@@ -182,13 +178,13 @@ fn main() -> u32 {
     let mut popup = Widget::panel("popup").with_style(popup_style)
     popup.push(Widget::button("popup-action", "Action"))
     let mut populated_overlay = Widget::panel("overlay-layer")
-        .with_style(overlay_style)
+    .with_style(overlay_style)
     populated_overlay.push(popup)
     if !ui.replace_subtree("overlay-layer", populated_overlay) {
         ret 70_u32
     }
     let popup_layout = ui.find_layout("popup").unwrap_or(layout_widget(
-        Widget::spacer(0.0_f32), bounds,))
+            Widget::spacer(0.0_f32), bounds,))
     if popup_layout.hit(70.0_f32, 60.0_f32) !=
     "popup-action" {
         ret 71_u32

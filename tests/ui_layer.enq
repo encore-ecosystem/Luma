@@ -1,0 +1,64 @@
+//! Independent focus, disabled controls and drag-out cancellation without a window.
+import luma::{UiLayer, Widget, Style, StyleSheet, Rect, Event, key_left, key_delete, key_tab, key_enter, vertical, event_pointer_down, event_pointer_up}
+fn pointer(kind: u32, x: f32, y: f32) -> Event {
+    ret Event {
+        kind, x, y, 0_f32, 0_f32, 0_u32, 1_u32, 0_u32, 0_f32, 0_f32, "", 0_u64
+    }
+}
+fn main() -> u32 {
+    let mut root = Widget::panel("layer").with_direction(vertical())
+    root.push(Widget::button("first", "First").with_style(Style::default().with_height(30).with_width(100)))
+    root.push(Widget::button("disabled", "Disabled").with_disabled(true).with_style(Style::default().with_height(30).with_width(100)))
+    root.push(Widget::button("last", "Last").with_style(Style::default().with_height(30).with_width(100)))
+    let mut a = UiLayer::new(root, StyleSheet::default(), Rect::new(0, 0, 100, 90))
+    let mut b = UiLayer::new(root, StyleSheet::default(), Rect::new(120, 0, 100, 90))
+    a.set_modal(true)
+    a.input(Event::key_down(key_tab(), 0))
+    if a.focused() != "first" || b.focused() != "" {
+        ret 1
+    }
+    a.input(Event::key_down(key_tab(), 0))
+    if a.focused() != "last" {
+        ret 2
+    }
+    let activated = a.input(Event::key_down(key_enter(), 0))
+    if activated.target != "last" || activated.action != "click" {
+        ret 3
+    }
+    a.input(pointer(event_pointer_down(), 10, 10))
+    let outside = a.input(pointer(event_pointer_up(), 115, 10))
+    if outside.action != "" || !outside.consumed {
+        ret 4
+    }
+    a.input(pointer(event_pointer_down(), 10, 10))
+    let click = a.input(pointer(event_pointer_up(), 10, 10))
+    if click.target != "first" || click.action != "click" {
+        ret 5
+    }
+    a.input(pointer(event_pointer_down(), 10, 40))
+    let disabled = a.input(pointer(event_pointer_up(), 10, 40))
+    if disabled.action != "" {
+        ret 6
+    }
+    let input_root = Widget::input("name", "abc").with_style(Style::default().with_width(200).with_height(30))
+    let mut text_layer = UiLayer::new(input_root, StyleSheet::default(), Rect::new(0, 0, 200, 30))
+    text_layer.focus("name")
+    text_layer.input(Event::key_down(key_left(), 0))
+    let inserted = text_layer.input(Event::text_input("X"))
+    if inserted.text != "abXc" {
+        ret 7
+    }
+    let deleted = text_layer.input(Event::key_down(key_delete(), 0))
+    if deleted.text != "abX" {
+        ret 8
+    }
+    text_layer.input(Event::key_down(97, 64))
+    if text_layer.input(Event::text_input("Y")).text != "Y" {
+        ret 9
+    }
+    text_layer.clear_state()
+    if text_layer.focused() != "" {
+        ret 10
+    }
+    ret 0
+}

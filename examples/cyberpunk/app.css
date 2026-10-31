@@ -1,0 +1,81 @@
+:root { --luma-focus: #55ded7; }
+* { font-family: sans-serif; }
+div { padding: 0; gap: 0; border-width: 0; border-radius: 0; background: transparent; flex-grow: 0; }
+label { color: #657478; font-size: 11px; flex-grow: 0; flex-shrink: 0; }
+#root { background: #070a0d; color: #e9edef; padding: 48px; gap: 24px; }
+#header { flex-direction: row; justify-content: space-between; height: 24px; flex-shrink: 0; }
+#eyebrow { color: #ecebf0; font-weight: 700; }
+#connection { color: #4d7577; width: 280px; text-align: right; }
+#scene { flex-direction: row; flex-grow: 1; align-items: center; gap: 24px; }
+#menu { width: 420px; height: 560px; flex-grow: 0; flex-shrink: 0; gap: 0; }
+#chapter { color: #55ded7; height: 28px; }
+.logo-word { position: relative; height: 88px; flex-shrink: 0; }
+.title, .logo-echo { position: absolute; left: 0; top: 0; color: #ecebf0; font-size: 72px; font-weight: 800; height: 88px; width: 420px; }
+.logo-echo { left: 3px; top: 2px; color: #ff3c87; }
+#logo-cut { height: 3px; width: 86px; background: #ff3c87; }
+#tagline { color: #839092; height: 36px; padding-top: 12px; }
+#actions { gap: 8px; padding-top: 28px; height: 260px; flex-shrink: 0; }
+.menu-item {
+  position: relative;
+  height: 52px; width: 324px; flex-shrink: 0;
+  padding: 0; font-size: 17px; font-weight: 600; text-align: center;
+  color: #94a1a5; background: transparent;
+  border-width: 0; border-radius: 0; outline-width: 0;
+  transition: color 90ms ease-out;
+}
+.button-shape { position: absolute; left: 0; top: 0; width: 324px; height: 52px; padding: 0; color: #2c484e; pointer-events: none; }
+.menu-item[aria-selected="true"] { color: #f1eaf0; }
+.menu-item[aria-selected="true"] .button-shape { color: #f1eaf0; }
+.menu-item:hover { color: #f1eaf0; }
+.menu-item:hover .button-shape { color: #55ded7; }
+.menu-item:active { color: #ffffff; }
+.menu-item:active .button-shape { color: #ffffff; }
+.menu-item:focus-visible { outline-width: 0; color: #55ded7; }
+.menu-item:focus-visible .button-shape { color: #55ded7; }
+#controls { padding-top: 20px; height: 36px; color: #52666b; }
+#skyline { position: relative; height: 560px; flex-grow: 1; overflow: hidden; pointer-events: none; }
+#halo { position: absolute; right: 20px; top: 38px; width: 250px; height: 250px; border-radius: 125px; background: #0e1c23; border: 1px solid #1c363e; }
+#moon { position: absolute; right: 45px; top: 63px; width: 200px; height: 200px; border-radius: 100px; background: #203e44; }
+.distant-tower { position: absolute; bottom: 148px; width: 40px; background: #101c24; }
+#distant-0 { left: 0; height: 90px; }
+#distant-1 { left: 40px; height: 165px; }
+#distant-2 { left: 78px; height: 124px; }
+#distant-3 { left: 116px; height: 220px; }
+#distant-4 { left: 154px; height: 278px; }
+#distant-5 { left: 192px; height: 172px; }
+#distant-6 { left: 230px; height: 238px; }
+#distant-7 { left: 268px; height: 155px; }
+#distant-8 { left: 306px; height: 304px; }
+#distant-9 { left: 344px; height: 224px; }
+#distant-10 { left: 382px; height: 183px; }
+#distant-11 { left: 420px; height: 258px; }
+.tower { position: absolute; bottom: 105px; width: 54px; background: linear-gradient(to bottom, #24313a, #0a1017); }
+.antenna { position: absolute; top: -24px; left: 24px; width: 2px; height: 24px; background: #42686e; }
+.tower-light { position: absolute; top: 12px; right: 5px; width: 2px; height: 90px; background: #55b9ba; }
+.windows { position: absolute; left: 8px; right: 12px; height: 3px; flex-direction: row; gap: 8px; }
+.floor-0 { top: 28px; } .floor-1 { top: 52px; } .floor-2 { top: 76px; } .floor-3 { top: 100px; } .floor-4 { top: 124px; }
+.window-lit { width: 9px; height: 3px; background: #688788; }
+.window-dim { width: 6px; height: 3px; background: #30434e; }
+#tower-0 { left: 0; height: 145px; }
+#tower-1 { left: 48px; height: 225px; }
+#tower-2 { left: 102px; height: 175px; }
+#tower-3 { left: 148px; height: 340px; width: 68px; }
+#tower-4 { left: 212px; height: 205px; }
+#tower-5 { left: 260px; height: 265px; }
+#tower-6 { left: 312px; height: 160px; }
+#tower-7 { left: 360px; height: 320px; width: 72px; }
+#tower-8 { left: 420px; height: 212px; }
+#tower-3 .tower-light { background: #55b9ba; height: 150px; }
+#tower-3 .window-lit { background: #6a8588; }
+#tower-7 .tower-light { background: #ff3c87; height: 130px; box-shadow: 0px 0px 8px 2px rgba(255,60,135,0.25); }
+#tower-7 .window-lit { background: #aa4269; }
+#tower-5 .floor-2 .window-lit { background: #ff3c87; }
+#neon-sign { position: absolute; left: 159px; bottom: 170px; height: 42px; width: 58px; font-size: 18px; color: #ff5b9a; background: #20101d; padding: 8px; border: 1px solid #79304f; box-shadow: 0px 0px 12px 2px rgba(255,60,135,0.18); }
+#mist { position: absolute; bottom: 102px; left: 0; right: 0; height: 80px; background: linear-gradient(to bottom, rgba(14,35,39,0), rgba(14,35,39,0.7)); }
+#horizon { position: absolute; bottom: 103px; left: 0; right: 0; height: 2px; background: #438f94; }
+#street { position: absolute; bottom: 30px; left: 0; right: 0; height: 72px; background: linear-gradient(to bottom, #101d24, #070a0d); }
+#street-light { position: absolute; bottom: 52px; left: 180px; width: 120px; height: 2px; background: #ae305d; box-shadow: 0px 0px 8px 1px rgba(255,60,135,0.16); }
+#city-label { position: absolute; bottom: 8px; right: 0; color: #487c80; height: 20px; }
+#footer { flex-direction: row; justify-content: space-between; height: 24px; flex-shrink: 0; }
+#credit { width: 250px; }
+#version { width: 180px; text-align: right; }

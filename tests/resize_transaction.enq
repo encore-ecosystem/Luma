@@ -1,0 +1,49 @@
+//! Resize stages current geometry once, without presenting or restarting motion.
+import luma::{ReactiveUi, Rect, RendererKind, StyleSheet, Widget, Window, layout_widget}
+
+fn main() -> u32 {
+    let window = Window::create_with_renderer("Resize transaction", 240, 120,
+        RendererKind::Software,)
+    if !window.available() {
+        ret 1
+    }
+    let sheet = StyleSheet::parse("button { background: #000000; transition: background-color 100ms linear; } button:hover { background: #c80000; }")
+    let mut root = Widget::panel("root")
+    root.push(Widget::button("button", "Before"))
+    let mut ui = ReactiveUi::new(layout_widget(sheet.apply(root, "", "", ""),
+            Rect::new(0.0, 0.0, 100.0, 60.0),))
+    let frames = window.presented_frames()
+    let generation = ui.segment_generation("root")
+    ui = window.stage_resized_reactive(ui, root, sheet, "", "", "", 1000)
+    if ui.segment_generation("root") != generation + 1 ||
+    ui.layout().bounds().width() != window.width() as f32 ||
+    ui.layout().bounds().height() != window.height() as f32 ||
+    window.presented_frames() != frames || !ui.needs_full_repaint() {
+        window.destroy()
+        ret 2
+    }
+    ui.set_scroll_offset("root", 0.0, 7.0)
+    ui = window.stage_animated_reactive(ui, sheet.apply(root, "button", "", ""), 1000)
+    let _advanced = ui.advance_transitions(1050)
+    let mut changed = Widget::panel("root")
+    changed.push(Widget::button("button", "After"))
+    changed.push(Widget::label("Added on resize").with_id("added"))
+    ui = window.stage_resized_reactive(ui, changed, sheet, "button", "", "", 1050)
+    let middle = ui.find_widget("button").unwrap_or(Widget::spacer(0.0))
+    if middle.text() != "After" || middle.style().background().red() != 100 ||
+    !ui.find_widget("added").is_some() ||
+    ui.layout().widget().style().layout().scroll().y() != 7.0 ||
+    window.presented_frames() != frames {
+        window.destroy()
+        ret 3
+    }
+    let _finished = ui.advance_transitions(1100)
+    let valid = !ui.has_active_transitions() &&
+    ui.find_widget("button").unwrap_or(Widget::spacer(0.0)).style().background().red() == 200
+    window.destroy()
+    ret if valid {
+        0
+    } else {
+        4
+    }
+}

@@ -242,31 +242,9 @@ impl for FontManager {
 }
 
 fn normalized_weight(weight: u32) -> u32 {
-    if weight < 150_u32 {
-        ret 100_u32
-    }
-    if weight < 250_u32 {
-        ret 200_u32
-    }
-    if weight < 350_u32 {
-        ret 300_u32
-    }
-    if weight < 450_u32 {
-        ret 400_u32
-    }
-    if weight < 550_u32 {
-        ret 500_u32
-    }
-    if weight < 650_u32 {
-        ret 600_u32
-    }
-    if weight < 750_u32 {
-        ret 700_u32
-    }
-    if weight < 850_u32 {
-        ret 800_u32
-    }
-    ret 900_u32
+    if weight < 1_u32 { ret 1_u32 }
+    if weight > 1000_u32 { ret 1000_u32 }
+    ret weight
 }
 
 fn is_font_file(name: str) -> bool {

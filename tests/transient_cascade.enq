@@ -1,0 +1,39 @@
+//! Transient frames cannot replace a mounted reactive tree's CSS authority.
+import luma::{RendererKind, StyleSheet, UiBindings, UiContext, Widget, Window}
+
+fn main() -> u32 {
+    let mut context = UiContext::new()
+    let mut bindings = UiBindings::new(context)
+    let mut root = Widget::panel("editor")
+    root.push(Widget::button("file", "File"))
+    root.push(Widget::label("Stable").with_id("stable"))
+    let mounted = bindings.mount(root)
+    let _mounted = bindings.tree().take_changes()
+    let sheet = StyleSheet::parse("button { transition: none; } button:hover { background: #ff0000; } button:active { background: #00ff00; }")
+    let window = Window::create_with_renderer("Transient cascade", 320, 240, RendererKind::Software)
+    .with_stylesheet(sheet).with_bindings(bindings, mounted)
+    if !window.available() {
+        ret 1
+    }
+    let mut ui = window.reactive(root)
+    let generation = ui.segment_generation("stable")
+    // Exactly Graphene's order: prepare the editor, then draw a loading tree
+    // while GPU resources are created, then handle the first real UI input.
+    let mut loading = Widget::panel("startup")
+    loading.push(Widget::label("Loading"))
+    let _temporary_layout = window.layout(loading)
+    let _temporary_frame = window.draw(loading)
+    ui.clear_paint()
+    ui = window.stage_binding_frame(ui, "file", "", "", 100)
+    if ui.find_widget("file").unwrap_or(root).style().background().red() != 255 ||
+    ui.segment_generation("stable") != generation || ui.needs_full_repaint() {
+        window.destroy() ret 2
+    }
+    let _another = window.layout(Widget::panel("preview"))
+    ui = window.stage_binding_frame(ui, "file", "file", "", 101)
+    if ui.find_widget("file").unwrap_or(root).style().background().green() != 255 {
+        window.destroy() ret 3
+    }
+    window.destroy()
+    ret 0
+}

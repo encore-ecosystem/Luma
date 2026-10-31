@@ -1,0 +1,3 @@
+//! Generic multitrack timeline. The application owns sequence/asset semantics.
+pub import mod::editor::{TimelineEditor, TimelineEdit}
+pub import mod::model::{TimelineDocument, TimelineTrack, TimelineItem, TimelinePlacement, TimelineView, timeline_snap}

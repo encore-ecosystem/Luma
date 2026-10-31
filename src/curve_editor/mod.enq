@@ -1,0 +1,337 @@
+//! Interactive two-dimensional curve view. Applications own interpolation and constraints.
+import core::vec::Vec
+import refrain::application::{Event, event_pointer_down, event_pointer_move, event_pointer_up, event_scroll, event_key_down, event_focus_lost, key_escape, key_delete, key_left, key_right, key_up, key_down}
+import refrain::display::{DisplayList, DisplayPoint}
+import refrain::geometry::{Point, Rect}
+import refrain::style::Style
+
+/// Axis captions and formatting are supplied by the hosting application.
+/// The editor's vertical coordinate is normalized; scale controls its display.
+pub struct CurveAxes {
+    horizontal: str
+    vertical: str
+    horizontal_unit: str
+    vertical_unit: str
+    vertical_scale: f32
+}
+pub struct CurveMove {
+    index: usize
+    point: Point
+}
+pub enum CurveEdit {
+    Ignored
+    View
+    Begin(usize)
+    Move(CurveMove)
+    Insert(Point)
+    Remove(usize)
+    Commit
+    Cancel
+}
+/// Selection and viewport state only; point storage belongs to the application.
+pub struct CurveEditor {
+    selected: usize
+    hovered: usize
+    focused: bool
+    dragging: bool
+    panning: bool
+    minimum: f32
+    maximum: f32
+    pointer: Point
+    last_click: Point
+    last_click_ns: u64
+}
+fn clamp(value: f32, low: f32, high: f32) -> f32 {
+    ret if value < low {
+        low
+    } elif value > high {
+        high
+    } else {
+        value
+    }
+}
+fn abs(value: f32) -> f32 {
+    ret if value < 0 {
+        - value
+    } else {
+        value
+    }
+}
+fn short(value: f32) -> str {
+    if value >= 1000000 {
+        ret value.fmt()
+    }
+    if value >= 10 {
+        ret((value + 0.5_f32) as usize).fmt()
+    }
+    let tenths =(value * 10 + 0.5_f32) as usize
+    ret(tenths / 10).fmt() + if tenths % 10 == 0 {
+        ""
+    } else {
+        "." +(tenths % 10).fmt()
+    }
+}
+
+impl for CurveEditor {
+    pub fn new() -> Self {
+        ret Self {
+            0_usize, 18446744073709551615_usize, false, false, false, 0, 330, Point::new(0, 0), Point::new(0, 0), 0_u64
+        }
+    }
+    pub fn selected(self: Self) -> usize {
+        ret self.selected
+    }
+    pub fn select(self: mut Self, index: usize) ->() {
+        self.selected = index
+    }
+    pub fn focused(self: Self) -> bool {
+        ret self.focused
+    }
+    pub fn focus(self: mut Self, value: bool) ->() {
+        self.focused = value
+    }
+    pub fn active(self: Self) -> bool {
+        ret self.dragging || self.panning
+    }
+    pub fn reset_gesture(self: mut Self) ->() {
+        self.dragging = false self.panning = false
+    }
+    pub fn plot(self: Self, bounds: Rect) -> Rect {
+        ret Rect::new(bounds.x() + 48, bounds.y() + 20, bounds.width() - 66, bounds.height() - 62)
+    }
+    pub fn fit(self: mut Self, maximum: f32) ->() {
+        self.minimum = 0 self.maximum = if maximum > 0 && maximum < 300000000000000000000000000000000000000.0_f32 {
+            maximum * 1.1_f32
+        } elif maximum > 0 {
+            maximum
+        } else {
+            1.0_f32
+        }
+    }
+    pub fn left(self: Self) -> f32 {
+        ret self.minimum
+    }
+    pub fn right(self: Self) -> f32 {
+        ret self.maximum
+    }
+    pub fn project(self: Self, point: Point, bounds: Rect) -> Point {
+        let plot = self.plot(bounds)
+        ret Point::new(plot.x() +(point.x() - self.minimum) /(self.maximum - self.minimum) * plot.width(), plot.bottom() - point.y() * plot.height())
+    }
+    pub fn world(self: Self, point: Point, bounds: Rect) -> Point {
+        let plot = self.plot(bounds)
+        ret Point::new(self.minimum +(point.x() - plot.x()) / plot.width() *(self.maximum - self.minimum),(plot.bottom() - point.y()) / plot.height())
+    }
+    fn hit(self: Self, points: Vec[Point], at: Point, bounds: Rect) -> usize {
+        let mut best = 18446744073709551615_usize let mut radius = 100.0_f32
+        for index in 0_usize..points.len() {
+            let p = self.project(points.get_unchecked_borrowed(index), bounds)
+            let dx = p.x() - at.x() let dy = p.y() - at.y() let d = dx * dx + dy * dy
+            if self.plot(bounds).contains(p) && d < radius {
+                radius = d best = index
+            }
+        }
+        ret best
+    }
+    pub fn input(self: mut Self, event: Event, points: Vec[Point], bounds: Rect) -> CurveEdit {
+        let at = Point::new(event.x(), event.y()) let inside = bounds.contains(at)
+        if event.kind() == event_focus_lost() {
+            let active = self.dragging self.reset_gesture() self.focused = false self.last_click_ns = 0
+            ret if active {
+                CurveEdit::Cancel
+            } else {
+                CurveEdit::View
+            }
+        }
+        if event.kind() == event_key_down() && self.focused {
+            if event.key() == key_escape() && self.active() {
+                self.reset_gesture() ret CurveEdit::Cancel
+            }
+            if event.key() == key_delete() && self.selected < points.len() {
+                ret CurveEdit::Remove(self.selected)
+            }
+            if self.selected < points.len() &&(event.key() == key_left() || event.key() == key_right() || event.key() == key_up() || event.key() == key_down()) {
+                let p = points.get_unchecked_borrowed(self.selected)
+                let fine = if event.shift() {
+                    0.1_f32
+                } else {
+                    1.0_f32
+                }
+                let dx =(self.maximum - self.minimum) / 100 * fine
+                ret CurveEdit::Move(CurveMove {
+                        self.selected, Point::new(p.x() + if event.key() == key_left() {
+                                - dx
+                            } elif event.key() == key_right() {
+                                dx
+                            } else {
+                                0.0_f32
+                            }
+                            , p.y() + if event.key() == key_down() {
+                                - 0.01_f32 * fine
+                            } elif event.key() == key_up() {
+                                0.01_f32 * fine
+                            } else {
+                                0.0_f32
+                            }
+                            ,
+                        )
+                    }
+                    ,
+                )
+            }
+        }
+        if event.kind() == event_scroll() && inside {
+            let anchor = self.world(at, bounds).x() let width = self.maximum - self.minimum
+            let next = clamp(width * if event.wheel_y() > 0 {
+                    0.85_f32
+                } else {
+                    1.1764706_f32
+                }
+                , 0.001_f32, 300000000000000000000000000000000000000.0_f32,)
+            let fraction =(anchor - self.minimum) / width
+            self.minimum = clamp(anchor - fraction * next, 0.0_f32, 300000000000000000000000000000000000000.0_f32 - next) self.maximum = self.minimum + next ret CurveEdit::View
+        }
+        if event.kind() == event_pointer_down() {
+            if !inside {
+                self.focused = false self.last_click_ns = 0 ret CurveEdit::Ignored
+            }
+            self.focused = true self.pointer = at
+            if (event.buttons() & 2_u32) != 0 {
+                self.panning = true ret CurveEdit::View
+            }
+            if !event.primary_down() {
+                ret CurveEdit::View
+            }
+            let hit = self.hit(points, at, bounds)
+            if hit < points.len() {
+                self.selected = hit self.dragging = true self.last_click_ns = 0 ret CurveEdit::Begin(hit)
+            }
+            let stamp = event.timestamp_ns()
+            let double = stamp > self.last_click_ns && self.last_click_ns > 0 && stamp - self.last_click_ns < 400000000_u64 && abs(at.x() - self.last_click.x()) < 6 && abs(at.y() - self.last_click.y()) < 6
+            self.last_click = at self.last_click_ns = stamp
+            if double && self.plot(bounds).contains(at) {
+                self.last_click_ns = 0 ret CurveEdit::Insert(self.world(at, bounds))
+            }
+            ret CurveEdit::View
+        }
+        if event.kind() == event_pointer_move() {
+            if self.panning {
+                let dx =(self.pointer.x() - at.x()) / self.plot(bounds).width() *(self.maximum - self.minimum)
+                let low = clamp(self.minimum + dx, 0.0_f32, 300000000000000000000000000000000000000.0_f32 -(self.maximum - self.minimum))
+                self.maximum = low +(self.maximum - self.minimum) self.minimum = low self.pointer = at ret CurveEdit::View
+            }
+            self.pointer = at
+            if self.dragging {
+                ret CurveEdit::Move(CurveMove { self.selected, self.world(at, bounds) })
+            }
+            let hit = if inside {
+                self.hit(points, at, bounds)
+            } else {
+                18446744073709551615_usize
+            }
+            let changed = hit != self.hovered self.hovered = hit
+            if changed {
+                ret CurveEdit::View
+            }
+        }
+        if event.kind() == event_pointer_up() && self.active() {
+            let dragged = self.dragging self.reset_gesture()
+            ret if dragged {
+                CurveEdit::Commit
+            } else {
+                CurveEdit::View
+            }
+        }
+        ret CurveEdit::Ignored
+    }
+    /// Draw in local logical coordinates; the hosting canvas provides clipping.
+    pub fn display(self: Self, points: Vec[Point], samples: Vec[Point], bounds: Rect, surface: Style, accent: Style, text: Style, axes: CurveAxes) -> DisplayList {
+        let mut paint = DisplayList::new() let plot = self.plot(bounds)
+        if plot.width() <= 0 || plot.height() <= 0 {
+            ret paint
+        }
+        paint.round_rect(bounds, 5, surface.background(), true)
+        let muted = text.with_foreground(surface.foreground()).with_font_size(10)
+        let major = surface.border_color()
+        let span = self.maximum - self.minimum
+        let mut decade = 1.0_f32
+        while span / decade > 10 {
+            decade *= 10
+        }
+        while span / decade < 1 && decade > 0.000000001_f32 {
+            decade /= 10
+        }
+        let step = if span / decade > 5 {
+            decade
+        } elif span / decade > 2 {
+            decade / 2
+        } else {
+            decade / 5
+        }
+        let tick =((self.minimum / step) as u64) as f32
+        let first = tick * step
+        for index in 0_usize..16_usize {
+            let offset = index as f32 let x = first + offset * step
+            if x >= self.minimum && x <= self.maximum {
+                let p = self.project(Point::new(x, 0), bounds)
+                paint.line(p.x(), plot.y(), p.x(), plot.bottom(), 1, major)
+                paint.styled_text(p.x() - 12, plot.bottom() + 8, short(x), muted)
+            }
+        }
+        for index in 0_usize..5_usize {
+            let offset = index as f32 let y = offset * 0.25_f32 let p = self.project(Point::new(self.minimum, y), bounds)
+            paint.line(plot.x(), p.y(), plot.right(), p.y(), 1, major)
+            paint.styled_text(bounds.x() + 7, p.y() - 6, short(y * axes.vertical_scale) + axes.vertical_unit, muted)
+        }
+        paint.styled_text(plot.x(), bounds.y() + 3, axes.vertical, muted)
+        paint.styled_text(plot.right() - 100, bounds.bottom() - 14, axes.horizontal, muted)
+        let mut line = Vec[DisplayPoint]::new()
+        for point in samples {
+            let p = self.project(point, bounds)
+            if p.x() >= plot.x() && p.x() <= plot.right() {
+                line.push(DisplayPoint::new(p.x(), clamp(p.y(), plot.y(), plot.bottom())))
+            }
+        }
+        if line.len() > 1 {
+            paint.path(line, 2, accent.foreground(), false)
+        }
+        for index in 0_usize..points.len() {
+            let p = self.project(points.get_unchecked_borrowed(index), bounds)
+            if plot.contains(p) {
+                let selected = index == self.selected let hot = selected || index == self.hovered
+                if hot {
+                    paint.round_rect(Rect::new(p.x() - 8, p.y() - 8, 16, 16), 8, surface.background(), true)
+                }
+                paint.round_rect(Rect::new(p.x() - 5, p.y() - 5, 10, 10), 5, if selected {
+                        text.foreground()
+                    } else {
+                        accent.foreground()
+                    }
+                    , true,)
+                paint.round_rect(Rect::new(p.x() - 2, p.y() - 2, 4, 4), 2, if selected {
+                        accent.foreground()
+                    } else {
+                        surface.background()
+                    }
+                    , true,)
+            }
+        }
+        if self.hovered < points.len() || self.dragging {
+            let index = if self.dragging {
+                self.selected
+            } else {
+                self.hovered
+            }
+            if index < points.len() {
+                let p = points.get_unchecked_borrowed(index) let screen = self.project(p, bounds)
+                let x = clamp(screen.x() - 60, plot.x(), plot.right() - 130) let y = clamp(screen.y() - 33, plot.y() + 3, plot.bottom() - 24)
+                paint.round_rect(Rect::new(x, y, 130, 24), 4, surface.background(), true)
+                paint.styled_text(x + 7, y + 6, short(p.x()) + axes.horizontal_unit + "  /  " + short(p.y() * axes.vertical_scale) + axes.vertical_unit, text.with_font_size(11))
+            }
+        }
+        if self.focused {
+            paint.round_rect(bounds, 5, accent.foreground(), false)
+        }
+        ret paint
+    }
+}

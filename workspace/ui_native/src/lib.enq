@@ -3,6 +3,7 @@ extern fn luma_window_create_with_renderer(title: str, width: u32, height: u32,
     renderer_kind: u32,) -> usize
 extern fn luma_window_destroy(handle: usize) -> bool
 extern fn luma_window_reveal(handle: usize) -> bool
+extern fn luma_window_prepare_geometry(handle: usize) -> u64
 extern fn luma_window_open(handle: usize) -> bool
 extern fn luma_window_width(handle: usize) -> u32
 extern fn luma_window_height(handle: usize) -> u32
@@ -16,6 +17,7 @@ extern fn luma_direct_compositor_bind(handle: usize, compositor: usize) -> bool
 extern fn luma_direct_resources_release(handle: usize) -> bool
 extern fn luma_window_poll(handle: usize) -> u32
 extern fn luma_window_wait(handle: usize, timeout_ms: u32) -> bool
+extern fn luma_windows_wait_any(timeout_ms: i32) -> bool
 extern fn luma_event_x(handle: usize) -> f32
 extern fn luma_event_y(handle: usize) -> f32
 extern fn luma_event_dx(handle: usize) -> f32
@@ -39,9 +41,13 @@ extern fn luma_stroke_rect(handle: usize, x: f32, y: f32, width: f32, height: f3
 extern fn luma_line(handle: usize, x0: f32, y0: f32, x1: f32, y1: f32, color: u32) -> bool
 extern fn luma_vector_line(handle: usize, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: u32)
 -> bool
+extern fn luma_vector_gradient_line(handle: usize, x0: f32, y0: f32, x1: f32, y1: f32,
+    width: f32, start_color: u32, end_color: u32,) -> bool
 extern fn luma_vector_path_begin(handle: usize, x: f32, y: f32) -> bool
 extern fn luma_vector_path_point(handle: usize, x: f32, y: f32) -> bool
 extern fn luma_vector_path_stroke(handle: usize, width: f32, color: u32, closed: bool) -> bool
+extern fn luma_vector_triangle(handle: usize, ax: f32, ay: f32, bx: f32, by: f32,
+    cx: f32, cy: f32, color: u32,) -> bool
 extern fn luma_circle(handle: usize, cx: f32, cy: f32, radius: f32, color: u32, filled: bool) -> bool
 extern fn luma_round_rect(handle: usize, x: f32, y: f32, width: f32, height: f32, radius: f32, color:
     u32, filled: bool,) -> bool
@@ -64,6 +70,10 @@ extern fn luma_text_index(handle: usize, value: str, max_width: f32) -> usize
 extern fn luma_frame_end(handle: usize) -> bool
 extern fn luma_direct_frame_acquire(handle: usize) -> usize
 extern fn luma_direct_frame_prepare(handle: usize) -> usize
+extern fn luma_frame_status(handle: usize) -> u32
+extern fn luma_vector_cache_begin(handle: usize, key: str, scale: f32,
+    stroke: f32, x: f32, y: f32, color: u32,) -> u32
+extern fn luma_vector_cache_end(handle: usize) -> bool
 extern fn luma_direct_frame_begin_composition(handle: usize, frame: usize) -> bool
 extern fn luma_direct_frame_finish(handle: usize, frame: usize) -> bool
 extern fn luma_direct_composition_split(handle: usize) -> bool
@@ -83,6 +93,9 @@ extern fn luma_vulkan_graphics_queue_family(handle: usize) -> u32
 extern fn luma_external_vulkan_image_bind(handle: usize, image: u64,
     width: u32, height: u32, layout: u32,) -> bool
 extern fn luma_external_vulkan_images_clear(handle: usize) -> bool
+extern fn luma_external_vulkan_image_release(handle: usize, image: u64) -> bool
+extern fn luma_external_image_region(handle: usize, x: u32, y: u32,
+    width: u32, height: u32,) -> bool
 extern fn luma_external_image_draw(handle: usize, x: f32, y: f32,
     width: f32, height: f32,) -> bool
 extern fn luma_backend_name() -> str
@@ -112,6 +125,13 @@ pub fn native_destroy(handle: usize) -> bool {
 pub fn native_reveal(handle: usize) -> bool {
     unsafe {
         ret luma_window_reveal(handle)
+    }
+}
+/// Synchronizes configure/DPI before any layout or retained GPU preparation.
+#attr(safe)
+pub fn native_prepare_geometry(handle: usize) -> u64 {
+    unsafe {
+        ret luma_window_prepare_geometry(handle)
     }
 }
 pub fn native_open(handle: usize) -> bool {
@@ -196,6 +216,19 @@ pub fn native_external_vulkan_image_bind(handle: usize, image: u64,
         ret luma_external_vulkan_image_bind(handle, image, width, height, layout)
     }
 }
+#attr(safe)
+pub fn native_external_vulkan_image_release(handle: usize, image: u64) -> bool {
+    ret unsafe {
+        luma_external_vulkan_image_release(handle, image)
+    }
+}
+#attr(safe)
+pub fn native_external_image_region(handle: usize, x: u32, y: u32,
+    width: u32, height: u32,) -> bool {
+    ret unsafe {
+        luma_external_image_region(handle, x, y, width, height)
+    }
+}
 pub fn native_external_vulkan_images_clear(handle: usize) -> bool {
     unsafe {
         ret luma_external_vulkan_images_clear(handle)
@@ -220,6 +253,12 @@ pub fn native_poll(handle: usize) -> u32 {
 pub fn native_wait(handle: usize, timeout_ms: u32) -> bool {
     unsafe {
         ret luma_window_wait(handle, timeout_ms)
+    }
+}
+#attr(safe)
+pub fn native_wait_any(timeout_ms: i32) -> bool {
+    unsafe {
+        ret luma_windows_wait_any(timeout_ms)
     }
 }
 pub fn native_event_x(handle: usize) -> f32 {
@@ -334,9 +373,31 @@ pub fn native_vector_line(handle: usize, x0: f32, y0: f32, x1: f32, y1: f32, wid
         ret luma_vector_line(handle, x0, y0, x1, y1, width, color)
     }
 }
+pub fn native_vector_gradient_line(handle: usize, x0: f32, y0: f32, x1: f32, y1: f32,
+    width: f32, start_color: u32, end_color: u32,) -> bool {
+    unsafe {
+        ret luma_vector_gradient_line(handle, x0, y0, x1, y1, width, start_color, end_color)
+    }
+}
 pub fn native_vector_path_begin(handle: usize, x: f32, y: f32) -> bool {
     unsafe {
         ret luma_vector_path_begin(handle, x, y)
+    }
+}
+pub fn native_vector_cache_begin(handle: usize, key: str, scale: f32,
+    stroke: f32, x: f32, y: f32, color: u32,) -> u32 {
+    unsafe {
+        ret luma_vector_cache_begin(handle, key, scale, stroke, x, y, color)
+    }
+}
+pub fn native_vector_cache_end(handle: usize) -> bool {
+    unsafe {
+        ret luma_vector_cache_end(handle)
+    }
+}
+pub fn native_frame_status(handle: usize) -> u32 {
+    unsafe {
+        ret luma_frame_status(handle)
     }
 }
 pub fn native_vector_path_point(handle: usize, x: f32, y: f32) -> bool {
@@ -347,6 +408,13 @@ pub fn native_vector_path_point(handle: usize, x: f32, y: f32) -> bool {
 pub fn native_vector_path_stroke(handle: usize, width: f32, color: u32, closed: bool) -> bool {
     unsafe {
         ret luma_vector_path_stroke(handle, width, color, closed)
+    }
+}
+#attr(safe)
+pub fn native_vector_triangle(handle: usize, ax: f32, ay: f32, bx: f32, by: f32,
+    cx: f32, cy: f32, color: u32,) -> bool {
+    unsafe {
+        ret luma_vector_triangle(handle, ax, ay, bx, by, cx, cy, color)
     }
 }
 pub fn native_circle(handle: usize, cx: f32, cy: f32, radius: f32, color: u32, filled: bool) -> bool
@@ -373,7 +441,9 @@ pub fn native_styled_text(handle: usize, x: f32, y: f32, value: str, runs: str) 
 }
 pub fn native_image_rgba(handle: usize, x: f32, y: f32, width: f32,
     height: f32, payload: str,) -> bool {
-    unsafe { ret luma_image_rgba(handle, x, y, width, height, payload) }
+    unsafe {
+        ret luma_image_rgba(handle, x, y, width, height, payload)
+    }
 }
 pub fn native_terminal(handle: usize, x: f32, y: f32, width: f32,
     height: f32, value: str, foreground: u32, background: u32,
@@ -528,5 +598,13 @@ pub fn native_backend_set_error(message: str) {
 pub fn native_path_is_directory(path: str) -> bool {
     unsafe {
         ret luma_path_is_directory(path)
+    }
+}
+
+extern fn luma_gradient_rect(handle: usize, x: f32, y: f32, width: f32, height: f32, start: u32, end: u32, vertical: bool) -> bool
+/// A two-stop rectangle is drawn once, including when endpoint alpha differs.
+pub fn native_gradient_rect(handle: usize, x: f32, y: f32, width: f32, height: f32, start: u32, end: u32, vertical: bool) -> bool {
+    unsafe {
+        ret luma_gradient_rect(handle, x, y, width, height, start, end, vertical)
     }
 }

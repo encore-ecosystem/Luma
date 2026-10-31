@@ -1,0 +1,159 @@
+//! Fixed-row virtual grids: bounded visible ranges independent of item content.
+
+/// Geometry policy for a virtualized grid. Item keys remain application-owned;
+/// changing a row's position must not change the identity of its items.
+pub struct VirtualGrid {
+    items: usize
+    columns: usize
+    stride: f32
+    overscan: usize
+}
+
+/// Half-open item interval and spacer geometry for one scroll viewport.
+pub struct VirtualGridWindow {
+    first_row: usize
+    end_row: usize
+    total_rows: usize
+    start: usize
+    end: usize
+    stride: f32
+}
+
+impl for VirtualGrid {
+    /// Largest column count whose cells respect the requested minimum width.
+    pub fn fitting_columns(width: f32, minimum: f32, gap: f32, maximum: usize) -> usize {
+        if !(width > 0.0) || !(minimum > 0.0) || maximum == 0 {
+            ret 1
+        }
+        let spacing = if gap > 0.0 {
+            gap
+        } else {
+            0.0_f32
+        }
+        let mut columns = 1_usize
+        while columns < maximum &&
+        ((columns + 1) as f32) * minimum +(columns as f32) * spacing <= width {
+            columns += 1
+        }
+        ret columns
+    }
+    pub fn new(items: usize, columns: usize, row_stride: f32, overscan_rows: usize) -> Self {
+        ret Self {
+            items, if columns == 0 {
+                1_usize
+            } else {
+                columns
+            }
+            ,
+            if row_stride > 0.0 && row_stride - row_stride == 0.0 {
+                row_stride
+            } else {
+                1.0_f32
+            }
+            , overscan_rows
+        }
+    }
+    pub fn window(self: Self, offset: f32, viewport_height: f32) -> VirtualGridWindow {
+        let rows = self.items / self.columns + if self.items % self.columns == 0 {
+            0_usize
+        } else {
+            1_usize
+        }
+        let total =(rows as f32) * self.stride
+        let height = if viewport_height > 0.0 && viewport_height < total {
+            viewport_height
+        } elif viewport_height >= total {
+            total
+        } else {
+            0.0_f32
+        }
+        let maximum = total - height
+        let scroll = if offset > 0.0 && offset < maximum {
+            offset
+        } elif offset >= maximum {
+            maximum
+        } else {
+            0.0_f32
+        }
+        let row =(scroll / self.stride) as usize
+        let first = if row > self.overscan {
+            row - self.overscan
+        } else {
+            0_usize
+        }
+        let edge =(scroll + height) / self.stride
+        let whole = edge as usize
+        let visible_end = whole + if edge > whole as f32 {
+            1_usize
+        } else {
+            0_usize
+        }
+        let end_row = if rows - visible_end < self.overscan {
+            rows
+        } else {
+            visible_end + self.overscan
+        }
+        let end = if end_row == rows {
+            self.items
+        } else {
+            end_row * self.columns
+        }
+        ret VirtualGridWindow {
+            first, end_row, rows, first * self.columns, end, self.stride
+        }
+    }
+}
+
+impl for VirtualGridWindow {
+    pub fn first_row(self: Self) -> usize {
+        ret self.first_row
+    }
+    pub fn rows(self: Self) -> usize {
+        ret self.end_row - self.first_row
+    }
+    pub fn start(self: Self) -> usize {
+        ret self.start
+    }
+    pub fn end(self: Self) -> usize {
+        ret self.end
+    }
+    pub fn len(self: Self) -> usize {
+        ret self.end - self.start
+    }
+    pub fn before(self: Self) -> f32 {
+        ret(self.first_row as f32) * self.stride
+    }
+    pub fn height(self: Self) -> f32 {
+        ret(self.rows() as f32) * self.stride
+    }
+    pub fn after(self: Self) -> f32 {
+        ret((self.total_rows - self.end_row) as f32) * self.stride
+    }
+    pub fn same_items(self: Self, other: VirtualGridWindow) -> bool {
+        ret self.start == other.start && self.end == other.end
+    }
+}
+
+#attr(test)
+fn virtual_grid_fitting_columns_respects_minimum() -> bool {
+    ret VirtualGrid::fitting_columns(966.0, 112.0, 10.0, 8) == 8 &&
+    VirtualGrid::fitting_columns(965.0, 112.0, 10.0, 8) == 7 &&
+    VirtualGrid::fitting_columns(234.0, 112.0, 10.0, 8) == 2 &&
+    VirtualGrid::fitting_columns(233.0, 112.0, 10.0, 8) == 1 &&
+    VirtualGrid::fitting_columns(3000.0, 112.0, 10.0, 8) == 8 &&
+    VirtualGrid::fitting_columns(0.0, 112.0, 10.0, 0) == 1
+}
+
+#attr(test)
+fn virtual_grid_bounds_and_partial_rows() -> bool {
+    let grid = VirtualGrid::new(1703, 8, 122.0, 2)
+    let first = grid.window(0.0, 484.0)
+    let middle = grid.window(1220.0, 484.0)
+    let last = grid.window(1000000.0, 484.0)
+    ret first.start() == 0 && first.len() == 48 &&
+    middle.start() == 64 && middle.len() == 64 &&
+    last.end() == 1703 && last.after() == 0.0 &&
+    first.before() + first.height() + first.after() == 213.0 * 122.0 &&
+    grid.window( - 10.0, 484.0).same_items(first) &&
+    VirtualGrid::new(0, 0, 0.0, 2).window(100.0, 400.0).len() == 0
+}

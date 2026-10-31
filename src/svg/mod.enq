@@ -46,12 +46,13 @@ pub struct SvgDocument {
     height: f32
     lines: Vec[SvgLine]
     valid: bool
+    source: str
 }
 
 impl for SvgDocument {
     pub fn empty() -> SvgDocument {
         ret SvgDocument {
-            0.0_f32, 0.0_f32, 24.0_f32, 24.0_f32, Vec[SvgLine]::new(), false
+            0.0_f32, 0.0_f32, 24.0_f32, 24.0_f32, Vec[SvgLine]::new(), false, ""
         }
     }
     pub fn parse(source: str) -> SvgDocument {
@@ -75,6 +76,10 @@ impl for SvgDocument {
     pub fn valid(self: Self) -> bool {
         ret self.valid
     }
+    /// Immutable source identity for renderer-owned geometry caches.
+    pub fn source(self: Self) -> str {
+        ret self.source
+    }
     /// Structural equality used by retained reconciliation. SVG documents are
     /// parsed once, so comparing their compact line geometry avoids stale
     /// icons without reparsing source markup during a frame.
@@ -83,6 +88,14 @@ impl for SvgDocument {
         self.width != other.width ||
         self.height != other.height || self.lines.len() != other.lines.len() {
             ret false
+        }
+        // Retained widgets share the parsed geometry. Comparing the same
+        // storage is O(1); independently parsed documents still use exact
+        // structural equality below. No pointer is dereferenced or retained.
+        let left_storage = self.lines.as_ptr() as usize
+        let right_storage = other.lines.as_ptr() as usize
+        if left_storage == right_storage {
+            ret true
         }
         let mut index = 0_usize
         while index < self.lines.len() {
@@ -112,6 +125,16 @@ impl for SvgDocument {
         }
         ret true
     }
+}
+
+#attr(test)
+fn svg_equivalence_shared_and_independent_geometry() -> bool {
+    let source = "<svg width=\"24\" height=\"24\"><path d=\"M 1 1 L 20 20\"/></svg>"
+    let original = SvgDocument::parse(source)
+    let independent = SvgDocument::parse(source)
+    let changed = SvgDocument::parse("<svg width=\"24\" height=\"24\"><path d=\"M 1 1 L 21 20\"/></svg>")
+    ret original.valid() && original.equivalent(original) &&
+    original.equivalent(independent) && !original.equivalent(changed)
 }
 
 struct SvgNumber {
@@ -196,7 +219,7 @@ fn parse_svg(source: str) -> SvgDocument {
         } else {
             24.0_f32
         }
-        , lines, true
+        , lines, true, source
     }
 }
 

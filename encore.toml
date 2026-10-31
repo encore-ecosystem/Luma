@@ -1,26 +1,28 @@
 [project]
 name = "luma"
-version = "0.2.1"
+version = "0.0.1"
 description = "Cross-platform native UI toolkit"
 repository = "https://github.com/encore-ecosystem/Luma"
-encore = ">=0.2.1, <0.3.0"
+encore = ">=0.1.6"
 readme = "README.md"
 licence = "MIT"
 build = "build.enq"
 dependencies = [
-    "index@std@^1.0.1",
-    "index@color@^0.1.0",
-    "index@geometry@^0.1.0",
+    "index@std@>=0.0.8",
+    "workspace@color",
     "workspace@ui_native",
-    "index@vulkan_native@^0.1.0",
+    "index@vulkan@>=0.1.1",
+    "index@sdl@>=0.1.0",
+    "index@gpu@>=0.1.1",
 ]
-
-[publish]
-exclude = ["workspace/vulkan_native/**"]
 
 [features]
 default = ["fonts"]
 fonts = []
+
+[publish]
+include = ["encore.toml", "src/**", "workspace/ui_native/**", "workspace/color/**", "assets/**", "runtime.c", "build.enq", "LICENSE", "README.md"]
+exclude = ["target/**", "**/target/**", "artifacts/**", "docs/book/**", "**/.encore_cache/**"]
 
 [lint]
 default = "warn"

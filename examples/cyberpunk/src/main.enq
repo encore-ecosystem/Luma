@@ -1,0 +1,248 @@
+//! A static game-menu mockup: native widgets, CSS, and no background animation.
+
+import core::result::Result
+import luma::{AppEvent, Application, StyleSheet, SvgDocument, Widget, Window, run_application}
+import std::io::eprintln
+
+struct MainMenu {
+    selected: str
+    cut: SvgDocument
+    chevron: SvgDocument
+    capsule: SvgDocument
+    bracket: SvgDocument
+}
+
+impl for MainMenu {
+    fn new() -> Self {
+        ret Self {
+            "continue",
+            SvgDocument::parse("<svg viewBox=\"0 0 324 52\"><path d=\"M14 2H322V36L308 50H2V14Z\"/></svg>"),
+            SvgDocument::parse("<svg viewBox=\"0 0 324 52\"><path d=\"M2 2H296L322 26L296 50H2L14 26Z\"/></svg>"),
+            SvgDocument::parse("<svg viewBox=\"0 0 324 52\"><path d=\"M26 2H298A24 24 0 0 1 298 50H26A24 24 0 0 1 26 2Z\"/></svg>"),
+            SvgDocument::parse("<svg viewBox=\"0 0 324 52\"><path d=\"M28 2H2V50H28M270 2H296L322 26L296 50H270\"/></svg>")
+        }
+    }
+
+    fn item(self: Self, id: str, title: str) -> Widget {
+        let shape = match id {
+            "continue" => {
+                self.cut
+            }
+            "new-game" => {
+                self.chevron
+            }
+            "settings" => {
+                self.capsule
+            }
+            _ => {
+                self.bracket
+            }
+        }
+        let mut button = Widget::button(id, title).with_classes("menu-item")
+        .with_attribute("aria-selected", if self.selected == id {
+                "true"
+            } else {
+                "false"
+            }
+            ,
+        )
+        button.push(Widget::icon(f "shape-{id}", shape).with_classes("button-shape"))
+        ret button
+    }
+
+    fn with_selection(self: Self, id: str) -> Self {
+        ret Self {
+            id, self.cut, self.chevron, self.capsule, self.bracket
+        }
+    }
+
+    fn logo_word(id: str, text: str) -> Widget {
+        let mut word = Widget::panel(id).with_classes("logo-word")
+        word.push(Widget::heading(text).with_classes("logo-echo"))
+        word.push(Widget::heading(text).with_classes("title"))
+        ret word
+    }
+
+    fn city() -> Widget {
+        let mut skyline = Widget::panel("skyline")
+        skyline.push(Widget::panel("halo"))
+        skyline.push(Widget::panel("moon"))
+        for index in 0..12 {
+            skyline.push(Widget::panel(f "distant-{index}").with_classes("distant-tower"))
+        }
+        for index in 0..9 {
+            let mut tower = Widget::panel(f "tower-{index}").with_classes("tower")
+            tower.push(Widget::panel(f "antenna-{index}").with_classes("antenna"))
+            tower.push(Widget::panel(f "light-{index}").with_classes("tower-light"))
+            for floor in 0..5 {
+                let mut windows = Widget::panel(f "floor-{index}-{floor}")
+                .with_classes(f "windows floor-{floor}")
+                windows.push(Widget::panel(f "window-{index}-{floor}-a").with_classes("window-lit"))
+                windows.push(Widget::panel(f "window-{index}-{floor}-b").with_classes("window-dim"))
+                tower.push(windows)
+            }
+            skyline.push(tower)
+        }
+        skyline.push(Widget::label("07").with_id("neon-sign"))
+        skyline.push(Widget::panel("mist"))
+        skyline.push(Widget::panel("horizon"))
+        skyline.push(Widget::panel("street"))
+        skyline.push(Widget::panel("street-light"))
+        skyline.push(Widget::label("SECTOR 07").with_id("city-label"))
+        ret skyline
+    }
+}
+
+impl Application for MainMenu {
+    fn view(self: Self) -> Widget {
+        let mut root = Widget::panel("root")
+        let mut header = Widget::panel("header")
+        header.push(Widget::label("ND / 2077").with_id("eyebrow"))
+        header.push(Widget::label("CONNECTION ESTABLISHED   /   LOCAL").with_id("connection"))
+        root.push(header)
+        let mut scene = Widget::panel("scene")
+        let mut menu = Widget::panel("menu")
+        menu.push(Widget::label("AN AFTER-HOURS STORY").with_id("chapter"))
+        menu.push(Self::logo_word("logo-neon", "NEON"))
+        menu.push(Self::logo_word("logo-district", "DISTRICT"))
+        menu.push(Widget::panel("logo-cut"))
+        menu.push(Widget::label("THE CITY NEVER LOGS OFF").with_id("tagline"))
+        let mut actions = Widget::panel("actions")
+        actions.push(self.item("continue", "CONTINUE"))
+        actions.push(self.item("new-game", "NEW GAME"))
+        actions.push(self.item("settings", "SETTINGS"))
+        actions.push(self.item("exit", "EXIT"))
+        menu.push(actions)
+        menu.push(Widget::label("TAB  NAVIGATE     ENTER  SELECT").with_id("controls"))
+        scene.push(menu)
+        scene.push(Self::city())
+        root.push(scene)
+        let mut footer = Widget::panel("footer")
+        footer.push(Widget::label("LUMA / MAIN MENU CONCEPT").with_id("credit"))
+        footer.push(Widget::label("BUILD 01.00 / OFFLINE").with_id("version"))
+        root.push(footer)
+        ret root
+    }
+
+    fn update(self: Self, event: AppEvent) -> Self {
+        if event.is_action() {
+            match event.action() {
+                "continue" => {
+                    ret self.with_selection(event.action())
+                }
+                "new-game" => {
+                    ret self.with_selection(event.action())
+                }
+                "settings" => {
+                    ret self.with_selection(event.action())
+                }
+                "exit" => {
+                    ret self.with_selection(event.action())
+                }
+                _ => {
+                }
+            }
+        }
+        ret self
+    }
+    fn can_close(self: Self) -> bool {
+        ret true
+    }
+    fn background_interval_ms(self: Self) -> u32 {
+        ret 0
+    }
+    fn background_revision(self: Self) -> u64 {
+        ret 0
+    }
+}
+
+fn launch() -> Result[u32, str] {
+    let sheet = StyleSheet::from_file("app.css")?
+    let window = Window::create("NEON DISTRICT — Luma", 1200, 760).with_stylesheet(sheet)
+    if !window.available() {
+        ret Result::Err("Unable to create the rendering window")
+    }
+    window.set_minimum_size(860, 740)
+    let _final = run_application(window, MainMenu::new())
+    ret Result::Ok(0)
+}
+
+fn main() -> u32 {
+    match launch() {
+        Result::Ok(code) => {
+            ret code
+        }
+        Result::Err(error) => {
+            eprintln(error) ret 1
+        }
+    }
+    ret 1
+}
+
+#attr(test)
+fn menu_is_idle_by_default() -> bool {
+    let menu = MainMenu::new()
+    ret menu.can_close() && menu.background_interval_ms() == 0 && menu.background_revision() == 0
+}
+
+#attr(test)
+fn menu_has_four_actions_and_selected_continue() -> bool {
+    let root = MainMenu::new().view()
+    let actions = root.find("actions").unwrap_or(Widget::panel("missing"))
+    let selected = root.find("continue").unwrap_or(Widget::panel("missing"))
+    let settings = root.find("settings").unwrap_or(Widget::panel("missing"))
+    ret actions.children().len() == 4 &&
+    selected.text() == "CONTINUE" && settings.text() == "SETTINGS" &&
+    selected.children().len() == 1 && settings.children().len() == 1 &&
+    selected.attribute("aria-selected").unwrap_or("") == "true" &&
+    settings.attribute("aria-selected").unwrap_or("") == "false"
+}
+
+#attr(test)
+fn menu_styles_distinguish_hover_and_keyboard_focus() -> bool {
+    let sheet = match StyleSheet::from_file("app.css") {
+        Result::Ok(value) => {
+            value
+        }
+        Result::Err(_) => {
+            ret false
+        }
+    }
+    let root = MainMenu::new().view()
+    let normal = sheet.apply_with_focus_visibility(root, "", "", "", false)
+    let hover = sheet.apply_with_focus_visibility(root, "settings", "", "", false)
+    let pointer = sheet.apply_with_focus_visibility(root, "", "", "settings", false)
+    let keyboard = sheet.apply_with_focus_visibility(root, "", "", "settings", true)
+    let fallback = Widget::panel("missing")
+    ret normal.find("settings").unwrap_or(fallback).style().layout().height() == 52 &&
+    hover.find("settings").unwrap_or(fallback).style().layout().height() == 52 &&
+    normal.find("continue").unwrap_or(fallback).style().foreground().red() == 241 &&
+    normal.find("settings").unwrap_or(fallback).style().background().alpha() == 0 &&
+    hover.find("shape-settings").unwrap_or(fallback).style().foreground().red() == 85 &&
+    pointer.find("settings").unwrap_or(fallback).style().outline().width() == 0 &&
+    keyboard.find("settings").unwrap_or(fallback).focused() &&
+    keyboard.find("shape-settings").unwrap_or(fallback).style().foreground().red() == 85
+}
+
+#attr(test)
+fn menu_silhouettes_are_valid_and_selection_moves() -> bool {
+    let menu = MainMenu::new()
+    if !menu.cut.valid() || !menu.chevron.valid() || !menu.capsule.valid() || !menu.bracket.valid() {
+        ret false
+    }
+    if menu.cut.equivalent(menu.chevron) || menu.capsule.equivalent(menu.bracket) {
+        ret false
+    }
+    let root = menu.with_selection("settings").view()
+    let fallback = Widget::panel("missing")
+    ret root.find("continue").unwrap_or(fallback).attribute("aria-selected").unwrap_or("") == "false" &&
+    root.find("settings").unwrap_or(fallback).attribute("aria-selected").unwrap_or("") == "true"
+}
+
+#attr(test)
+fn city_has_layers_and_stable_window_details() -> bool {
+    let city = MainMenu::city()
+    let tower = city.find("tower-3").unwrap_or(Widget::panel("missing"))
+    ret city.children().len() == 29 && tower.children().len() == 7 &&
+    city.find("window-3-4-a").unwrap_or(Widget::panel("missing")).classes() == "window-lit"
+}

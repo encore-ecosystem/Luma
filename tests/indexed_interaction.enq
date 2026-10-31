@@ -1,0 +1,225 @@
+//! Sparse interaction CSS agrees with a fresh cascade and leaves unrelated nodes alone.
+import luma::{RendererKind, RetainedCascade, StyleSheet, SvgDocument, UiBindings, UiContext, Widget, Window}
+import std::io::eprintln
+
+fn same(left: Widget, right: Widget) -> bool {
+    if !left.style().equivalent(right.style()) || left.focused() != right.focused() ||
+    left.children().len() != right.children().len() {
+        ret false
+    }
+    let mut index = 0_usize
+    for child in left.children() {
+        match right.children().get(index) {
+            Some(other) => {
+                if !same(child, other) {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+        index += 1
+    }
+    ret true
+}
+
+fn check(sheet: StyleSheet, root: Widget, state: mut RetainedCascade&, hover: str,
+    active: str, focus: str, keyboard: bool,) -> bool {
+    if !sheet.stage_interaction(hover, active, focus, keyboard, state) {
+        ret false
+    }
+    let actual = sheet.apply_retained(root, hover, active, focus, keyboard, state)
+    let expected = sheet.apply_with_focus_visibility(root, hover, active, focus, keyboard)
+    ret same(actual, expected)
+}
+
+fn main() -> u32 {
+    let sheet = StyleSheet::parse(
+        ":root { --ink: #112233; } label { color: var(--ink); } " +
+        ".group:hover label { color: #ff0000; } .group:not(:hover) label { color: var(--ink); } " +
+        ".theme:hover { --ink: #00ff00; } input:focus-visible { outline-width: 2px; } " +
+        ".theme:focus-within { background: #aabbcc; } " +
+        "#geometry:hover { padding: 5px; }")
+    let mut root = Widget::panel("root")
+    let mut group = Widget::panel("group").with_classes("group")
+    group.push(Widget::label("First").with_id("first").with_classes("pair"))
+    group.push(Widget::label("Second").with_id("second").with_classes("pair"))
+    root.push(group)
+    let mut theme = Widget::panel("theme").with_classes("theme")
+    theme.push(Widget::input("field", ""))
+    theme.push(Widget::label("Inherited variable").with_id("themed"))
+    root.push(theme)
+    root.push(Widget::button("geometry", "Geometry"))
+    for index in 0..1024 {
+        root.push(Widget::label("Unrelated").with_id(f"unrelated-{index}"))
+    }
+    let mut state = RetainedCascade::new()
+    let _initial = sheet.apply_retained(root, "", "", "", true, state)
+    // The first hover must already use the index, not a warm-up full walk.
+    let accepted = sheet.stage_interaction("first", "", "", true, state)
+    if !accepted || state.interaction_evaluations() > 8 {
+        eprintln(f"Indexed first hover: accepted={accepted}, evaluated={state.interaction_evaluations()}")
+        ret 1
+    }
+    eprintln(f"Indexed first hover: {state.interaction_evaluations()} CSS evaluations with 1024 unrelated neighbors")
+    if !same(sheet.apply_retained(root, "first", "", "", true, state), sheet.apply(root, "first", "", "")) {
+        ret 2
+    }
+    if !check(sheet, root, state, "", "", "", true) ||
+    !check(sheet, root, state, "unrelated-0", "", "", true) || state.interaction_evaluations() != 0 {
+        eprintln("Irrelevant interaction reevaluated CSS") ret 19
+    }
+    for step in 0..12 {
+        let hover = match step % 4 {
+            0 => "second" 1 => "themed" 2 => "field" _ => ""
+        }
+        let focus = if step % 3 == 0 {
+            "field"
+        } else {
+            ""
+        }
+        if !check(sheet, root, state, hover, "", focus, step % 2 == 0) {
+            ret 3
+        }
+    }
+    if !check(sheet, root, state, "first", "first", "field", false) {
+        ret 4
+    }
+    if !check(sheet, root, state, "first", "", "field", true) {
+        ret 5
+    }
+    // A geometry change must roll back provisional cache entries completely.
+    if sheet.stage_interaction("geometry", "", "", true, state) {
+        ret 6
+    }
+    let actual = sheet.apply_retained(root, "geometry", "", "", true, state)
+    if !same(actual, sheet.apply(root, "geometry", "", "")) {
+        ret 7
+    }
+    let _restored = sheet.apply_retained(root, "", "", "", true, state)
+    let relational = sheet.merge(StyleSheet::parse("#root:has(input:focus) { color: #ff0000; }"))
+    let _relation = relational.apply_retained(theme, "", "", "", true, state)
+    if relational.stage_interaction("", "", "field", true, state) {
+        ret 8
+    }
+    let positions = sheet.merge(StyleSheet::parse(".pair:nth-of-type(2) { background: #123456; }"))
+    let _positions = positions.apply_retained(group, "", "", "", true, state)
+    if !check(positions, group, state, "first", "", "", true) ||
+    !check(positions, group, state, "second", "second", "", true) {
+        ret 18
+    }
+    // Index snapshots do not retain event closures or SVG/canvas payloads.
+    let snapshot = root.selector_tree()
+    if snapshot.has_event_handlers() || !snapshot.selector_equivalent(root) {
+        ret 9
+    }
+    let resource = Widget::icon("resource", SvgDocument::parse(
+            "<svg viewBox=\"0 0 24 24\"><path d=\"M2 12h20\"/></svg>"))
+    .with_on_click( | event | {
+            ret()
+        }
+    )
+    let resource_snapshot = resource.selector_tree()
+    if !resource.has_event_handlers() || resource.svg().lines().len() == 0 ||
+    resource_snapshot.has_event_handlers() || resource_snapshot.svg().lines().len() != 0 ||
+    !resource_snapshot.selector_equivalent(resource) {
+        ret 17
+    }
+    let mut duplicates = Widget::panel("duplicates")
+    duplicates.push(Widget::button("same", "First"))
+    duplicates.push(Widget::button("same", "Second"))
+    let duplicate_sheet = StyleSheet::parse("button:hover { background: #ff0000; }")
+    let _duplicates = duplicate_sheet.apply_retained(duplicates, "", "", "", true, state)
+    if duplicate_sheet.stage_interaction("same", "", "", true, state) {
+        ret 10
+    }
+    if !same(duplicate_sheet.apply_retained(duplicates, "same", "", "", true, state),
+        duplicate_sheet.apply(duplicates, "same", "", ""),) || state.style_patches().is_some() {
+        ret 11
+    }
+    // Authored focus and empty/nonempty text remain selector inputs even though
+    // the index deliberately discards the full text/resource/event payloads.
+    let mut authored = Widget::panel("authored")
+    authored.push(Widget::button("focused", "Focused").with_focus(true))
+    authored.push(Widget::label("").with_id("empty"))
+    let authored_sheet = StyleSheet::parse(
+        "button:focus-visible { outline-width: 2px; } label:empty:hover { background: #ff0000; }")
+    let _authored = authored_sheet.apply_retained(authored, "", "", "", true, state)
+    if !check(authored_sheet, authored, state, "empty", "", "", false) ||
+    !check(authored_sheet, authored, state, "", "", "focused", true) ||
+    !check(authored_sheet, authored, state, "", "", "", true) {
+        ret 12
+    }
+    // Cache keys retain structural inputs only for subjects that inspect them.
+    // Include ancestor positions and an :empty subject, across shared cache hits.
+    let structural = StyleSheet::parse("button:nth-child(2) { background: #123456; } .owner:first-child label { color: #ff0000; } .owner:last-child label { color: #00ff00; } label:empty { padding: 3px; }")
+    for step in 0..4 {
+        let mut container = Widget::panel("structural")
+        let mut owner = Widget::panel("owner").with_classes("owner")
+        owner.push(Widget::label(if step % 2 == 0 {
+                    ""
+                } else {
+                    "content"
+                }
+            ).with_id("structural-label"))
+        if step < 2 {
+            container.push(Widget::button("before", "Before"))
+        }
+        container.push(owner)
+        container.push(Widget::button("after", "After"))
+        if step % 2 == 0 {
+            container.push(Widget::label("Tail"))
+        }
+        let cached = structural.apply_retained(container, "", "", "", true, state)
+        let uncached = StyleSheet::parse("button:nth-child(2) { background: #123456; } .owner:first-child label { color: #ff0000; } .owner:last-child label { color: #00ff00; } label:empty { padding: 3px; }").apply(container, "", "", "")
+        if !same(cached, uncached) {
+            ret 20
+        }
+    }
+    // The real frame boundary must apply the sparse result, not just cache it.
+    let mut context = UiContext::new()
+    let mut label = context.signal[str]("Initial")
+    let mut bindings = UiBindings::new(context)
+    let mut view = Widget::panel("view")
+    view.push(Widget::button("trigger", "Trigger"))
+    view.push(Widget::label("Initial").with_id("stable"))
+    let mounted = bindings.mount(view)
+    let node = bindings.tree().find(mounted, "stable").unwrap_or(mounted)
+    let signal = label
+    let _bound = bindings.bind_text(node, | cx | cx.read[str](signal))
+    let frame_sheet = StyleSheet::parse(
+        "#view { flex-direction: column; } button:hover { background: #ff0000; } " +
+        "button:active { background: #00ff00; } button:focus-visible { outline-width: 2px; }")
+    let window = Window::create_with_renderer("Indexed interaction", 320, 240, RendererKind::Software)
+    .with_stylesheet(frame_sheet).with_bindings(bindings, mounted)
+    if !window.available() {
+        ret 13
+    }
+    let mut ui = window.reactive(view)
+    ui = ui.with_reduced_motion(true)
+    ui.clear_paint()
+    let generation = ui.segment_generation("stable")
+    let frames = window.presented_frames()
+    ui = window.stage_binding_frame(ui, "trigger", "", "", 100)
+    if ui.find_widget("trigger").unwrap_or(view).style().background().red() != 255 ||
+    ui.segment_generation("stable") != generation || ui.needs_full_repaint() ||
+    window.presented_frames() != frames {
+        window.destroy() ret 14
+    }
+    label.set("Changed")
+    ui = window.stage_binding_frame(ui, "trigger", "trigger", "", 101)
+    if ui.find_widget("stable").unwrap_or(view).text() != "Changed" ||
+    ui.find_widget("trigger").unwrap_or(view).style().background().green() != 255 {
+        window.destroy() ret 15
+    }
+    let _mouse = ui.set_keyboard_focus(false)
+    ui = window.stage_binding_frame(ui, "trigger", "", "trigger", 102)
+    let _keyboard = ui.set_keyboard_focus(true)
+    ui = window.stage_binding_frame(ui, "trigger", "", "trigger", 103)
+    if ui.find_widget("trigger").unwrap_or(view).style().outline().width() != 2 {
+        window.destroy() ret 16
+    }
+    window.destroy()
+    ret 0
+}

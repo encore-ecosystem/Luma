@@ -1,0 +1,101 @@
+import core::option::Option
+import luma::{ColorPicker, PickerColor, PickerHsv, Event, Rect, Widget, StyleSheet, layout_widget, event_pointer_down, event_pointer_up, picker_linear_to_srgb, picker_srgb_to_linear}
+fn close(a: f32, b: f32) -> bool {
+    let d = a - b ret d > - 0.00001 && d < 0.00001
+}
+fn click(x: f32, y: f32) -> Event {
+    ret Event {
+        event_pointer_down(), x, y, 0, 0, 1, 0, 0, 0, 0, "", 0
+    }
+}
+fn main() -> u32 {
+    let gray = PickerColor::from_hex("#808080").unwrap_or(PickerColor::linear(0, 0, 0))
+    if !close(gray.red(), 0.2158605) || gray.hex() != "#808080" {
+        ret 1
+    }
+    if PickerColor::from_hex("#fA3").unwrap_or(gray).hex() != "#FFAA33" {
+        ret 2
+    }
+    for bad in vec!["", "#", "#12345", "#GG0000", "#12345678", "#12µ34"] {
+        if PickerColor::from_hex(bad).is_some() {
+            ret 3
+        }
+    }
+    for i in 0..256 {
+        let s = i as f32 / 255 if !close(picker_linear_to_srgb(picker_srgb_to_linear(s)), s) {
+            ret 4
+        }
+    }
+    let hsv = PickerHsv::new(0.65, 0.7, 0.8)
+    let back = PickerHsv::from_linear(hsv.linear(), PickerHsv::new(0, 0, 0))
+    if !close(back.hue(), hsv.hue()) || !close(back.saturation(), hsv.saturation()) || !close(back.value(), hsv.value()) {
+        ret 5
+    }
+    let black = PickerHsv::from_linear(PickerColor::linear(0, 0, 0), hsv)
+    if black.hue() != hsv.hue() || black.saturation() != hsv.saturation() {
+        ret 6
+    }
+    let mut picker = ColorPicker::new("p", PickerColor::linear(2, - 0.2, 0.12345678))
+    let sheet = StyleSheet::default()
+    let layout = layout_widget(sheet.apply(picker.widget(900, 800), "", "", ""), Rect::new(0, 0, 900, 800))
+    let sv = layout.find_bounds("p-sv").unwrap_or(Rect::new(0, 0, 0, 0))
+    if sv.width() != 208 || sv.height() != 208 {
+        ret 7
+    }
+    // Merely focusing and leaving a rounded field must not quantize HDR/raw data.
+    let _focus = picker.input(click(0, 0), "p-value-2", layout)
+    let _tab = picker.input(Event::key_down(9, 0), "", layout)
+    if picker.color().red() != 2 || picker.color().green() != - 0.2 || picker.color().blue() != 0.12345678 {
+        ret 8
+    }
+    let _hex = picker.input(click(0, 0), "p-value-6", layout)
+    let _select = picker.input(Event::key_down(97, 192), "", layout)
+    let _text = picker.input(Event::text_input("#00FF00"), "", layout)
+    if picker.input(Event::key_down(13, 0), "", layout) != 1 || !close(picker.color().green(), 1) || !close(picker.color().red(), 0) {
+        ret 9
+    }
+    let _select_bad = picker.input(Event::key_down(97, 192), "", layout)
+    let _bad = picker.input(Event::text_input("#oops"), "", layout)
+    let _commit_bad = picker.input(Event::key_down(13, 0), "", layout)
+    if picker.message() == "" || !picker.widget(900, 800).find("p-ok").unwrap_or(Widget::label("")).disabled() || !close(picker.color().green(), 1) {
+        ret 10
+    }
+    let _restore = picker.input(click(0, 0), "p-old", layout)
+    if picker.message() != "" || picker.color().red() != 2 || picker.color().blue() != 0.12345678 {
+        ret 15
+    }
+    if picker.input(Event::key_down(27, 0), "", layout) != 3 {
+        ret 11
+    }
+    let mut pointer = ColorPicker::new("p", gray)
+    let _down = pointer.input(click(sv.x() + sv.width() / 2, sv.y() + sv.height() / 2), "p-sv", layout)
+    if !pointer.dragging() || !close(pointer.hsv().saturation(), 0.5) || !close(pointer.hsv().value(), 0.5) {
+        ret 12
+    }
+    let _move = pointer.input(Event::pointer_move(sv.right() + 100, sv.y() - 100, 0, 0, 1), "", layout)
+    if pointer.hsv().saturation() != 1 || pointer.hsv().value() != 1 {
+        ret 13
+    }
+    let _up = pointer.input(Event {
+            event_pointer_up(), sv.right(), sv.y(), 0, 0, 0, 0, 0, 0, 0, "", 0
+        }
+        , "", layout,)
+    if pointer.dragging() {
+        ret 14
+    }
+    // Contrast uses linear luminance: saturated green needs dark text,
+    // while saturated blue needs light text despite similar byte sums.
+    for channels in vec![vec![0_f32, 1_f32, 0_f32], vec![0_f32, 0_f32, 1_f32]] {
+        let color = PickerColor::linear(channels.get(0).unwrap_or(0), channels.get(1).unwrap_or(0), channels.get(2).unwrap_or(0))
+        let sample = ColorPicker::new("p", color).widget(900, 800).find("p-old").unwrap_or(Widget::label(""))
+        let expected = if color.green() == 1 {
+            "--cp-ink: #000000;"
+        } else {
+            "--cp-ink: #ffffff;"
+        }
+        if !sample.attribute("data-luma-css-variables").unwrap_or("").contains(expected) {
+            ret 16
+        }
+    }
+    ret 0
+}

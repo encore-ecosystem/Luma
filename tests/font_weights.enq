@@ -1,0 +1,66 @@
+//! Exercise the public font APIs, CSS weights and retained variant cache.
+import luma::{Button, Color, FontManager, RendererKind, Style, StyleSheet, Window}
+
+fn render_weights(renderer: RendererKind) -> bool {
+    let window = Window::create_with_renderer("Variable font weights", 360_u32, 100_u32, renderer)
+    if !window.available() {
+        ret false
+    }
+    let mut manager = FontManager::with_bundled("assets/fonts")
+    let mut valid = true
+    let mut weight = 400_u32
+    while weight <= 700_u32 {
+        manager = manager.activate(window, "Inter", 32.0_f32, weight)
+        if manager.error() != "" || manager.active_weight() != weight ||
+        window.text_width("Variable Привет ffi") <= 0.0_f32 {
+            valid = false
+        }
+        if !window.begin(Color::rgb(20_u8, 20_u8, 20_u8)) ||
+        !window.text(4.0_f32, 4.0_f32, "Variable Привет ffi", Color::rgb(255_u8, 255_u8, 255_u8)) ||
+        !window.present() {
+            valid = false
+        }
+        weight += 25_u32
+    }
+    // Evict the 32-entry size/weight cache, then return to an earlier weight.
+    let mut size = 12_u32
+    while size < 48_u32 {
+        if !window.select_font("Inter", size as f32, 425_u32) {
+            valid = false
+        }
+        size += 1_u32
+    }
+    manager = manager.activate(window, "Inter", 32.0_f32, 425_u32)
+    if manager.active_weight() != 425_u32 || manager.error() != "" {
+        valid = false
+    }
+    if !window.destroy() {
+        valid = false
+    }
+    ret valid
+}
+
+fn main() -> u32 {
+    let button = Button::new("sample", "Sample")
+    let css = StyleSheet::parse("button { font-weight: 425; }")
+    if css.style(button, false, false, false).font_weight() != 425_u32 {
+        ret 1_u32
+    }
+    let bold = StyleSheet::parse("button { font-weight: bold; }")
+    let normal = StyleSheet::parse("button { font-weight: normal; }")
+    if bold.style(button, false, false, false).font_weight() != 700_u32 ||
+    normal.style(button, false, false, false).font_weight() != 400_u32 {
+        ret 2_u32
+    }
+    if Style::default().with_font_weight(0_u32).font_weight() != 1_u32 ||
+    Style::default().with_font_weight(2000_u32).font_weight() != 1000_u32 {
+        ret 3_u32
+    }
+    if !render_weights(RendererKind::Software) {
+        ret 4_u32
+    }
+    if !render_weights(RendererKind::Auto) {
+        ret 5_u32
+    }
+    ret 0_u32
+}

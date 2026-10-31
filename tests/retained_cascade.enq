@@ -1,0 +1,253 @@
+//! Retained cascade is equivalent to a fresh cascade, including contextual CSS.
+import luma::{Color, RetainedCascade, Style, StyleSheet, Widget}
+
+fn tree(step: usize) -> Widget {
+    let mut root = Widget::panel("root").with_classes(if step % 3 == 0 {
+            "dark"
+        } else {
+            ""
+        }
+    )
+    .with_computed_style(Style::default().with_font_size(if step % 2 == 0 {
+                14.0
+            } else {
+                19.0
+            }
+        ))
+    let mut row = Widget::panel("row")
+    row.push(Widget::button("first", "First").with_classes(if step % 2 == 0 {
+                "lead"
+            } else {
+                ""
+            }
+        ))
+    row.push(Widget::input("entry", if step % 2 == 0 {
+                ""
+            } else {
+                "Text"
+            }
+            ,
+        ))
+    root.push(row)
+    root.push(Widget::label(if step % 3 == 0 {
+                ""
+            } else {
+                "Latest content"
+            }
+        ).with_id("label"))
+    if step % 4 == 0 {
+        root.push(Widget::button("added", "Added"))
+    }
+    ret root
+}
+
+fn equal(left: Widget, right: Widget) -> bool {
+    if !left.style().equivalent(right.style()) || left.id() != right.id() ||
+    left.text() != right.text() || left.focused() != right.focused() ||
+    left.children().len() != right.children().len() {
+        ret false
+    }
+    let mut index = 0_usize
+    for child in left.children() {
+        match right.children().get(index) {
+            Some(other) => {
+                if !equal(child, other) {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+        index += 1
+    }
+    ret true
+}
+
+fn main() -> u32 {
+    let mut state = RetainedCascade::new()
+    let flat = StyleSheet::parse(":root { --ink: #112233; } button { color: var(--ink); } button:hover { color: #ff0000; } input:focus-visible { outline: 2px solid #123456; } label:empty { color: #445566; }")
+    let contextual = flat.merge(StyleSheet::parse(".dark { --ink: #aabbcc; } .dark label { color: #cc0000; } .lead:hover + input { background: #00ff00; } panel:has(input:focus) { background: #334455; } input:first-of-type { color: #654321; }"))
+    for step in 0_usize..64_usize {
+        let sheet = if step % 3 == 0 {
+            flat
+        } else {
+            contextual
+        }
+        let root = tree(step / 2)
+        let hovered = if step % 2 == 0 {
+            "first"
+        } else {
+            "label"
+        }
+        let focused = if step % 4 == 0 {
+            "entry"
+        } else {
+            ""
+        }
+        let keyboard = step % 5 == 0
+        let expected = sheet.apply_with_focus_visibility(root, hovered, "", focused, keyboard)
+        let actual = sheet.apply_retained(root, hovered, "", focused, keyboard, state)
+        if !equal(actual, expected) {
+            ret 1
+        }
+        // Identical inputs take the retained branch, not just the cold path.
+        let repeated = sheet.apply_retained(root, hovered, "", focused, keyboard, state)
+        if !equal(repeated, expected) {
+            ret 2
+        }
+    }
+    let root = Widget::label("Before").with_id("same")
+    let _warm = flat.apply_retained(root, "", "", "", true, state)
+    let misses = flat.cache_misses()
+    let hits = flat.cache_hits()
+    let changed = flat.apply_retained(root.with_text("After"), "", "", "", true, state)
+    if changed.text() != "After" || flat.cache_hits() != hits || flat.cache_misses() != misses {
+        ret 3
+    }
+    let explicit = root.with_style(Style::default().with_foreground(Color::rgb(255, 0, 0)))
+    if !equal(flat.apply_retained(explicit, "", "", "", true, state), flat.apply(explicit, "", "", "")) {
+        ret 4
+    }
+    let uniform = StyleSheet::parse("button { color: #123456; }")
+    let mut row = Widget::panel("row")
+    for index in 0_usize..100_usize {
+        row.push(Widget::button(f "item-{index}", "Item"))
+    }
+    let _uniform = uniform.apply(row, "", "", "")
+    // Child position is not an input of this sheet; all buttons share a key.
+    if uniform.cache_misses() != 2 {
+        ret 5
+    }
+    let positional = uniform.merge(StyleSheet::parse("button:nth-child(2) { color: #ff0000; } button:last-child { color: #00ff00; }"))
+    let actual = positional.apply_retained(row, "", "", "", true, state)
+    if actual.find("item-1").unwrap_or(Widget::spacer(0.0)).style().foreground().red() != 255 ||
+    actual.find("item-99").unwrap_or(Widget::spacer(0.0)).style().foreground().green() != 255 {
+        ret 6
+    }
+    if !equal(actual, positional.apply(row, "", "", "")) {
+        ret 7
+    }
+    // Exercise ancestor-only invalidation without sibling/:has fallbacks.
+    let ancestor = flat.merge(StyleSheet::parse(".dark { --ink: #aabbcc; } .dark label { color: #cc0000; } panel:hover input { background: #112233; } panel:focus-within button { color: #654321; } panel:nth-child(1) input { padding: 3px; }"))
+    let mut ancestor_state = RetainedCascade::new()
+    for step in 0_usize..64_usize {
+        let root = tree(step / 2)
+        let hover = if step % 2 == 0 {
+            "first"
+        } else {
+            "label"
+        }
+        let focus = if step % 4 == 0 {
+            "entry"
+        } else {
+            ""
+        }
+        let active = if step % 3 == 0 {
+            "first"
+        } else {
+            ""
+        }
+        if !equal(ancestor.apply_retained(root, hover, active, focus, step % 5 == 0, ancestor_state),
+            ancestor.apply_with_focus_visibility(root, hover, active, focus, step % 5 == 0),) {
+            ret 8
+        }
+    }
+    let isolated = StyleSheet::parse(".group:hover button { background: #112233; } .group:focus-within button { color: #abcdef; }")
+    let mut branches = Widget::panel("branches")
+    for index in 0_usize..100_usize {
+        let mut branch = Widget::panel(f "branch-{index}").with_classes("group")
+        branch.push(Widget::button(f "button-{index}", "Button").with_attribute("aria-label", f "Row {index}"))
+        branches.push(branch)
+    }
+    let mut isolated_state = RetainedCascade::new()
+    let _warm = isolated.apply_retained(branches, "button-0", "", "", false, isolated_state)
+    let lookups = isolated.cache_hits() + isolated.cache_misses()
+    let moved = isolated.apply_retained(branches, "button-1", "", "", false, isolated_state)
+    // Moving between two branches must not recompute the other 98 branches.
+    if isolated.cache_hits() + isolated.cache_misses() - lookups > 12 {
+        ret 9
+    }
+    if !equal(moved, isolated.apply(branches, "button-1", "", "")) {
+        ret 10
+    }
+    let static_ancestor = StyleSheet::parse("#branches button { color: #123456; } button:active { background: #abcdef; } input[aria-invalid=\"true\"] { color: #ff0000; } #grid[data-columns=\"1\"] { padding: 2px; }")
+    let mut static_state = RetainedCascade::new()
+    let _static_warm = static_ancestor.apply_retained(branches, "button-0", "", "", false, static_state)
+    let static_lookups = static_ancestor.cache_hits() + static_ancestor.cache_misses()
+    let pressed = static_ancestor.apply_retained(branches, "button-0", "button-0", "", false, static_state)
+    // Root :active changes, but the ancestor selector only depends on its ID.
+    if static_ancestor.cache_hits() + static_ancestor.cache_misses() - static_lookups > 12 {
+        ret 11
+    }
+    if !equal(pressed, static_ancestor.apply(branches, "button-0", "button-0", "")) {
+        ret 12
+    }
+    let mut recycled = Widget::panel("branches")
+    for index in 100_usize..200_usize {
+        let mut branch = Widget::panel(f "branch-{index}").with_classes("group")
+        branch.push(Widget::button(f "button-{index}", "Button").with_attribute("aria-label", f "Row {index}"))
+        recycled.push(branch)
+    }
+    let _reset = static_ancestor.apply_retained(branches, "", "", "", false, static_state)
+    let recycled_lookups = static_ancestor.cache_hits() + static_ancestor.cache_misses()
+    let replacement = static_ancestor.apply_retained(recycled, "", "", "", false, static_state)
+    if static_ancestor.cache_hits() + static_ancestor.cache_misses() != recycled_lookups {
+        ret 13
+    }
+    if !equal(replacement, static_ancestor.apply(recycled, "", "", "")) {
+        ret 14
+    }
+    let growth_lookups = static_ancestor.cache_hits() + static_ancestor.cache_misses()
+    let mut grown = Widget::panel("branches")
+    for child in recycled.children() {
+        grown.push(child)
+    }
+    let mut extra = Widget::panel("extra").with_classes("group")
+    extra.push(Widget::button("extra-button", "Button"))
+    grown.push(extra)
+    let growth = static_ancestor.apply_retained(grown, "", "", "", false, static_state)
+    if static_ancestor.cache_hits() + static_ancestor.cache_misses() - growth_lookups > 8 {
+        ret 17
+    }
+    if !equal(growth, static_ancestor.apply(grown, "", "", "")) {
+        ret 18
+    }
+    // Referenced ancestor IDs must never be anonymized.
+    let renamed = recycled.with_id("other")
+    if !equal(static_ancestor.apply_retained(renamed, "", "", "", false, static_state),
+        static_ancestor.apply(renamed, "", "", ""),) {
+        ret 15
+    }
+    let attributes = StyleSheet::parse("[data-state=\"on\"] button { color: #123456; } button[aria-label] { background: #abcdef; } button[aria-label^=\"Special\"] { color: #654321; } input:required { color: #112233; }")
+    let mut attribute_state = RetainedCascade::new()
+    for step in 0_usize..12_usize {
+        let mut parent = Widget::panel("parent").with_attribute("data-state", if step % 2 == 0 {
+                "on"
+            } else {
+                "off"
+            }
+            ,
+        )
+        let mut child = Widget::button("child", "Child")
+        if step % 3 != 0 {
+            child = child.with_attribute("aria-label", if step % 2 == 0 {
+                    "Special"
+                } else {
+                    "Ordinary"
+                }
+                ,
+            )
+        }
+        parent.push(child)
+        let mut input = Widget::input("input", "")
+        if step % 2 == 0 {
+            input = input.with_attribute("required", "")
+        }
+        parent.push(input)
+        if !equal(attributes.apply_retained(parent, "", "", "", false, attribute_state), attributes.apply(parent, "", "", "")) {
+            ret 16
+        }
+    }
+    ret 0
+}

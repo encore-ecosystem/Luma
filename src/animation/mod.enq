@@ -1,7 +1,7 @@
 //! Time-based style interpolation for interactive controls.
 
 import color::Color
-import geometry::Insets
+import refrain::geometry::Insets
 import refrain::style::{LayoutStyle, Style}
 
 pub struct ButtonAnimation {
@@ -171,10 +171,13 @@ pub fn interpolate_color(from: Color, to: Color, amount: f32) -> Color {
 }
 
 pub fn interpolate_style(from: Style, to: Style, amount: f32) -> Style {
+    if amount >= 1.0_f32 {
+        ret to
+    }
     let progress = transition_progress(amount)
     let a = from.padding()
     let b = to.padding()
-    ret Style::default()
+    let sample = Style::default()
     .with_background(interpolate_color(from.background(), to.background(), progress))
     .with_foreground(interpolate_color(from.foreground(), to.foreground(), progress))
     .with_border(mix_f32(from.border_width(), to.border_width(), progress),
@@ -261,6 +264,7 @@ pub fn interpolate_style(from: Style, to: Style, amount: f32) -> Style {
     )
     .with_transition(to.transition())
     .with_layout(interpolate_layout_style(from.layout(), to.layout(), progress))
+    ret to.with_transition_sample(sample, "all")
 }
 
 pub fn interpolate_layout_style(from: LayoutStyle, to: LayoutStyle, amount: f32) -> LayoutStyle {

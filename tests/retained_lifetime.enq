@@ -1,0 +1,96 @@
+//! A fixed scene must not retain a new graph after every cascade transaction.
+import core::vec::Vec
+import luma::{RetainedCascade, Style, StyleSheet, Widget}
+import std::io::println
+
+extern fn encore_node_debug_live_count() -> usize
+
+// Returned fields must outlive a temporary receiver even when accessors
+// borrow that receiver instead of retaining its complete widget/style graph.
+fn temporary_font(index: usize) -> str {
+    ret Widget::label(f "Temporary {index}")
+    .with_style(Style::default().with_font_family(f "Font {index}"))
+    .style().font_family()
+}
+
+fn temporary_children(index: usize) -> Vec[Widget] {
+    ret Widget::panel(f "parent-{index}")
+    .with_child(Widget::label(f "Child {index}"))
+    .children()
+}
+
+fn accessor_lifetimes() -> bool {
+    for index in 0_usize..64_usize {
+        let font = temporary_font(index)
+        let children = temporary_children(index)
+        if font != f "Font {index}" ||
+        children.get(0).unwrap_or(Widget::spacer(0)).text() != f "Child {index}" {
+            ret false
+        }
+    }
+    ret true
+}
+
+fn signatures(root: Widget) ->() {
+    for index in 0_usize..100_usize {
+        let signature = root.selector_signature()
+        if signature == "" {
+            ret()
+        }
+    }
+    ret()
+}
+
+fn exercise(sheet: StyleSheet, root: Widget, state: mut RetainedCascade&, retained: bool) ->() {
+    for index in 0_usize..50_usize {
+        let hover = if index % 2 == 0 {
+            "item-1"
+        } else {
+            "item-2"
+        }
+        let styled = if retained {
+            sheet.apply_retained(root, hover, "", "", true, state)
+        } else {
+            sheet.apply(root, hover, "", "")
+        }
+        if styled.id() != "root" {
+            ret()
+        }
+    }
+    ret()
+}
+
+fn main() -> u32 {
+    if !accessor_lifetimes() {
+        ret 2
+    }
+    let accessor_before = encore_node_debug_live_count()
+    if !accessor_lifetimes() || encore_node_debug_live_count() != accessor_before {
+        ret 3
+    }
+    let sheet = StyleSheet::parse("button { color: #123456; } button:hover { color: #ff0000; }")
+    let mut root = Widget::panel("root")
+    for index in 0_usize..32_usize {
+        root.push(Widget::button(f "item-{index}", "Item"))
+    }
+    let mut cache = RetainedCascade::new()
+    signatures(root)
+    let signature_before = encore_node_debug_live_count()
+    signatures(root)
+    let signature_after = encore_node_debug_live_count()
+    println(f "signature live nodes: {signature_before} -> {signature_after}")
+    exercise(sheet, root, cache, false)
+    let full_before = encore_node_debug_live_count()
+    exercise(sheet, root, cache, false)
+    let full_after = encore_node_debug_live_count()
+    exercise(sheet, root, cache, true)
+    let retained_before = encore_node_debug_live_count()
+    exercise(sheet, root, cache, true)
+    let retained_after = encore_node_debug_live_count()
+    println(f "full live nodes: {full_before} -> {full_after}; retained: {retained_before} -> {retained_after}")
+    ret if full_after > full_before + 16 || retained_after > retained_before + 16 {
+        1_u32
+    } else {
+        0_u32
+    }
+}

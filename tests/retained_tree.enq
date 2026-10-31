@@ -1,0 +1,98 @@
+//! Single-node writes, independent identity, bounded storage and exact flags.
+import luma::{Color, RetainedTree, Style, Widget, dirty_layout, dirty_paint, dirty_structure}
+
+fn main() -> u32 {
+    let mut tree = RetainedTree::new()
+    let mut root = Widget::panel("root")
+    for index in 0..1000 {
+        root.push(Widget::slider(f "slider-{index}", 0.0))
+    }
+    let host = tree.mount(root)
+    let _mounted = tree.take_changes()
+    let target = tree.children(host).get(500).unwrap_or(host)
+    let sibling = tree.children(host).get(501).unwrap_or(host)
+    if !tree.set_value(target, 0.25) || !tree.set_value(target, 0.5) {
+        ret 1
+    }
+    let changed = tree.take_changes()
+    if changed.len() != 1 || tree.property_updates() != 2 {
+        ret 2
+    }
+    match changed.get(0) {
+        Some(change) => {
+            if !change.node().same(target) || change.flags() != dirty_paint() {
+                ret 3
+            }
+        }
+        None => {
+            ret 4
+        }
+    }
+    if tree.widget(sibling).unwrap_or(Widget::spacer(0)).value() != 0.0 {
+        ret 5
+    }
+    if !tree.set_value(target, 0.5) || tree.take_changes().len() != 0 {
+        ret 6
+    }
+    if tree.widget(host).unwrap_or(Widget::spacer(0)).children().len() != 0 {
+        ret 7
+    }
+    if !tree.set_text(target, "changed") {
+        ret 8
+    }
+    match tree.take_changes().get(0) {
+        Some(change) => {
+            if (change.flags() & dirty_layout()) == 0 {
+                ret 9
+            }
+        }
+        None => {
+            ret 10
+        }
+    }
+    if !tree.unmount(target) || tree.contains(target) || !tree.contains(sibling) {
+        ret 11
+    }
+    let replacement = tree.mount(Widget::button("new", "New"))
+    if replacement.same(target) || tree.set_value(target, 1.0) {
+        ret 12
+    }
+    let capacity = tree.capacity()
+    for _index in 0..1000 {
+        let temporary = tree.mount(Widget::label("temporary"))
+        let _removed = tree.unmount(temporary)
+    }
+    if tree.capacity() > capacity + 1 {
+        ret 13
+    }
+    if tree.pending_count() > 3 {
+        ret 19
+    }
+    let changes = tree.take_changes()
+    let mut host_changed = false
+    for change in changes {
+        if change.node().same(host) {
+            host_changed =(change.flags() & dirty_structure()) != 0
+        }
+    }
+    if !host_changed || tree.len() != 1001 {
+        ret 14
+    }
+    let mut other = RetainedTree::new()
+    let foreign = other.mount(Widget::label("other window"))
+    if tree.contains(foreign) || tree.set_text(foreign, "wrong window") {
+        ret 15
+    }
+    let authored = tree.widget(sibling).unwrap_or(Widget::spacer(0.0)).style()
+    let styled = authored.with_background(Color::rgb(12, 34, 56))
+    if !tree.set_style(sibling, styled) {
+        ret 16
+    }
+    if !tree.widget(sibling).unwrap_or(Widget::spacer(0.0)).style().equivalent(authored) {
+        ret 17
+    }
+    if !tree.computed_style(sibling).unwrap_or(Style::default()).equivalent(styled) {
+        ret 18
+    }
+    ret 0
+}

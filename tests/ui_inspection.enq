@@ -1,0 +1,30 @@
+//! Inspection exposes image labels and IDs without searching opaque pixel bytes.
+import luma::{Widget, Style, Rect, vertical, layout_widget, inspect_ui, widget_image}
+fn main() -> u32 {
+    let mut root = Widget::panel("root").with_direction(vertical())
+    root.push(Widget::image("tree-image", "opaque-pixel-marker").with_attribute("aria-label", "Tree icon").with_style(Style::default().with_width(200).with_height(30)))
+    root.push(Widget::image("unnamed-image", "opaque-pixel-marker").with_style(Style::default().with_width(200).with_height(30)))
+    root.push(Widget::label("Readable caption").with_id("caption").with_style(Style::default().with_width(200).with_height(30)))
+    let layout = layout_widget(root, Rect::new(0, 0, 200, 90))
+    if inspect_ui(layout, 0, 20, "opaque-pixel-marker").total != 0 {
+        ret 1
+    }
+    let image = inspect_ui(layout, 0, 20, "tree-image")
+    if image.total != 1 {
+        ret 2
+    }
+    for node in image.nodes {
+        if node.text != "Tree icon" || node.kind != widget_image() {
+            ret 3
+        }
+    }
+    for node in inspect_ui(layout, 0, 20, "unnamed-image").nodes {
+        if node.text != "" {
+            ret 4
+        }
+    }
+    if inspect_ui(layout, 0, 20, "Readable").total != 1 || inspect_ui(layout, 0, 20, "Tree icon").total != 1 {
+        ret 5
+    }
+    ret 0
+}

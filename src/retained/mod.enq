@@ -1,0 +1,808 @@
+//! Flat retained storage: local property changes never copy a widget subtree.
+import core::option::Option
+import core::vec::Vec
+
+import refrain::geometry::Rect
+import refrain::reactive::graph::reactive_identity
+import refrain::style::Style
+import refrain::widget::{Widget, widget_change_kind}
+
+pub fn dirty_style() -> u32 {
+    ret 1
+}
+pub fn dirty_layout() -> u32 {
+    ret 2
+}
+pub fn dirty_hit_test() -> u32 {
+    ret 4
+}
+pub fn dirty_paint() -> u32 {
+    ret 8
+}
+pub fn dirty_structure() -> u32 {
+    ret 16
+}
+pub fn dirty_computed_style() -> u32 {
+    ret 32
+}
+pub fn dirty_data() -> u32 {
+    ret 64
+}
+/// A sizing property changed without changing selector inputs or structure.
+pub fn dirty_geometry() -> u32 {
+    ret 128
+}
+
+/// Identity is independent of CSS ID, label text and the current child position.
+pub struct NodeId {
+    slot: usize
+    generation: u64
+    owner: u64
+}
+
+impl for NodeId {
+    pub fn index(self: Self) -> usize {
+        ret self.slot
+    }
+    pub fn same(self: Self, other: Self) -> bool {
+        ret self.slot == other.slot && self.generation == other.generation && self.owner == other.owner
+    }
+}
+
+struct NodeSlot {
+    generation: u64
+    live: bool
+    parent: Option[NodeId]
+    ordinal: usize
+    children: Vec[NodeId]
+    widget: Widget
+    computed: Style
+    bounds: Rect
+    dirty: u32
+    queued: bool
+}
+
+/// A renderer consumes these flags only after applying the complete transaction.
+pub struct NodeChange {
+    node: NodeId
+    flags: u32
+}
+
+impl for NodeChange {
+    pub fn node(self: Self) -> NodeId {
+        ret self.node
+    }
+    pub fn flags(self: Self) -> u32 {
+        ret self.flags
+    }
+}
+
+pub struct RetainedTree {
+    identity: u64
+    nodes: Vec[NodeSlot]
+    free: Vec[usize]
+    pending: Vec[usize]
+    live_nodes: usize
+    property_updates: u64
+    identifiers: Vec[Vec[NodeId]]
+}
+
+fn identifier_bucket(id: str) -> usize {
+    let mut hash = 1469598103934665603_u64
+    for index in 0..id.byte_len() {
+        hash =(hash ^ id.byte_at(index) as u64) * 1099511628211_u64
+    }
+    ret(hash % 256) as usize
+}
+
+#attr(test)
+fn retained_reads_own_fields_after_slot_reuse() -> bool {
+    let mut tree = RetainedTree::new()
+    let root = tree.mount(Widget::panel("held-root").with_child(Widget::input("held-child", core::fmt::Debug::fmt(tree.live_nodes))
+            .with_style(Style::default().with_font_family("font-" + core::fmt::Debug::fmt(tree.live_nodes)))
+            .with_attribute("data-held", "payload-" + core::fmt::Debug::fmt(tree.live_nodes))))
+    let child = tree.find(root, "held-child").unwrap_or(root)
+    let held_id = tree.identifier(child)
+    let held = tree.widget(child).unwrap_or(Widget::spacer(0))
+    let children = tree.children(root)
+    let parent = tree.parent(child)
+    if tree.ordinal(child) != 0_usize || !tree.unmount(root) {
+        ret false
+    }
+    for index in 0..256 {
+        let _new = tree.mount(Widget::label(core::fmt::Debug::fmt(index)))
+    }
+    ret !tree.contains(root) && !tree.contains(child) && tree.identifier(child) == "" && held_id == "held-child" && held.text() == "0" && held.style().font_family() == "font-0" &&
+    held.attribute("data-held").unwrap_or("") == "payload-0" && children.len() == 1_usize &&
+    children.get(0).unwrap_or(root).same(child) && parent.unwrap_or(child).same(root)
+}
+
+impl for RetainedTree {
+    pub fn new() -> RetainedTree<H> {
+        let mut identifiers = Vec[Vec[NodeId]]::new()
+        for _index in 0..256 {
+            identifiers.push(Vec[NodeId]::new())
+        }
+        ret RetainedTree<H> {
+            reactive_identity(), Vec[NodeSlot]::new(), Vec[usize]::new(),
+            Vec[usize]::new(), 0, 0, identifiers
+        }
+    }
+
+    fn index_identifier(self: mut Self&, node: NodeId, id: str, add: bool) ->() {
+        if id == "" {
+            ret()
+        }
+        let bucket = identifier_bucket(id)
+        let mut entries = Vec[NodeId]::new()
+        for candidate in self.identifiers.get(bucket).unwrap_or(Vec[NodeId]::new()) {
+            if !candidate.same(node) {
+                entries.push(candidate)
+            }
+        }
+        if add {
+            entries.push(node)
+        }
+        self.identifiers.set(bucket, entries)
+        ret()
+    }
+
+    pub fn contains(self: Self&, node: NodeId) -> bool {
+        if node.owner != self.identity || node.slot >= self.nodes.len() {
+            ret false
+        }
+        // This read cannot resize or mutate nodes. Avoid retaining a complete
+        // Widget and computed Style merely to validate two scalar fields.
+        let slot = self.nodes.get_unchecked_borrowed(node.slot)
+        ret slot.live && slot.generation == node.generation
+    }
+
+    pub fn widget(self: Self&, node: NodeId) -> Option[Widget] {
+        if !self.contains(node) {
+            ret Option[Widget]::None
+        }
+        ret Option[Widget]::Some(self.nodes.get_unchecked_borrowed(node.slot).widget)
+    }
+
+    /// Own just the identifier without copying the local widget and its style.
+    pub fn identifier(self: Self&, node: NodeId) -> str {
+        if !self.contains(node) {
+            ret ""
+        }
+        ret self.nodes.get_unchecked_borrowed(node.slot).widget.id()
+    }
+
+    pub fn children(self: Self&, node: NodeId) -> Vec[NodeId] {
+        if !self.contains(node) {
+            ret Vec[NodeId]::new()
+        }
+        ret self.nodes.get_unchecked_borrowed(node.slot).children
+    }
+
+    pub fn parent(self: Self&, node: NodeId) -> Option[NodeId] {
+        if !self.contains(node) {
+            ret Option[NodeId]::None
+        }
+        ret self.nodes.get_unchecked_borrowed(node.slot).parent
+    }
+
+    pub fn ordinal(self: Self&, node: NodeId) -> usize {
+        if !self.contains(node) {
+            ret self.nodes.len()
+        }
+        ret self.nodes.get_unchecked_borrowed(node.slot).ordinal
+    }
+
+    /// Keyed matching uses the ID index, not a scan of every old sibling.
+    pub fn match_child(self: Self&, parent: NodeId, desired: Widget,
+        used: Vec[bool], ordinal: usize,) -> Option[NodeId] {
+        if desired.id() == "" {
+            match self.children(parent).get(ordinal) {
+                Some(node) => {
+                    match self.widget(node) {
+                        Some(previous) => {
+                            if !used.get(ordinal).unwrap_or(true) && previous.id() == "" &&
+                            previous.kind() == desired.kind() && previous.tag() == desired.tag() {
+                                ret Option[NodeId]::Some(node)
+                            }
+                        }
+                        None => {
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+            ret Option[NodeId]::None
+        }
+        for node in self.identifiers.get(identifier_bucket(desired.id())).unwrap_or(Vec[NodeId]::new()) {
+            match self.parent(node) {
+                Some(owner) => {
+                    if owner.same(parent) && !used.get(self.ordinal(node)).unwrap_or(true) {
+                        match self.widget(node) {
+                            Some(previous) => {
+                                if previous.id() == desired.id() && previous.kind() == desired.kind() &&
+                                previous.tag() == desired.tag() {
+                                    ret Option[NodeId]::Some(node)
+                                }
+                            }
+                            None => {
+                            }
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        ret Option[NodeId]::None
+    }
+
+    /// Materializes a subtree only for mounting or structural replacement.
+    pub fn snapshot(self: Self&, node: NodeId) -> Option[Widget] {
+        let local = match self.widget(node) {
+            Some(widget) => widget
+            None => {
+                ret Option[Widget]::None
+            }
+        }
+        let mut children = Vec[Widget]::new()
+        for child in self.children(node) {
+            match self.snapshot(child) {
+                Some(widget) => children.push(widget)
+                None => {
+                }
+            }
+        }
+        ret Option[Widget]::Some(local.with_children(children))
+    }
+
+    /// A node's position relative to a mounted root, including anonymous nodes.
+    pub fn path(self: Self&, root: NodeId, node: NodeId) -> Option[Vec[usize]] {
+        if !self.contains(root) || !self.contains(node) {
+            ret Option[Vec[usize]]::None
+        }
+        let mut reversed = Vec[usize]::new()
+        let mut cursor = node
+        while !cursor.same(root) {
+            let parent = match self.parent(cursor) {
+                Some(value) => value
+                None => {
+                    ret Option[Vec[usize]]::None
+                }
+            }
+            let index = self.nodes.get_unchecked_borrowed(cursor.slot).ordinal
+            reversed.push(index)
+            cursor = parent
+        }
+        let mut path = Vec[usize]::new()
+        while reversed.len() > 0 {
+            path.push(reversed.pop().unwrap_or(0))
+        }
+        ret Option[Vec[usize]]::Some(path)
+    }
+
+    pub fn mount(self: mut Self&, widget: Widget) -> NodeId {
+        ret self.mount_under(widget, Option[NodeId]::None, 0)
+    }
+
+    pub fn append(self: mut Self&, parent: NodeId, widget: Widget) -> Option[NodeId] {
+        if !self.contains(parent) {
+            ret Option[NodeId]::None
+        }
+        let child = self.mount_under(widget, Option[NodeId]::Some(parent), self.children(parent).len())
+        match self.nodes.get(parent.slot) {
+            Some(current) => {
+                let mut updated = current
+                updated.children.push(child)
+                self.nodes.set(parent.slot, updated)
+            }
+            None => {
+                ret Option[NodeId]::None
+            }
+        }
+        let _marked = self.mark(parent, dirty_structure() | dirty_layout() | dirty_hit_test() | dirty_paint())
+        ret Option[NodeId]::Some(child)
+    }
+
+    /// CSS IDs are used only to bind an existing authored widget at mount time.
+    pub fn find(self: Self&, root: NodeId, id: str) -> Option[NodeId] {
+        if !self.contains(root) || id == "" {
+            ret Option[NodeId]::None
+        }
+        for candidate in self.identifiers.get(identifier_bucket(id)).unwrap_or(Vec[NodeId]::new()) {
+            if self.contains(candidate) && self.nodes.get_unchecked_borrowed(candidate.slot).widget.id() == id {
+                let mut cursor = Option[NodeId]::Some(candidate)
+                while cursor.is_some() {
+                    let current = cursor.unwrap_or(candidate)
+                    if current.same(root) {
+                        ret Option[NodeId]::Some(candidate)
+                    }
+                    cursor = self.parent(current)
+                }
+            }
+        }
+        ret Option[NodeId]::None
+    }
+
+    fn mount_under(self: mut Self&, widget: Widget, parent: Option[NodeId], ordinal: usize) -> NodeId {
+        let index = self.free.pop().unwrap_or(self.nodes.len())
+        let generation = match self.nodes.get(index) {
+            Some(old) => old.generation + 1
+            None => 1_u64
+        }
+        let node = NodeId {
+            index, generation, self.identity
+        }
+        let queued = match self.nodes.get(index) {
+            Some(old) => old.queued
+            None => false
+        }
+        // A slot owns only the local descriptor. Children have their own slots.
+        let slot = NodeSlot {
+            generation, true, parent, ordinal, Vec[NodeId]::new(),
+            widget.with_children(Vec[Widget]::new()), widget.style(), Rect::new(0.0, 0.0, 0.0, 0.0),
+            0, queued
+        }
+        if index == self.nodes.len() {
+            self.nodes.push(slot)
+        } else {
+            self.nodes.set(index, slot)
+        }
+        self.live_nodes += 1
+        self.index_identifier(node, widget.id(), true)
+        let mut children = Vec[NodeId]::new()
+        for child in widget.children() {
+            children.push(self.mount_under(child, Option[NodeId]::Some(node), children.len()))
+        }
+        match self.nodes.get(index) {
+            Some(current) => {
+                let mut updated = current
+                updated.children = children
+                self.nodes.set(index, updated)
+            }
+            None => {
+            }
+        }
+        let _marked = self.mark(node, dirty_style() | dirty_layout() | dirty_hit_test() |
+            dirty_paint() | dirty_structure(),)
+        ret node
+    }
+
+    pub fn mark(self: mut Self&, node: NodeId, flags: u32) -> bool {
+        if !self.contains(node) {
+            ret false
+        }
+        match self.nodes.get(node.slot) {
+            Some(current) => {
+                let mut slot = current
+                slot.dirty |= flags
+                if !slot.queued && flags != 0 {
+                    slot.queued = true
+                    self.pending.push(node.slot)
+                }
+                self.nodes.set(node.slot, slot)
+            }
+            None => {
+                ret false
+            }
+        }
+        ret true
+    }
+
+    pub fn set_text(self: mut Self&, node: NodeId, text: str) -> bool {
+        match self.widget(node) {
+            Some(widget) => {
+                if widget.text() == text {
+                    ret true
+                }
+                let selector_changed =(widget.text() == "") !=(text == "")
+                let flags = dirty_layout() | dirty_paint() |
+                if selector_changed {
+                    dirty_style()
+                } else {
+                    0_u32
+                }
+                ret self.update_local(node, widget.with_text(text), flags)
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+
+    /// Structural owners preserve child identities and define authored order.
+    pub fn set_children(self: mut Self&, node: NodeId, children: Vec[NodeId]) -> bool {
+        if !self.contains(node) {
+            ret false
+        }
+        let previous = self.children(node)
+        let mut changed = previous.len() != children.len()
+        let mut index = 0_usize
+        for child in children {
+            if !self.contains(child) {
+                ret false
+            }
+            match previous.get(index) {
+                Some(old) => {
+                    changed = changed || !old.same(child)
+                }
+                None => {
+                    changed = true
+                }
+            }
+            match self.nodes.get(child.slot) {
+                Some(current) => {
+                    let mut updated = current
+                    updated.parent = Option[NodeId]::Some(node)
+                    updated.ordinal = index
+                    self.nodes.set(child.slot, updated)
+                }
+                None => {
+                    ret false
+                }
+            }
+            index += 1
+        }
+        match self.nodes.get(node.slot) {
+            Some(current) => {
+                let mut updated = current
+                updated.children = children
+                self.nodes.set(node.slot, updated)
+            }
+            None => {
+                ret false
+            }
+        }
+        if changed {
+            let _marked = self.mark(node, dirty_structure() | dirty_layout() | dirty_hit_test() | dirty_paint())
+        }
+        ret true
+    }
+
+    /// Moves a live subtree without remounting it. The ordinal is its final
+    /// index, after removing it from its old parent. Validation precedes writes.
+    pub fn reparent(self: mut Self&, node: NodeId, parent: NodeId, ordinal: usize) -> bool {
+        if !self.contains(node) || !self.contains(parent) || self.path(node, parent).is_some() {
+            ret false
+        }
+        let old_parent = self.parent(node)
+        let same_parent = match old_parent {
+            Some(old) => old.same(parent) None => false
+        }
+        let target_length = self.children(parent).len() - if same_parent {
+            1_usize
+        } else {
+            0_usize
+        }
+        if ordinal > target_length {
+            ret false
+        }
+        if same_parent && self.ordinal(node) == ordinal {
+            ret true
+        }
+        let mut destination = Vec[NodeId]::new()
+        let mut index = 0_usize
+        for child in self.children(parent) {
+            if child.same(node) {
+                continue
+            }
+            if index == ordinal {
+                destination.push(node)
+            }
+            destination.push(child)
+            index += 1
+        }
+        if index == ordinal {
+            destination.push(node)
+        }
+        if !same_parent {
+            match old_parent {
+                Some(old) => {
+                    let mut remaining = Vec[NodeId]::new()
+                    for child in self.children(old) {
+                        if !child.same(node) {
+                            remaining.push(child)
+                        }
+                    }
+                    let _removed = self.set_children(old, remaining)
+                }
+                None => {
+                }
+            }
+        }
+        let _inserted = self.set_children(parent, destination)
+        ret self.mark(node, dirty_structure() | dirty_style() | dirty_layout() | dirty_hit_test() | dirty_paint())
+    }
+
+    /// Refreshes a descriptor while keeping its child slots and subscriptions.
+    pub fn replace_local(self: mut Self&, node: NodeId, widget: Widget) -> bool {
+        let previous = match self.widget(node) {
+            Some(value) => value
+            None => {
+                ret false
+            }
+        }
+        let local = widget.with_children(Vec[Widget]::new())
+        if previous.id() != local.id() {
+            self.index_identifier(node, previous.id(), false)
+            self.index_identifier(node, local.id(), true)
+        }
+        let change = widget_change_kind(previous, local)
+        let mut flags = if change > 0 {
+            dirty_paint()
+        } else {
+            0_u32
+        }
+        if previous.has_event_handlers() || local.has_event_handlers() {
+            flags |= dirty_data()
+        }
+        if change >= 2 || previous.text() != local.text() {
+            flags |= dirty_layout()
+        }
+        if change >= 3 {
+            flags |= dirty_structure() | dirty_hit_test()
+        }
+        if !previous.selector_inputs().equivalent(local.selector_inputs(), true) ||
+        !previous.style().equivalent(local.style()) || previous.has_explicit_style() != local.has_explicit_style() {
+            flags |= dirty_style()
+        }
+        ret self.update_local(node, local, flags)
+    }
+
+    /// Updates only the authored flex basis. CSS min/max and all other
+    /// properties remain intact; consumers patch the displayed basis directly.
+    pub fn set_flex_basis(self: mut Self&, node: NodeId, value: f32) -> bool {
+        match self.widget(node) {
+            Some(widget) => {
+                if value < 0 || value - value != 0 {
+                    ret false
+                }
+                if widget.geometry_basis() == value {
+                    ret true
+                }
+                ret self.update_local(node, widget.with_geometry_basis(value),
+                    dirty_geometry() | dirty_layout() | dirty_hit_test() | dirty_paint(),)
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn set_value(self: mut Self&, node: NodeId, value: f32) -> bool {
+        match self.widget(node) {
+            Some(widget) => {
+                if widget.value() == value {
+                    ret true
+                }
+                ret self.update_local(node, widget.with_value(value), dirty_paint())
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn set_checked(self: mut Self&, node: NodeId, checked: bool) -> bool {
+        match self.widget(node) {
+            Some(widget) => {
+                if widget.checked() == checked {
+                    ret true
+                }
+                ret self.update_local(node, widget.with_checked(checked), dirty_style() | dirty_paint())
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn set_classes(self: mut Self&, node: NodeId, classes: str) -> bool {
+        match self.widget(node) {
+            Some(widget) => {
+                if widget.classes() == classes {
+                    ret true
+                }
+                ret self.update_local(node, widget.with_classes(classes), dirty_style())
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+
+    /// Computed style is distinct from the authored descriptor.
+    pub fn set_style(self: mut Self&, node: NodeId, style: Style) -> bool {
+        if !self.contains(node) {
+            ret false
+        }
+        match self.nodes.get(node.slot) {
+            Some(current) => {
+                let mut slot = current
+                if slot.computed.equivalent(style) {
+                    ret true
+                }
+                let flags = dirty_paint() | dirty_computed_style() | if slot.computed.layout_equivalent(style) {
+                    0_u32
+                } else {
+                    dirty_layout() | dirty_hit_test()
+                }
+                slot.computed = style
+                self.nodes.set(node.slot, slot)
+                self.property_updates += 1
+                ret self.mark(node, flags)
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+
+    pub fn computed_style(self: Self&, node: NodeId) -> Option[Style] {
+        if !self.contains(node) {
+            ret Option[Style]::None
+        }
+        ret match self.nodes.get(node.slot) {
+            Some(slot) => Option[Style]::Some(slot.computed)
+            None => Option[Style]::None
+        }
+    }
+
+    fn update_local(self: mut Self&, node: NodeId, widget: Widget, flags: u32) -> bool {
+        if !self.contains(node) {
+            ret false
+        }
+        match self.nodes.get(node.slot) {
+            Some(current) => {
+                let mut slot = current
+                slot.widget = widget
+                self.nodes.set(node.slot, slot)
+            }
+            None => {
+                ret false
+            }
+        }
+        self.property_updates += 1
+        ret self.mark(node, flags)
+    }
+
+    pub fn take_changes(self: mut Self&) -> Vec[NodeChange] {
+        let pending = self.pending
+        self.pending = Vec[usize]::new()
+        let mut changes = Vec[NodeChange]::new()
+        for index in pending {
+            match self.nodes.get(index) {
+                Some(current) => {
+                    let mut slot = current
+                    if slot.live && slot.dirty != 0 {
+                        let node = NodeId {
+                            index, slot.generation, self.identity
+                        }
+                        changes.push(NodeChange {
+                                node, slot.dirty
+                            }
+                            ,
+                        )
+                    }
+                    slot.dirty = 0
+                    slot.queued = false
+                    self.nodes.set(index, slot)
+                }
+                None => {
+                }
+            }
+        }
+        ret changes
+    }
+
+    /// Consumes only this root's work. Other windows keep their queued changes.
+    pub fn take_changes_for(self: mut Self&, root: NodeId) -> Vec[NodeChange] {
+        let pending = self.pending
+        let mut remaining = Vec[usize]::new()
+        let mut changes = Vec[NodeChange]::new()
+        for index in pending {
+            match self.nodes.get(index) {
+                Some(current) => {
+                    let node = NodeId { index, current.generation, self.identity }
+                    if current.live && self.path(root, node).is_none() {
+                        remaining.push(index)
+                        continue
+                    }
+                    let mut slot = current
+                    if slot.live && slot.dirty != 0 {
+                        changes.push(NodeChange { node, slot.dirty })
+                    }
+                    slot.dirty = 0
+                    slot.queued = false
+                    self.nodes.set(index, slot)
+                }
+                None => {
+                }
+            }
+        }
+        self.pending = remaining
+        ret changes
+    }
+
+    pub fn has_pending_for(self: Self&, root: NodeId) -> bool {
+        for index in self.pending {
+            match self.nodes.get(index) {
+                Some(slot) => {
+                    if slot.live && slot.dirty != 0 &&
+                    self.path(root, NodeId { index, slot.generation, self.identity }).is_some() {
+                        ret true
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        ret false
+    }
+
+    /// Detach only this subtree; keys in every unrelated branch remain valid.
+    pub fn unmount(self: mut Self&, node: NodeId) -> bool {
+        if !self.contains(node) {
+            ret false
+        }
+        match self.parent(node) {
+            Some(parent) => {
+                match self.nodes.get(parent.slot) {
+                    Some(current) => {
+                        let mut slot = current
+                        let mut children = Vec[NodeId]::new()
+                        for child in slot.children {
+                            if !child.same(node) {
+                                children.push(child)
+                            }
+                        }
+                        let _ordered = self.set_children(parent, children)
+                        let _marked = self.mark(parent, dirty_structure() | dirty_layout() |
+                            dirty_hit_test() | dirty_paint(),)
+                    }
+                    None => {
+                    }
+                }
+            }
+            None => {
+            }
+        }
+        self.release_subtree(node)
+        ret true
+    }
+
+    fn release_subtree(self: mut Self&, node: NodeId) ->() {
+        for child in self.children(node) {
+            self.release_subtree(child)
+        }
+        match self.nodes.get(node.slot) {
+            Some(current) => {
+                self.index_identifier(node, current.widget.id(), false)
+                let dead = NodeSlot {
+                    current.generation, false, Option[NodeId]::None, 0,
+                    Vec[NodeId]::new(), Widget::spacer(0.0), Style::default(), Rect::new(0.0, 0.0, 0.0, 0.0), 0, current.queued
+                }
+                self.nodes.set(node.slot, dead)
+                self.live_nodes -= 1
+                self.free.push(node.slot)
+            }
+            None => {
+            }
+        }
+        ret()
+    }
+
+    pub fn len(self: Self&) -> usize {
+        ret self.live_nodes
+    }
+    pub fn capacity(self: Self&) -> usize {
+        ret self.nodes.len()
+    }
+    pub fn property_updates(self: Self&) -> u64 {
+        ret self.property_updates
+    }
+    pub fn pending_count(self: Self&) -> usize {
+        ret self.pending.len()
+    }
+}

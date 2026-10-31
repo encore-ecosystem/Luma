@@ -1,0 +1,209 @@
+//! File-loading regressions, independent of a window or renderer.
+
+import core::fmt::Debug
+import core::result::Result
+import luma::css::imports::{load_css_file, memory_css_source}
+import std::io::println
+import std::os::{mkdir_all, write_file}
+
+fn expect_error(path: str, expected: str) -> bool {
+    match load_css_file(path) {
+        Result::Err(message) => {
+            if message.contains(expected) {
+                ret true
+            }
+            println(message)
+        }
+        Result::Ok(_) => {
+            println("expected import failure: " + path)
+        }
+    }
+    ret false
+}
+
+fn main() -> u32 {
+    let root = "target/css-import-loader/"
+    mkdir_all(root + "nested")
+    write_file(root + "shared.css", ".shared { color: #112233; }")
+    write_file(root + "nested/child.css", "@import '../shared.css';\n.child { gap: 2px; }")
+    write_file(root + "main.css", "/* @import 'missing.css'; */\n@IMPORT url(\"nested/child.css\");\n@import url(shared.css);\n.last { color: #abcdef; }")
+    let source = match load_css_file(root + "main.css") {
+        Result::Ok(value) => value
+        Result::Err(message) => {
+            println(message) ret 1
+        }
+    }
+    if source != "/* @import 'missing.css'; */\n.shared { color: #112233; }\n\n.child { gap: 2px; }\n\n.shared { color: #112233; }\n\n.last { color: #abcdef; }" {
+        println(source) ret 2
+    }
+
+    write_file(root + "empty.css", "")
+    write_file(root + "main.css", "@import /* trivia */ url( /* path */ 'empty.css' /* end */ );\n@import 'sh\\61 red.css';")
+    match load_css_file(root + "main.css") {
+        Result::Ok(value) => {
+            if !value.contains(".shared") {
+                ret 3
+            }
+        }
+        Result::Err(message) => {
+            println(message) ret 4
+        }
+    }
+    write_file(root + "space name.css", ".space { width: 3px; }")
+    write_file(root + "кавычка'имя.css", ".unicode { width: 4px; }")
+    write_file(root + "main.css", "@import url(space\\ name.css); @import 'кавычка\\'имя.css';")
+    match load_css_file(root + "main.css") {
+        Result::Ok(value) => {
+            if !value.contains(".space") || !value.contains(".unicode") {
+                ret 5
+            }
+        }
+        Result::Err(message) => {
+            println(message) ret 6
+        }
+    }
+
+    write_file(root + "main.css", "@import 'nested/missing.css';")
+    if !expect_error(root + "main.css", "main.css -> ") || !expect_error(root + "main.css", "missing.css") {
+        ret 7
+    }
+    write_file(root + "main.css", "@import './nested/../main.css';")
+    if !expect_error(root + "main.css", "cyclic CSS import") {
+        ret 8
+    }
+    write_file(root + "main.css", "@import 'nested/child.css';")
+    write_file(root + "nested/child.css", "@import '../main.css';")
+    if !expect_error(root + "main.css", "child.css -> ") {
+        ret 9
+    }
+    write_file(root + "main.css", ".before {} @import 'shared.css';")
+    if !expect_error(root + "main.css", "must precede") {
+        ret 10
+    }
+    write_file(root + "main.css", "@import 'shared.css' screen;")
+    if !expect_error(root + "main.css", "not supported") {
+        ret 11
+    }
+    write_file(root + "main.css", "@import 'shared.css' layer(theme);")
+    if !expect_error(root + "main.css", "not supported") {
+        ret 12
+    }
+    write_file(root + "main.css", "@import 'https://example.com/style.css';")
+    if !expect_error(root + "main.css", "local filesystem") {
+        ret 13
+    }
+    write_file(root + "main.css", "@import '';")
+    if !expect_error(root + "main.css", "empty import path") {
+        ret 14
+    }
+    write_file(root + "main.css", "@import 'shared.css'")
+    if !expect_error(root + "main.css", "expected ';'") {
+        ret 15
+    }
+    write_file(root + "main.css", "@import 'shared.css\\'")
+    if !expect_error(root + "main.css", "unclosed import path") {
+        ret 16
+    }
+    write_file(root + "main.css", "@import 'nested/child.css';")
+    write_file(root + "nested/child.css", ".broken { color: red;")
+    if !expect_error(root + "main.css", "unclosed CSS rule") {
+        ret 17
+    }
+    write_file(root + "nested/child.css", "/* unfinished")
+    if !expect_error(root + "main.css", "unclosed CSS comment") {
+        ret 18
+    }
+    write_file(root + "nested/child.css", ".quoted { content: \"escaped\\\"")
+    if !expect_error(root + "main.css", "unclosed CSS string") {
+        ret 19
+    }
+
+    let literal = "/* @import 'missing.css'; */ .quoted { content: '@import \\\"missing.css\\\";'; }"
+    match memory_css_source(literal, true) {
+        Result::Ok(value) => {
+            if value != literal {
+                ret 20
+            }
+        }
+        Result::Err(message) => {
+            println(message) ret 21
+        }
+    }
+    match memory_css_source("@import 'missing.css'; .after { color: red; }", true) {
+        Result::Err(message) => {
+            if !message.contains("from_file") {
+                ret 22
+            }
+        }
+        Result::Ok(_) => {
+            ret 23
+        }
+    }
+    match memory_css_source("@import 'missing.css'; .after { color: red; }", false) {
+        Result::Ok(value) => {
+            if value != " .after { color: red; }" {
+                ret 24
+            }
+        }
+        Result::Err(message) => {
+            println(message) ret 25
+        }
+    }
+
+    let mut index = 0_usize
+    while index < 64 {
+        write_file(root + "depth-" + index.fmt() + ".css", "@import 'depth-" +(index + 1).fmt() + ".css';")
+        index += 1
+    }
+    write_file(root + "depth-63.css", ".deep { width: 64px; }")
+    match load_css_file(root + "depth-0.css") {
+        Result::Ok(value) => {
+            if !value.contains(".deep") {
+                ret 26
+            }
+        }
+        Result::Err(message) => {
+            println(message) ret 27
+        }
+    }
+    write_file(root + "depth-63.css", "@import 'depth-64.css';")
+    write_file(root + "depth-64.css", ".too-deep {}")
+    if !expect_error(root + "depth-0.css", "depth exceeds 64") {
+        ret 28
+    }
+    write_file(root + "main.css", "@import; .after {}")
+    if !expect_error(root + "main.css", "expected a quoted path") {
+        ret 29
+    }
+    let value_import = ".value { background-image: url(@import.png); --text: @import; }"
+    write_file(root + "main.css", value_import)
+    match load_css_file(root + "main.css") {
+        Result::Ok(value) => {
+            if value != value_import {
+                ret 30
+            }
+        }
+        Result::Err(message) => {
+            println(message) ret 30
+        }
+    }
+    match memory_css_source(value_import, true) {
+        Result::Ok(value) => {
+            if value != value_import {
+                ret 33
+            }
+        }
+        Result::Err(message) => {
+            println(message) ret 33
+        }
+    }
+    if !expect_error(root + "nested", "cannot read stylesheet") {
+        ret 31
+    }
+    write_file(root + "main.css", "@import 'shared.css' supports(display: flex);")
+    if !expect_error(root + "main.css", "not supported") {
+        ret 32
+    }
+    println("Local CSS imports: PASS")
+    ret 0
+}

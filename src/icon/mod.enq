@@ -4,6 +4,295 @@ import core::option::Option
 import core::vec::Vec
 import refrain::svg::SvgDocument
 import std::os::{file_exists, read_dir, read_file}
+import std::thread::JoinHandle
+import std::time::sleep_ms
+
+struct LoadedIcon {
+    path: str
+    document: SvgDocument
+}
+
+struct IconBatch {
+    paths: Vec[str]
+    task: JoinHandle[Vec[LoadedIcon]]
+}
+
+/// Bounded background SVG loading. Request only the currently needed assets;
+/// obsolete queued work is discarded, in-flight work completes into the cache.
+pub struct IconLoader {
+    requested: Vec[IconAsset]
+    pending: Vec[IconBatch]
+    cache: Vec[LoadedIcon]
+    revision: u64
+    lookup: IconLookup
+}
+
+// Bounded chained index. Hash collisions are resolved with exact path checks.
+struct IconLookup {
+    heads: Vec[usize]
+    links: Vec[usize]
+}
+
+fn icon_bucket(path: str) -> usize {
+    let mut hash = 1469598103934665603_u64
+    for index in 0_usize..path.len() {
+        hash =(hash ^ path.byte_at(index) as u64) * 1099511628211_u64
+    }
+    ret(hash % 512_u64) as usize
+}
+
+fn retain_icon_results(cache: Vec[LoadedIcon], ready: Vec[LoadedIcon]) -> Vec[LoadedIcon] {
+    let mut result = Vec[LoadedIcon]::new()
+    let total = cache.len() + ready.len()
+    let start = if total > 512 {
+        total - 512
+    } else {
+        0_usize
+    }
+    for index in start..total {
+        let item = if index < cache.len() {
+            cache.get(index)
+        } else {
+            ready.get(index - cache.len())
+        }
+        match item {
+            Some(value) => result.push(value) None => {
+            }
+        }
+    }
+    ret result
+}
+
+impl for IconLookup {
+    pub fn new(cache: Vec[LoadedIcon]) -> Self {
+        let mut heads = Vec[usize]::new()
+        let mut links = Vec[usize]::new()
+        for _index in 0_usize..512_usize {
+            heads.push(0)
+        }
+        for item in cache {
+            let bucket = icon_bucket(item.path)
+            links.push(heads.get(bucket).unwrap_or(0))
+            heads.set(bucket, links.len())
+        }
+        ret Self {
+            heads, links
+        }
+    }
+    pub fn find(self: Self, cache: Vec[LoadedIcon], path: str) -> Option[SvgDocument] {
+        let mut cursor = self.heads.get(icon_bucket(path)).unwrap_or(0)
+        while cursor > 0 {
+            match cache.get(cursor - 1) {
+                Some(item) => {
+                    if item.path == path {
+                        ret Option[SvgDocument]::Some(item.document)
+                    }
+                }
+                None => {
+                }
+            }
+            cursor = self.links.get(cursor - 1).unwrap_or(0)
+        }
+        ret Option[SvgDocument]::None
+    }
+}
+
+fn load_icon_batch(paths: sending Vec[str]) -> sending Vec[LoadedIcon] {
+    let mut loaded = Vec[LoadedIcon]::new()
+    for path in paths {
+        loaded.push(LoadedIcon {
+                path, SvgDocument::parse(read_file(path))
+            }
+            ,
+        )
+    }
+    ret loaded
+}
+
+impl for IconLoader {
+    pub fn new() -> Self {
+        ret Self {
+            Vec[IconAsset]::new(), Vec[IconBatch]::new(), Vec[LoadedIcon]::new(), 0_u64,
+            IconLookup::new(Vec[LoadedIcon]::new())
+        }
+    }
+    /// Replaces the wanted set without waiting for workers or touching disk.
+    /// At most 512 assets can be wanted at once; larger views must virtualize.
+    pub fn request(self: Self, assets: Vec[IconAsset]) -> Self {
+        let mut wanted = Vec[IconAsset]::new()
+        for asset in assets {
+            if wanted.len() == 512_usize {
+                break
+            }
+            wanted.push(asset)
+        }
+        let next = Self {
+            wanted, self.pending, self.cache, self.revision, self.lookup
+        }
+        ret next.poll()
+    }
+    /// Collects only completed batches and schedules at most two workers.
+    pub fn poll(self: Self) -> Self {
+        let mut completed = false
+        for batch in self.pending {
+            completed = completed || batch.task.is_finished()
+        }
+        // Normal poll: no result, no allocation or copy of parsed SVG data.
+        if !completed && self.pending.len() == 2 {
+            ret self
+        }
+        if !completed && self.pending.len() == 0 && self.cache.len() <= 512 {
+            let mut satisfied = true
+            for asset in self.requested {
+                if self.document(asset.path()).is_none() {
+                    satisfied = false
+                    break
+                }
+            }
+            if satisfied {
+                ret self
+            }
+        }
+        let mut ready_items = Vec[LoadedIcon]::new()
+        let mut pending = Vec[IconBatch]::new()
+        let mut revision = self.revision
+        for batch in self.pending {
+            if batch.task.is_finished() {
+                let ready = batch.task.join()
+                for item in ready {
+                    ready_items.push(item)
+                }
+                revision += 1_u64
+            } else {
+                pending.push(batch)
+            }
+        }
+        let retained = if ready_items.len() == 0 && self.cache.len() <= 512 {
+            self.cache
+        } else {
+            retain_icon_results(self.cache, ready_items)
+        }
+        let lookup = if ready_items.len() == 0 && self.cache.len() <= 512 {
+            self.lookup
+        } else {
+            IconLookup::new(retained)
+        }
+        while pending.len() < 2_usize {
+            let mut paths = Vec[str]::new()
+            let mut keys = Vec[str]::new()
+            for asset in self.requested {
+                let path = asset.path()
+                let mut known = lookup.find(retained, path).is_some()
+                for batch in pending {
+                    for key in batch.paths {
+                        if key == path {
+                            known = true
+                        }
+                    }
+                }
+                for key in keys {
+                    if key == path {
+                        known = true
+                    }
+                }
+                if !known {
+                    paths.push(path)
+                    keys.push(path)
+                    if paths.len() == 16_usize {
+                        break
+                    }
+                }
+            }
+            if paths.len() == 0_usize {
+                break
+            }
+            let task = spawn load_icon_batch(paths)
+            pending.push(IconBatch {
+                    keys, task
+                }
+                ,
+            )
+        }
+        ret Self {
+            self.requested, pending, retained, revision, lookup
+        }
+    }
+    /// None means pending/not requested; an invalid document represents a cached failure.
+    pub fn document(self: Self, path: str) -> Option[SvgDocument] {
+        ret self.lookup.find(self.cache, path)
+    }
+    pub fn busy(self: Self) -> bool {
+        ret self.pending.len() > 0_usize
+    }
+    pub fn revision(self: Self) -> u64 {
+        ret self.revision
+    }
+}
+
+fn delayed_icon_fixture() -> sending Vec[LoadedIcon] {
+    let _waited = sleep_ms(250_u64)
+    ret Vec[LoadedIcon]::new()
+}
+
+#attr(test)
+fn icon_loader_poll_never_joins_running_work() -> bool {
+    let mut pending = Vec[IconBatch]::new()
+    pending.push(IconBatch {
+            Vec[str]::new(), spawn delayed_icon_fixture()
+        }
+        ,
+    )
+    let loader = IconLoader {
+        Vec[IconAsset]::new(), pending, Vec[LoadedIcon]::new(), 0_u64, IconLookup::new(Vec[LoadedIcon]::new())
+    }
+    let next = loader.poll()
+    // A blocking join here would instead return idle with revision == 1.
+    let mut changed = Vec[IconAsset]::new()
+    changed.push(IconAsset::new("new", "assets/icons/check.svg"))
+    let retargeted = next.request(changed)
+    ret next.busy() && next.revision() == 0_u64 &&
+    retargeted.requested.len() == 1_usize && retargeted.pending.len() <= 2_usize
+}
+
+#attr(test)
+fn icon_loader_caches_success_failure_and_deduplicates() -> bool {
+    let mut wanted = Vec[IconAsset]::new()
+    wanted.push(IconAsset::new("check", "assets/icons/check.svg"))
+    wanted.push(IconAsset::new("alias", "assets/icons/check.svg"))
+    wanted.push(IconAsset::new("missing", "assets/icons/__missing_fixture__.svg"))
+    let mut loader = IconLoader::new().request(wanted)
+    let mut attempts = 0_usize
+    while loader.busy() && attempts < 100_usize {
+        let _waited = sleep_ms(5_u64)
+        loader = loader.poll()
+        attempts += 1_usize
+    }
+    let valid = loader.document("assets/icons/check.svg").unwrap_or(SvgDocument::empty())
+    let invalid = loader.document("assets/icons/__missing_fixture__.svg")
+    let revision = loader.revision()
+    let cached = loader.request(wanted)
+    ret !cached.busy() && cached.cache.len() == 2_usize && valid.valid() &&
+    invalid.is_some() && !invalid.unwrap_or(SvgDocument::empty()).valid() &&
+    cached.revision() == revision
+}
+
+#attr(test)
+fn icon_loader_bounds_cache() -> bool {
+    let mut cache = Vec[LoadedIcon]::new()
+    for index in 0_usize..600_usize {
+        cache.push(LoadedIcon {
+                f "fixture-{index}", SvgDocument::empty()
+            }
+            ,
+        )
+    }
+    let loader = IconLoader {
+        Vec[IconAsset]::new(), Vec[IconBatch]::new(), cache, 0_u64, IconLookup::new(cache)
+    }
+    .poll()
+    ret loader.cache.len() == 512_usize && loader.document("fixture-0").is_none() &&
+    loader.document("fixture-599").is_some() && !loader.busy()
+}
 
 pub struct IconAsset {
     name: str

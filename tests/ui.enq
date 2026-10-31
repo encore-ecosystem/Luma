@@ -235,9 +235,11 @@ fn bundled_fonts_contract() -> bool {
 
 fn font_directory_filter_contract() -> bool {
     let mut fonts = FontManager::new()
-    let loaded = fonts.load_directory("demo/fonts")
+    let loaded = fonts.load_directory("assets/fonts/Inter")
     ret loaded == 2_usize && fonts.faces().len() == 2_usize &&
-    fonts.find("README.md").is_none()
+    fonts.find("Inter-VariableFont_opsz,wght.ttf").is_some() &&
+    fonts.find("Inter-Italic-VariableFont_opsz,wght.ttf").is_some() &&
+    fonts.find("OFL.txt").is_none()
 }
 
 fn button_animation_contract() -> bool {
@@ -552,8 +554,8 @@ fn css_flex_contract() -> bool {
     match layout.children().get(1_usize) {
         Some(second) => {
             ret second.bounds().x() == 110.0_f32 && second.bounds().width() == 100.0_f32 &&
-            none.grow() == 0.0_f32 && none.shrink() == 0.0_f32 && none.basis() == - 1.0_f32 &&
-            auto.grow() == 1.0_f32 && auto.shrink() == 1.0_f32 && auto.basis() == - 1.0_f32 &&
+            none.grow() == 0.0_f32 && none.shrink() == 0.0_f32 && none.basis() == - 2.0_f32 &&
+            auto.grow() == 1.0_f32 && auto.shrink() == 1.0_f32 && auto.basis() == - 2.0_f32 &&
             triple.grow() == 2.0_f32 && triple.shrink() == 0.5_f32 && triple.basis() == 40.0_f32 &&
             pair.grow() == 2.0_f32 && pair.shrink() == 1.0_f32 && pair.basis() == 30.0_f32
         }

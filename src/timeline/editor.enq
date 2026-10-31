@@ -1,0 +1,561 @@
+//! Retained timeline interaction. Hosts apply returned edits transactionally.
+import core::option::Option
+import mod::model::{TimelineDocument, TimelineItem, TimelinePlacement, TimelineView, timeline_snap}
+import refrain::application::{Event, event_pointer_down, event_pointer_up, event_pointer_move, event_scroll, event_key_down, event_focus_lost, key_escape, key_delete, key_left, key_right, key_home, key_end, key_enter, key_tab, cursor_default, cursor_resize_horizontal, cursor_move, cursor_pointer}
+import refrain::display::{DisplayList, DisplayPoint}
+import refrain::geometry::{Rect, Point}
+import refrain::style::Style
+import refrain::widget::Widget
+pub enum TimelineEdit {
+    Ignored
+    View
+    Select(u64)
+    Seek(f64)
+    Begin(u64)
+    Preview(TimelinePlacement)
+    Place(TimelinePlacement)
+    Commit
+    Cancel
+    Remove(u64)
+    TogglePlayback
+}
+pub struct TimelineEditor {
+    view: TimelineView
+    selected: u64
+    hovered: u64
+    focused: bool
+    disabled: bool
+    gesture: u32
+    original: Option[TimelineItem]
+    grab: f64
+    mode: u32
+    hover_cursor: u32
+    pointer_x: f32
+}
+fn clamp(value: f64, low: f64, high: f64) -> f64 {
+    ret if value < low {
+        low
+    } elif value > high {
+        high
+    } else {
+        value
+    }
+}
+fn abs(value: f32) -> f32 {
+    ret if value < 0_f32 {
+        - value
+    } else {
+        value
+    }
+}
+
+impl for TimelineEditor {
+    pub fn new() -> Self {
+        ret Self {
+            TimelineView::new(), 0_u64, 0_u64, false, false, 0_u32, Option[TimelineItem]::None, 0_f64, 0_u32, cursor_default(), 0_f32
+        }
+    }
+    pub fn view(self: Self) -> TimelineView {
+        ret self.view
+    }
+    pub fn set_view(self: mut Self, view: TimelineView) ->() {
+        self.view = view
+    }
+    pub fn focus(self: mut Self, focused: bool) ->() {
+        self.focused = focused
+    }
+    pub fn select(self: mut Self, id: u64) ->() {
+        self.selected = id
+    }
+    pub fn selected(self: Self) -> u64 {
+        ret self.selected
+    }
+    pub fn active(self: Self) -> bool {
+        ret self.gesture != 0_u32
+    }
+    pub fn set_disabled(self: mut Self, disabled: bool) -> TimelineEdit {
+        self.disabled = disabled
+        if disabled {
+            self.focused = false self.hover_cursor = cursor_default()
+        }
+        if disabled && self.active() {
+            let editing = self.gesture == 2_u32 self.reset() ret if editing {
+                TimelineEdit::Cancel
+            } else {
+                TimelineEdit::View
+            }
+        }
+        ret TimelineEdit::View
+    }
+    pub fn reset(self: mut Self) ->() {
+        self.gesture = 0_u32 self.original = Option[TimelineItem]::None
+    }
+    /// Feed this cursor to the owning window after processing input.
+    pub fn cursor(self: Self) -> u32 {
+        if self.disabled {
+            ret cursor_default()
+        }
+        if self.gesture == 2_u32 {
+            ret if self.mode == 0_u32 {
+                cursor_move()
+            } else {
+                cursor_resize_horizontal()
+            }
+        }
+        if self.gesture == 1_u32 {
+            ret cursor_pointer()
+        }
+        if self.gesture == 3_u32 {
+            ret cursor_move()
+        }
+        ret self.hover_cursor
+    }
+    pub fn widget(self: Self, id: str) -> Widget {
+        ret Widget::canvas(id).with_focus(self.focused).with_disabled(self.disabled).with_attribute("tabindex", "0").with_attribute("data-luma-focusable", "true").with_attribute("role", "group").with_attribute("aria-label", "Timeline. Tab selects clips and keys. Arrows seek. Control and arrows move the selected item. Delete removes it. Space plays or pauses. Tab leaves after the last item.")
+    }
+    pub fn item_bounds(self: Self, item: TimelineItem, document: TimelineDocument, bounds: Rect) -> Rect {
+        let mut row = document.tracks.len()
+        for i in 0_usize..document.tracks.len() {
+            if document.tracks.get_unchecked_borrowed(i).id == item.track {
+                row = i break
+            }
+        }
+        if row < self.view.first_track || row == document.tracks.len() {
+            ret Rect::new(0_f32, 0_f32, 0_f32, 0_f32)
+        }
+        let x = bounds.x() + self.view.project(item.start, bounds.width())
+        let end = bounds.x() + self.view.project(item.end, bounds.width())
+        let y = bounds.y() + self.view.ruler_height +((row - self.view.first_track) as f32) * self.view.row_height + 4_f32
+        ret Rect::new(if item.key {
+                x - 6_f32
+            } else {
+                x
+            }
+            , y, if item.key {
+                12_f32
+            } elif end - x > 3_f32 {
+                end - x
+            } else {
+                3_f32
+            }
+            , self.view.row_height - 8_f32,)
+    }
+    fn hit(self: Self, document: TimelineDocument, at: Point, bounds: Rect) -> Option[TimelineItem] {
+        if at.x() < bounds.x() + self.view.label_width || at.y() < bounds.y() + self.view.ruler_height || !bounds.contains(at) {
+            ret Option::None
+        }
+        let mut found = Option[TimelineItem]::None
+        // Later overlapping items paint last and win consistently.
+        for item in document.items {
+            if self.item_bounds(item, document, bounds).contains(at) {
+                if item.id == self.selected {
+                    ret Option[TimelineItem]::Some(item)
+                }
+                found = Option[TimelineItem]::Some(item)
+            }
+        }
+        ret found
+    }
+    fn seek(self: Self, x: f32, document: TimelineDocument, bounds: Rect) -> f64 {
+        let time = clamp(self.view.time(x - bounds.x(), bounds.width()), 0_f64, document.duration)
+        ret if self.view.snapping {
+            clamp(timeline_snap(time, document.frame_rate), 0_f64, document.duration)
+        } else {
+            time
+        }
+    }
+    pub fn input(self: mut Self, event: Event, document: TimelineDocument, bounds: Rect, playhead: f64) -> TimelineEdit {
+        let at = Point::new(event.x(), event.y())
+        if event.kind() == event_focus_lost() {
+            let editing = self.gesture == 2_u32 self.reset() self.focused = false ret if editing {
+                TimelineEdit::Cancel
+            } else {
+                TimelineEdit::View
+            }
+        }
+        if self.disabled {
+            ret TimelineEdit::Ignored
+        }
+        if event.kind() == event_key_down() && self.focused {
+            if event.key() == key_escape() && self.active() {
+                let editing = self.gesture == 2_u32 self.reset() ret if editing {
+                    TimelineEdit::Cancel
+                } else {
+                    TimelineEdit::View
+                }
+            }
+            if event.key() == 32_u32 && !event.control() {
+                ret TimelineEdit::TogglePlayback
+            }
+            if event.key() == key_tab() && document.items.len() > 0_usize {
+                let mut next = if event.shift() {
+                    document.items.len() - 1_usize
+                } else {
+                    0_usize
+                }
+                for i in 0_usize..document.items.len() {
+                    if document.items.get_unchecked_borrowed(i).id == self.selected {
+                        if (event.shift() && i == 0_usize) ||(!event.shift() && i + 1_usize == document.items.len()) {
+                            self.focused = false ret TimelineEdit::Ignored
+                        }
+                        next =(i + if event.shift() {
+                                document.items.len() - 1_usize
+                            } else {
+                                1_usize
+                            }
+                        ) % document.items.len() break
+                    }
+                }
+                self.selected = document.items.get_unchecked_borrowed(next).id ret TimelineEdit::Select(self.selected)
+            }
+            let mut selected = Option[TimelineItem]::None for item in document.items {
+                if item.id == self.selected {
+                    selected = Option[TimelineItem]::Some(item) break
+                }
+            }
+            if event.key() == key_delete() {
+                match selected {
+                    Some(item) => {
+                        if document.editable(item) {
+                            ret TimelineEdit::Remove(item.id)
+                        }
+                    }
+                    None => {
+                    }
+                }
+                ret TimelineEdit::View
+            }
+            if event.key() == key_enter() {
+                match selected {
+                    Some(item) => {
+                        ret TimelineEdit::Seek(item.start)
+                    }
+                    None => {
+                    }
+                }
+            }
+            if event.key() == key_home() {
+                ret TimelineEdit::Seek(0_f64)
+            }
+            if event.key() == key_end() {
+                ret TimelineEdit::Seek(document.duration)
+            }
+            if event.key() == key_left() || event.key() == key_right() {
+                let step =(if event.key() == key_left() {
+                        - 1_f64
+                    } else {
+                        1_f64
+                    }
+                ) *(if event.shift() {
+                        10_f64
+                    } else {
+                        1_f64
+                    }
+                ) / document.frame_rate
+                if event.control() {
+                    match selected {
+                        Some(item) => {
+                            match document.placement(item, item.start + step, item.track, 0_u32, self.view.snapping) {
+                                Ok(placement) => {
+                                    ret TimelineEdit::Place(placement)
+                                }
+                                Err(_) => {
+                                }
+                            }
+                        }
+                        None => {
+                        }
+                    }
+                    ret TimelineEdit::View
+                }
+                ret TimelineEdit::Seek(clamp(playhead + step, 0_f64, document.duration))
+            }
+            ret TimelineEdit::Ignored
+        }
+        if event.kind() == event_scroll() && bounds.contains(at) {
+            if event.control() {
+                self.view.zoom(if event.wheel_y() > 0_f32 {
+                        0.8_f64
+                    } else {
+                        1.25_f64
+                    }
+                    , at.x() - bounds.x(), bounds.width(), document.duration,)
+            } elif event.shift() {
+                self.view.pan((event.wheel_y() as f64) * self.view.span * 0.08_f64, document.duration)
+            } else {
+                if event.wheel_y() > 0_f32 && self.view.first_track > 0_usize {
+                    self.view.first_track -= 1_usize
+                } elif event.wheel_y() < 0_f32 && self.view.first_track + 1_usize < document.tracks.len() {
+                    self.view.first_track += 1_usize
+                }
+            }
+            ret TimelineEdit::View
+        }
+        if event.kind() == event_pointer_down() {
+            if !bounds.contains(at) {
+                self.focused = false ret TimelineEdit::Ignored
+            }
+            self.focused = true self.pointer_x = at.x()
+            if (event.buttons() & 4_u32) != 0_u32 {
+                self.gesture = 3_u32 ret TimelineEdit::View
+            }
+            if !event.primary_down() {
+                ret TimelineEdit::View
+            }
+            if at.x() < bounds.x() + self.view.label_width {
+                ret TimelineEdit::View
+            }
+            if at.y() < bounds.y() + self.view.ruler_height {
+                self.gesture = 1_u32 ret TimelineEdit::Seek(self.seek(at.x(), document, bounds))
+            }
+            match self.hit(document, at, bounds) {
+                Some(item) => {
+                    self.selected = item.id
+                    if !document.editable(item) {
+                        ret TimelineEdit::Select(item.id)
+                    }
+                    let bar = self.item_bounds(item, document, bounds)
+                    self.grab = self.view.time(at.x() - bounds.x(), bounds.width()) - item.start
+                    // Low bits carry movement/trim mode without referencing asset policy.
+                    self.gesture = 2_u32 self.mode = 0_u32 self.original = Option[TimelineItem]::Some(item)
+                    if !item.key && bar.width() > 20_f32 {
+                        if abs(at.x() - bar.x()) < 6_f32 {
+                            self.mode = 1_u32
+                        } elif abs(at.x() - bar.right()) < 6_f32 {
+                            self.mode = 2_u32
+                        }
+                    }
+                    ret TimelineEdit::Begin(item.id)
+                }
+                None => {
+                    self.selected = 0_u64 self.gesture = 1_u32 ret TimelineEdit::Seek(self.seek(at.x(), document, bounds))
+                }
+            }
+        }
+        if event.kind() == event_pointer_move() {
+            if self.gesture == 3_u32 {
+                let delta =((self.pointer_x - at.x()) as f64) /((bounds.width() - self.view.label_width) as f64) * self.view.span self.view.pan(delta, document.duration) self.pointer_x = at.x() ret TimelineEdit::View
+            }
+            if self.gesture == 1_u32 {
+                ret TimelineEdit::Seek(self.seek(at.x(), document, bounds))
+            }
+            if self.gesture == 2_u32 {
+                let item = match self.original {
+                    Some(item) => item None => {
+                        self.reset() ret TimelineEdit::Cancel
+                    }
+                }
+                let mut time = self.view.time(at.x() - bounds.x(), bounds.width()) - self.grab
+                if self.mode != 0_u32 {
+                    time = self.view.time(at.x() - bounds.x(), bounds.width())
+                }
+                let row = self.view.row(at.y() - bounds.y(), document.tracks.len())
+                let mut target = item.track
+                if row < document.tracks.len() {
+                    let track = document.tracks.get_unchecked_borrowed(row) if !track.locked {
+                        target = track.id
+                    }
+                }
+                match document.placement(item, time, target, self.mode, self.view.snapping) {
+                    Ok(placement) => {
+                        ret TimelineEdit::Preview(placement)
+                    }
+                    Err(_) => {
+                        ret TimelineEdit::View
+                    }
+                }
+            }
+            let mut next = 0_u64 let mut cursor = cursor_default()
+            match self.hit(document, at, bounds) {
+                Some(item) => {
+                    next = item.id
+                    if document.editable(item) {
+                        let bar = self.item_bounds(item, document, bounds)
+                        cursor = if !item.key && bar.width() > 20_f32 &&(abs(at.x() - bar.x()) < 6_f32 || abs(at.x() - bar.right()) < 6_f32) {
+                            cursor_resize_horizontal()
+                        } else {
+                            cursor_move()
+                        }
+                    }
+                }
+                None => {
+                    if bounds.contains(at) && at.x() >= bounds.x() + self.view.label_width {
+                        cursor = cursor_pointer()
+                    }
+                }
+            }
+            let changed = next != self.hovered || cursor != self.hover_cursor
+            self.hovered = next self.hover_cursor = cursor
+            if changed {
+                ret TimelineEdit::View
+            }
+        }
+        if event.kind() == event_pointer_up() && self.active() {
+            let editing = self.gesture == 2_u32 self.reset() ret if editing {
+                TimelineEdit::Commit
+            } else {
+                TimelineEdit::View
+            }
+        }
+        ret TimelineEdit::Ignored
+    }
+}
+
+impl for TimelineEditor {
+    /// Absolute logical coordinates match input; the host supplies theme tokens.
+    pub fn display(self: Self, document: TimelineDocument, bounds: Rect, playhead: f64, surface: Style, accent: Style, text: Style) -> DisplayList {
+        let mut paint = DisplayList::new()
+        let left = bounds.x() + self.view.label_width let top = bounds.y() + self.view.ruler_height
+        if bounds.width() <= self.view.label_width || bounds.height() <= self.view.ruler_height || self.view.span <= 0_f64 {
+            ret paint
+        }
+        paint.round_rect(bounds, 3_f32, surface.background(), true)
+        let grid = surface.border_color() let muted = text.with_foreground(surface.foreground()).with_font_size(10_f32)
+        let row_count =(((bounds.height() - self.view.ruler_height) / self.view.row_height) as usize) + 1_usize
+        for row in 0_usize..row_count {
+            let index = row + self.view.first_track if index >= document.tracks.len() {
+                break
+            }
+            let track = document.tracks.get_unchecked_borrowed(index)
+            let y = top +(row as f32) * self.view.row_height
+            paint.line(bounds.x(), y, bounds.right(), y, 1_f32, grid)
+            paint.clip(Rect::new(bounds.x() + 6_f32, y + 3_f32, self.view.label_width - 12_f32, self.view.row_height - 6_f32))
+            paint.styled_text(bounds.x() + 8_f32, y + 9_f32, track.label + if track.locked {
+                    " · locked"
+                } elif track.muted {
+                    " · muted"
+                } else {
+                    ""
+                }
+                , if track.locked || track.muted {
+                    muted
+                } else {
+                    text.with_font_size(11_f32)
+                }
+                ,
+            )
+            paint.clear_clip()
+        }
+        paint.line(left, bounds.y(), left, bounds.bottom(), 1_f32, grid)
+        paint.line(bounds.x(), top, bounds.right(), top, 1_f32, grid)
+        let mut decade = 1_f64
+        while self.view.span / decade > 10_f64 {
+            decade *= 10_f64
+        }
+        while self.view.span / decade < 1_f64 && decade > 0.000001_f64 {
+            decade /= 10_f64
+        }
+        let mut step = if self.view.span / decade > 5_f64 {
+            decade
+        } elif self.view.span / decade > 2_f64 {
+            decade / 2_f64
+        } else {
+            decade / 5_f64
+        }
+        if step < 1_f64 / document.frame_rate {
+            step = 1_f64 / document.frame_rate
+        }
+        let first =(((self.view.left / step) as u64) as f64) * step
+        for tick in 0_usize..64_usize {
+            let time = first +(tick as f64) * step
+            if time > self.view.left + self.view.span {
+                break
+            }
+            if time < self.view.left {
+                continue
+            }
+            let x = bounds.x() + self.view.project(time, bounds.width())
+            paint.line(x, top, x, bounds.bottom(), 1_f32, grid)
+            let label = if step < 1_f64 {
+                ((time * document.frame_rate + 0.5_f64) as u64).fmt() + "f"
+            } else {
+                ((time + 0.5_f64) as u64).fmt() + "s"
+            }
+            paint.clip(Rect::new(left, bounds.y(), bounds.right() - left, self.view.ruler_height))
+            paint.styled_text(x + 4_f32, bounds.y() + 7_f32, label, muted)
+            paint.clear_clip()
+        }
+        let area = Rect::new(left, top, bounds.right() - left, bounds.bottom() - top)
+        paint.clip(area)
+        for layer in 0_usize..2_usize {
+            for item in document.items {
+                if (item.id == self.selected) !=(layer == 1_usize) {
+                    continue
+                }
+                let bar = self.item_bounds(item, document, bounds)
+                if bar.width() <= 0_f32 || bar.height() <= 0_f32 || bar.right() < left || bar.x() > bounds.right() || bar.y() >= bounds.bottom() || bar.bottom() <= top {
+                    continue
+                }
+                let selected = item.id == self.selected let hovered = item.id == self.hovered
+                let track_muted = if !document.editable(item) {
+                    true
+                } else {
+                    let mut muted = false for row in document.tracks {
+                        if row.id == item.track {
+                            muted = row.muted break
+                        }
+                    }
+                    muted
+                }
+                let fill = if track_muted {
+                    surface.border_color()
+                } else {
+                    accent.background()
+                }
+                if item.key {
+                    let x = bar.x() + 6_f32 let y = bar.y() + bar.height() / 2_f32
+                    paint.path(vec![DisplayPoint::new(x, y - 6_f32), DisplayPoint::new(x + 6_f32, y), DisplayPoint::new(x, y + 6_f32), DisplayPoint::new(x - 6_f32, y), DisplayPoint::new(x, y - 6_f32)], if selected {
+                            2_f32
+                        } else {
+                            1_f32
+                        }
+                        , if selected || hovered {
+                            accent.foreground()
+                        } else {
+                            fill
+                        }
+                        , true,)
+                } else {
+                    paint.round_rect(bar, 3_f32, fill, true)
+                    if selected || hovered {
+                        paint.round_rect(bar, 3_f32, if selected {
+                                accent.foreground()
+                            } else {
+                                text.foreground()
+                            }
+                            , false,)
+                    }
+                    if selected || hovered {
+                        paint.line(bar.x() + 3_f32, bar.y() + 5_f32, bar.x() + 3_f32, bar.bottom() - 5_f32, 1_f32, text.foreground())
+                        paint.line(bar.right() - 3_f32, bar.y() + 5_f32, bar.right() - 3_f32, bar.bottom() - 5_f32, 1_f32, text.foreground())
+                    }
+                    let x = if bar.x() < left {
+                        left
+                    } else {
+                        bar.x()
+                    }
+                    let right = if bar.right() > bounds.right() {
+                        bounds.right()
+                    } else {
+                        bar.right()
+                    }
+                    if right - x > 16_f32 {
+                        paint.clip(Rect::new(x + 7_f32, bar.y() + 2_f32, right - x - 14_f32, bar.height() - 4_f32))
+                        paint.styled_text(x + 8_f32, bar.y() + 6_f32, item.label, text.with_font_size(11_f32))
+                        paint.clip(area)
+                    }
+                }
+            }
+        }
+        paint.clear_clip()
+        if playhead >= self.view.left && playhead <= self.view.left + self.view.span {
+            let x = bounds.x() + self.view.project(playhead, bounds.width())
+            paint.line(x, bounds.y() + 3_f32, x, bounds.bottom(), 1_f32, accent.foreground())
+            paint.round_rect(Rect::new(x - 4_f32, bounds.y() + 1_f32, 8_f32, 8_f32), 2_f32, accent.foreground(), true)
+        }
+        if self.focused {
+            paint.round_rect(bounds, 3_f32, accent.foreground(), false)
+        }
+        ret paint
+    }
+}

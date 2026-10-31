@@ -1,0 +1,54 @@
+//! Pointer coordinates, selection, clipboard and auto layout use real input geometry.
+import luma::{Event, Rect, RendererKind, StyleSheet, TextEditor, Widget, Window, format_decimal, layout_widget, event_pointer_down, event_pointer_up}
+fn main() -> u32 {
+    let window = Window::create_with_renderer("Numeric input regression", 640, 300, RendererKind::Software)
+    if !window.available() {
+        ret 1
+    }
+    let sheet = StyleSheet::parse("#root { flex-direction: column; } #field { height: 26px; font-size: 14px; } #group { flex: 0 0 auto; flex-direction: column; } .row { height: 24px; flex: 0 0 24px; } #tail { height: 24px; } #long { flex: 0 0 auto; font-size: 14px; padding: 4px 8px; }")
+    let mut root = Widget::panel("root")
+    root.push(Widget::input("field", "12.3456789").with_focus(true))
+    let mut group = Widget::panel("group")
+    group.push(Widget::label("Folder A").with_classes("row")) group.push(Widget::label("Folder B").with_classes("row"))
+    root.push(group) root.push(Widget::label("Built-in").with_id("tail"))
+    let layout = layout_widget(sheet.apply(root, "", "", "field"), Rect::new(0, 0, 640, 300))
+    let bounds = layout.find_bounds("field").unwrap_or(Rect::new(0, 0, 0, 0))
+    let field = layout.find_widget("field").unwrap_or(Widget::label(""))
+    let x = bounds.x() + 10
+    let mut text = TextEditor::new("12.3456789").with_cursor(0)
+    text = text.pointer_input(Event {
+            event_pointer_down(), x, bounds.y() + 12, 0, 0, 1, 1, 0, 0, 0, "", 0
+        }
+        , layout, "field", window,)
+    if text.cursor() != 0 || !text.pointer_active() {
+        window.destroy() ret 2
+    }
+    text = text.pointer_input(Event::pointer_move(x + 26, bounds.y() + 12, 26, 0, 1), layout, "field", window)
+    if !text.has_selection() {
+        window.destroy() ret 3
+    }
+    let selected = text.selected_text()
+    text = text.key_input(Event::key_down(99, 192), window)
+    if window.clipboard_text() != selected {
+        window.destroy() ret 4
+    }
+    text = text.pointer_input(Event {
+            event_pointer_up(), x + 26, bounds.y() + 12, 0, 0, 0, 1, 0, 0, 0, "", 0
+        }
+        , layout, "field", window,)
+    if text.pointer_active() || text.value() != "12.3456789" {
+        window.destroy() ret 5
+    }
+    if window.input_text_index(field, bounds, "12.3456789", 0, x) != 0 {
+        window.destroy() ret 6
+    }
+    let nested = layout.find_bounds("group").unwrap_or(bounds)
+    let tail = layout.find_bounds("tail").unwrap_or(bounds)
+    if nested.height() < 48 || tail.y() < nested.bottom() {
+        window.destroy() ret 7
+    }
+    if format_decimal(0.2, 4) != "0.2" || format_decimal(0.000001, 4) != "1e-6" || format_decimal( - 0.1236, 4) != "-0.1236" || format_decimal(1.234567, 4) != "1.2346" || format_decimal(1000000000, 4) != "1e9" {
+        window.destroy() ret 8
+    }
+    window.destroy() ret 0
+}

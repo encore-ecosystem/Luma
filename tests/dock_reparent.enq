@@ -1,0 +1,85 @@
+//! Moving a panel retains identity and subscriptions; roots consume only their own work.
+import core::option::Option
+import luma::{UiBindings, UiContext, Widget}
+
+fn main() -> u32 {
+    let mut context = UiContext::new()
+    let mut count = context.signal[u32](1)
+    let mut bindings = UiBindings::new(context)
+    let tree = bindings.tree()
+    let a = bindings.mount(Widget::panel("a").with_child(Widget::panel("panel")
+            .with_child(Widget::input("input", "unfinished"))))
+    let b = bindings.mount(Widget::panel("b").with_child(Widget::label("sibling").with_id("sibling")))
+    let panel = tree.find(a, "panel").unwrap_or(a)
+    let input = tree.find(a, "input").unwrap_or(a)
+    let observed = count
+    let observer = bindings.bind_text(input, | cx | {
+            let value = cx.read[u32](observed)
+            ret f "{value}"
+        }
+        ,)
+    if observer.is_none() {
+        ret 1
+    }
+    let _initial = tree.take_changes()
+    let capacity = tree.capacity()
+    if !bindings.commit_authored_view_for(a, Widget::panel("a")) ||
+    !bindings.commit_authored_view_for(b, Widget::panel("b")) {
+        ret 2
+    }
+    if !tree.reparent(panel, b, 1) || !tree.contains(input) ||
+    !tree.parent(panel).unwrap_or(a).same(b) || tree.find(a, "input").is_some() ||
+    !tree.find(b, "input").unwrap_or(a).same(input) {
+        ret 3
+    }
+    if !tree.has_pending_for(a) || !tree.has_pending_for(b) {
+        ret 4
+    }
+    let _a_changes = tree.take_changes_for(a)
+    if tree.has_pending_for(a) || !tree.has_pending_for(b) {
+        ret 5
+    }
+    let _b_changes = tree.take_changes_for(b)
+    if tree.pending_count() != 0 {
+        ret 6
+    }
+    if tree.reparent(b, input, 0) || tree.reparent(panel, b, 99) {
+        ret 7
+    }
+    if tree.children(b).len() != 2 || !tree.parent(panel).unwrap_or(a).same(b) {
+        ret 8
+    }
+    count.set(42)
+    if bindings.flush() != 1 || tree.widget(input).unwrap_or(Widget::label("")).text() != "42" {
+        ret 9
+    }
+    if !tree.has_pending_for(b) || tree.has_pending_for(a) {
+        ret 10
+    }
+    if bindings.authored_view_for(a).unwrap_or(Widget::label("")).id() != "a" ||
+    bindings.authored_view_for(b).unwrap_or(Widget::label("")).id() != "b" {
+        ret 11
+    }
+    for _index in 0..100 {
+        if !tree.reparent(panel, a, 0) || !tree.reparent(panel, b, 1) {
+            ret 12
+        }
+    }
+    if tree.capacity() != capacity || !tree.contains(input) {
+        ret 13
+    }
+    if !bindings.unmount(a) || !tree.contains(input) {
+        ret 14
+    }
+    count.set(43)
+    let _updated = bindings.flush()
+    if tree.widget(input).unwrap_or(Widget::label("")).text() != "43" {
+        ret 15
+    }
+    let _removed = bindings.unmount(b)
+    count.set(44)
+    if bindings.flush() != 0 || tree.len() != 0 || bindings.authored_view_for(b).is_some() {
+        ret 16
+    }
+    ret 0
+}

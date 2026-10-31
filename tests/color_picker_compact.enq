@@ -1,0 +1,30 @@
+import luma::{ColorPicker, PickerColor, Event, Rect, StyleSheet, Widget, layout_widget, event_pointer_down}
+fn main() -> u32 {
+    let mut picker = ColorPicker::new("p", PickerColor::linear(3, - 0.1, 0.12345678)).with_compact()
+    if picker.preferred_size().width() != 320 || picker.preferred_size().height() != 384 {
+        ret 1
+    }
+    let sheet = StyleSheet::default()
+    let layout = layout_widget(sheet.apply(picker.widget(900, 800), "", "", ""), Rect::new(0, 0, 900, 800))
+    let sv = layout.find_bounds("p-sv").unwrap_or(Rect::new(0, 0, 0, 0))
+    if sv.width() != 184 || sv.height() != 184 {
+        ret 2
+    }
+    if picker.widget(900, 800).find("p-value-3").is_some() {
+        ret 3
+    }
+    let click = Event { event_pointer_down(), 0, 0, 0, 0, 1, 0, 0, 0, 0, "", 0 }
+    let _mode = picker.input(click, "p-hsv", layout)
+    if picker.widget(900, 800).find("p-value-0").is_some() || picker.widget(900, 800).find("p-value-3").is_none() {
+        ret 4
+    }
+    let _tab = picker.input(Event::key_down(9, 0), "", layout)
+    if !picker.widget(900, 800).find("p-value-3").unwrap_or(Widget::label("")).focused() {
+        ret 5
+    }
+    let _rgb = picker.input(click, "p-rgb", layout)
+    if picker.color().red() != 3 || picker.color().blue() != 0.12345678 {
+        ret 6
+    }
+    ret 0
+}

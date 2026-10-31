@@ -1,0 +1,147 @@
+//! Fine-grained values used by retained components.
+
+import core::option::Option
+import core::panic::panic
+import refrain::reactive::graph::{ReactiveGraph, ReactiveKey}
+
+/// Evaluation context. Components and bindings record reads automatically.
+pub struct UiContext {
+    graph: ReactiveGraph < H >
+}
+
+impl for UiContext {
+    pub fn new() -> UiContext < H > {
+        ret UiContext < H > {
+            ReactiveGraph::new()
+        }
+    }
+    pub fn graph(self: Self &) -> ReactiveGraph < H > {
+        ret self.graph
+    }
+    pub fn signal[T](self: mut Self &, value: T) -> Signal[T] < H > {
+        let source = self.graph.source()
+        ret Signal[T] < H > {
+            value, 1, Option[ReactiveGraph < H >]::Some(self.graph), Option[ReactiveKey]::Some(source)
+        }
+    }
+    pub fn read[T](self: mut Self &, signal: Signal[T] < H >) -> T {
+        match signal.graph {
+            Some(graph) => {
+                if graph.identity() != self.graph.identity() {
+                    panic("reactive binding read a signal from a different UI context")
+                }
+                match signal.source {
+                    Some(source) => {
+                        let _tracked = self.graph.read(source)
+                    }
+                    None => {
+                    }
+                }
+            }
+            None => {
+                panic("reactive bindings require a signal created by UiContext.signal")
+            }
+        }
+        ret signal.value
+    }
+}
+
+/// A heap-owned value. Context-owned signals enqueue dependent bindings on writes.
+pub struct Signal[T] {
+    value: T
+    revision: u64
+    graph: Option[ReactiveGraph < H >]
+    source: Option[ReactiveKey]
+}
+
+impl[T] for Signal[T] {
+    pub fn new(value: T) -> Signal[T] < H > {
+        ret Signal[T] < H > {
+            value, 1_u64, Option[ReactiveGraph < H >]::None, Option[ReactiveKey]::None
+        }
+    }
+
+    pub fn get(self: Self &) -> T {
+        ret self.value
+    }
+
+    pub fn set(self: mut Self &, value: T) ->() {
+        self.value = value
+        self.revision += 1_u64
+        match self.graph {
+            Some(graph) => {
+                match self.source {
+                    Some(source) => {
+                        let _notified = graph.write(source)
+                    }
+                    None => {
+                    }
+                }
+            }
+            None => {
+            }
+        }
+        ret()
+    }
+
+    pub fn revision(self: Self &) -> u64 {
+        ret self.revision
+    }
+}
+
+/// A typed, statically dispatched expression used by a computed value.
+pub trait ValueBinding[T] {
+    fn evaluate(self: Self, context: mut UiContext &) -> T
+}
+
+/// A lazily recomputed value with automatically maintained dependencies.
+pub struct Computed[T, B] {
+    value: T
+    context: UiContext < H >
+    observer: ReactiveKey
+    source: ReactiveKey
+    binding: B
+}
+
+impl[T, B: ValueBinding[T]] for Computed[T, B] {
+    pub fn new(context: mut UiContext &, binding: B) -> Computed[T, B] < H > {
+        let graph = context.graph()
+        let mut evaluation = UiContext < H > {
+            graph
+        }
+        let observer = graph.observer()
+        let source = graph.source()
+        let _connected = graph.connect_output(observer, source)
+        let _began = graph.begin(observer)
+        let value = binding.evaluate(evaluation)
+        let _ended = graph.end(observer)
+        ret Computed[T, B] < H > {
+            value, evaluation, observer, source, binding
+        }
+    }
+    pub fn get(self: mut Self &, context: mut UiContext &) -> T {
+        let evaluation = self.context
+        let graph = evaluation.graph()
+        if graph.identity() != context.graph().identity() {
+            panic("computed value read from a different UI context")
+        }
+        if graph.is_dirty(self.observer) {
+            if !graph.begin(self.observer) {
+                panic("recursive reactive computation")
+            }
+            let binding = self.binding
+            let value = binding.evaluate(self.context)
+            self.value = value
+            let _ended = graph.end(self.observer)
+        }
+        let _tracked = graph.read(self.source)
+        ret self.value
+    }
+    pub fn dispose(self: mut Self &) ->() {
+        let evaluation = self.context
+        let graph = evaluation.graph()
+        let _observer_removed = graph.dispose_observer(self.observer)
+        let _source_removed = graph.dispose_source(self.source)
+        ret()
+    }
+}

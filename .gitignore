@@ -7,3 +7,6 @@ docs/book/
 *.so
 *.dylib
 *.dll
+
+# Encore language-server caches at any project depth.
+**/.encore_cache/

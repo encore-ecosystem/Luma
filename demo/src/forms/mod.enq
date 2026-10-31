@@ -1,0 +1,354 @@
+//! Small, model-owned form with validation and reset.
+import core::result::Result
+import luma::{AppEvent, TextEditor, Widget}
+import luma::{Rect, ReactiveUi, StyleSheet, layout_widget}
+import std::string::String
+import std::time::perf_counter_ms
+
+pub struct FormsPage {
+    name: TextEditor
+    notifications: bool
+    autosave: bool
+    compact: bool
+    format: str
+    expanded: bool
+    submitted: bool
+    saved: bool
+    active_format: str
+    saving_until: u64
+    generation: u64
+}
+
+impl for FormsPage {
+    fn snapshot(self: Self) -> Self {
+        ret Self {
+            self.name, self.notifications, self.autosave, self.compact,
+            self.format, self.expanded, self.submitted, self.saved, self.active_format,
+            self.saving_until, self.generation
+        }
+    }
+    pub fn new() -> Self {
+        ret Self {
+            TextEditor::new(""), true, false, false, "SVG", false, false, false, "SVG", 0, 0
+        }
+    }
+    pub fn valid(self: Self) -> bool {
+        ret String::from_str(self.name.value()).trim().len() > 0
+    }
+    pub fn saving(self: Self) -> bool {
+        ret self.saving_until != 0
+    }
+    pub fn revision(self: Self) -> u64 {
+        ret self.generation
+    }
+    fn finish_save(self: Self, now: u64) -> Self {
+        let mut next = self.snapshot()
+        if self.saving() && now >= self.saving_until {
+            next.saving_until = 0
+            next.saved = true
+            next.generation += 1
+        }
+        ret next
+    }
+    pub fn configure_root(self: Self, root: Widget) -> Widget {
+        if !self.expanded {
+            ret root
+        }
+        ret root.with_attribute("data-luma-application-key-13", "true")
+        .with_attribute("data-luma-application-key-27", "true")
+        .with_attribute("data-luma-application-key-1073741905", "true")
+        .with_attribute("data-luma-application-key-1073741906", "true")
+    }
+    pub fn view(self: Self) -> Widget {
+        let mut page = Widget::panel("forms-page").with_attribute("data-luma-scrollable", "true")
+        page.push(Widget::heading("Forms").with_classes("form-title"))
+        page.push(Widget::label("Name").with_classes("form-label"))
+        page.push(Widget::input("form-name", self.name.value()).with_classes("form-field")
+            .with_attribute("placeholder", "Your name")
+            .with_attribute("aria-label", "Name")
+            .with_attribute("aria-invalid", if self.submitted && !self.valid() {
+                    "true"
+                } else {
+                    "false"
+                }
+                ,
+            )
+            .with_selection(if self.name.cursor() == self.name.selection_start() {
+                    self.name.selection_end()
+                } else {
+                    self.name.selection_start()
+                }
+                , self.name.cursor(),))
+        if self.submitted && !self.valid() {
+            page.push(Widget::label("Enter a name.").with_id("form-error").with_classes("form-message"))
+        }
+        page.push(Widget::checkbox("form-notifications", "Notifications", self.notifications).with_classes("form-control"))
+        page.push(Widget::toggle("form-autosave", "Autosave", self.autosave).with_classes("form-control"))
+        page.push(Widget::label("Density").with_classes("form-label"))
+        let mut density = Widget::panel("form-density").with_classes("form-row")
+        density.push(Widget::radio("form-comfortable", "Comfortable", !self.compact).with_classes("form-radio").with_attribute("name", "density"))
+        density.push(Widget::radio("form-compact", "Compact", self.compact).with_classes("form-radio").with_attribute("name", "density"))
+        page.push(density)
+        page.push(Widget::label("Export format").with_classes("form-label"))
+        let mut dropdown = Widget::panel("form-dropdown")
+        let trigger = Widget::select("form-format", self.format).with_classes("form-field")
+        .with_attribute("aria-label", "Export format")
+        .with_attribute("aria-expanded", if self.expanded {
+                "true"
+            } else {
+                "false"
+            }
+            ,
+        )
+        dropdown.push(trigger)
+        if self.expanded {
+            page.push(Widget::button("form-dismiss", "").with_attribute("tabindex", "-1"))
+            let mut options = Widget::panel("form-options").with_attribute("role", "listbox")
+            options.push(self.format_option("form-svg", "SVG"))
+            options.push(self.format_option("form-png", "PNG"))
+            options.push(self.format_option("form-webp", "WebP"))
+            dropdown.push(options)
+        }
+        page.push(dropdown)
+        let mut actions = Widget::panel("form-actions").with_classes("form-row")
+        actions.push(Widget::button("form-save", if self.saving() {
+                    "Saving…"
+                } else {
+                    "Save"
+                }
+                ,
+            ).with_classes("form-button form-primary").with_disabled(self.saving() || self.saved))
+        actions.push(Widget::button("form-reset", "Reset").with_classes("form-button").with_disabled(self.saving()))
+        page.push(actions)
+        page.push(Widget::label(if self.saving() {
+                    "Simulating a local save…"
+                } elif self.saved {
+                    "Saved locally in this demo."
+                } else {
+                    "Changes are not saved."
+                }
+            )
+            .with_id("form-status").with_classes("form-message").with_attribute("role", "status"))
+        ret page
+    }
+    pub fn update(self: Self, event: AppEvent) -> Self {
+        if event.is_tick() {
+            ret self.finish_save(perf_counter_ms())
+        }
+        let mut next = self.snapshot()
+        if event.is_text_edit() && event.text_edit().target() == "form-name" {
+            next.name = event.text_edit().apply(self.name)
+            if next.name.value() != self.name.value() {
+                next.saved = false
+                next.saving_until = 0
+            }
+        }
+        if event.is_control_change() {
+            match event.target() {
+                "form-notifications" => {
+                    next.notifications = event.checked()
+                }
+                "form-autosave" => {
+                    next.autosave = event.checked()
+                }
+                "form-comfortable" => {
+                    next.compact = false
+                }
+                "form-compact" => {
+                    next.compact = true
+                }
+                _ => {
+                    ret next
+                }
+            }
+            next.saved = false
+            next.saving_until = 0
+        }
+        if event.is_action() {
+            ret next.action(event.action())
+        }
+        if event.is_key() && self.expanded {
+            match event.key() {
+                27 => {
+                    next.expanded = false
+                }
+                13 => {
+                    ret self.with_format(self.active_format)
+                }
+                1073741905 => {
+                    next.active_format = match self.active_format {
+                        "SVG" => "PNG" "PNG" => "WebP" _ => "SVG"
+                    }
+                }
+                1073741906 => {
+                    next.active_format = match self.active_format {
+                        "SVG" => "WebP" "WebP" => "PNG" _ => "SVG"
+                    }
+                }
+                _ => {
+                }
+            }
+        }
+        if event.is_focus_lost() {
+            next.expanded = false
+        }
+        ret next
+    }
+    pub fn action(self: Self, action: str) -> Self {
+        let mut next = self.snapshot()
+        match action {
+            "form-reset" => {
+                if self.saving() {
+                    ret self
+                }
+                next = Self::new()
+                next.generation = self.generation
+                ret next
+            }
+            "form-format" => {
+                next.expanded = !self.expanded
+                next.active_format = self.format
+            }
+            "form-dismiss" => {
+                next.expanded = false
+            }
+            "form-svg" => {
+                ret self.with_format("SVG")
+            }
+            "form-png" => {
+                ret self.with_format("PNG")
+            }
+            "form-webp" => {
+                ret self.with_format("WebP")
+            }
+            "form-save" => {
+                if self.saving() || self.saved {
+                    ret self
+                }
+                next.submitted = true
+                if next.valid() {
+                    next.saving_until = perf_counter_ms() + 350
+                }
+            }
+            _ => {
+            }
+        }
+        ret next
+    }
+    fn with_format(self: Self, format: str) -> Self {
+        ret Self {
+            self.name, self.notifications, self.autosave, self.compact,
+            format, false, self.submitted, false, format, 0, self.generation
+        }
+    }
+    fn format_option(self: Self, id: str, format: str) -> Widget {
+        ret Widget::button(id, format)
+        .with_classes("form-option")
+        .with_attribute("role", "option")
+        .with_attribute("aria-selected", if self.format == format {
+                "true"
+            } else {
+                "false"
+            }
+            ,
+        )
+        .with_attribute("data-active", if self.active_format == format {
+                "true"
+            } else {
+                "false"
+            }
+            ,
+        )
+    }
+}
+
+#attr(test)
+fn forms_dropdown_overlay_and_keyboard() -> bool {
+    let initial = FormsPage::new()
+    let opened = initial.action("form-format")
+    let moved = opened.update(AppEvent::key_down(1073741905, 0, "form-format"))
+    let selected = moved.update(AppEvent::key_down(13, 0, "form-format"))
+    if moved.active_format != "PNG" || selected.format != "PNG" || selected.expanded {
+        ret false
+    }
+    let cancelled = moved.update(AppEvent::key_down(27, 0, "form-format"))
+    if cancelled.format != "SVG" || cancelled.expanded || opened.action("form-dismiss").expanded {
+        ret false
+    }
+    let sheet = match StyleSheet::from_file("app.css") {
+        Result::Ok(value) => value
+        Result::Err(_) => {
+            ret false
+        }
+    }
+    let closed_layout = layout_widget(sheet.apply(initial.view(), "", "", ""), Rect::new(0.0, 0.0, 480.0, 640.0))
+    let open_layout = layout_widget(sheet.apply(opened.view(), "", "", ""), Rect::new(0.0, 0.0, 480.0, 640.0))
+    let fallback = Rect::new(0.0, 0.0, 0.0, 0.0)
+    let closed_save = closed_layout.find_bounds("form-save").unwrap_or(fallback)
+    let open_save = open_layout.find_bounds("form-save").unwrap_or(fallback)
+    let trigger = open_layout.find_bounds("form-format").unwrap_or(fallback)
+    let menu = open_layout.find_bounds("form-options").unwrap_or(fallback)
+    let option = open_layout.find_bounds("form-png").unwrap_or(fallback)
+    ret closed_save.y() == open_save.y() && menu.y() >= trigger.bottom() &&
+    menu.width() > 0.0 && menu.height() >= 108.0 && open_layout.hit(option.x() + 10.0, option.y() + 10.0) == "form-png" &&
+    open_layout.hit(460.0, 600.0) == "form-dismiss"
+}
+
+#attr(test)
+fn forms_hover_keeps_controls_in_place() -> bool {
+    let sheet = match StyleSheet::from_file("app.css") {
+        Result::Ok(value) => value
+        Result::Err(_) => {
+            ret false
+        }
+    }
+    let model = FormsPage::new()
+    let bounds = Rect::new(0.0, 0.0, 480.0, 640.0)
+    let mut layout = layout_widget(sheet.apply(model.view(), "", "", ""), bounds)
+    let mut ui = ReactiveUi::new(layout)
+    let fallback = Rect::new(0.0, 0.0, 0.0, 0.0)
+    let format_y = layout.find_bounds("form-format").unwrap_or(fallback).y()
+    let save_y = layout.find_bounds("form-save").unwrap_or(fallback).y()
+    for step in 0..30 {
+        let target = if step % 2 == 0 {
+            "form-format"
+        } else {
+            "form-save"
+        }
+        let _unchanged = ui.refresh_unchanged(layout.retained_widget())
+        let _changed = ui.reconcile(sheet.apply(model.view(), target, "", ""))
+        layout = ui.layout()
+        if layout.find_bounds("form-format").unwrap_or(fallback).y() != format_y ||
+        layout.find_bounds("form-save").unwrap_or(fallback).y() != save_y {
+            ret false
+        }
+    }
+    ret format_y < save_y
+}
+
+#attr(test)
+fn forms_validation_selection_and_reset() -> bool {
+    let empty = FormsPage::new().action("form-save")
+    if empty.saved || empty.view().find("form-error").is_none() {
+        ret false
+    }
+    let filled = FormsPage {
+        TextEditor::new("Ada"), false, true, true, "SVG", false, false, false, "SVG", 0, 0
+    }
+    let saving = filled.action("form-format").action("form-png").action("form-save")
+    if !saving.saving() || saving.saved || !saving.view().find("form-save").unwrap_or(Widget::spacer(0.0)).disabled() {
+        ret false
+    }
+    let selected = saving.finish_save(saving.saving_until)
+    if !selected.saved || selected.expanded || selected.format != "PNG" {
+        ret false
+    }
+    let unchanged = selected.action("unrelated")
+    let webp = unchanged.action("form-webp")
+    let svg = webp.action("form-svg")
+    if !unchanged.saved || webp.format != "WebP" || webp.saved || svg.format != "SVG" {
+        ret false
+    }
+    let reset = selected.action("form-reset")
+    ret !reset.valid() && !reset.saved && reset.notifications && !reset.autosave && !reset.compact && reset.format == "SVG"
+}

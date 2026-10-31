@@ -1,0 +1,127 @@
+//! Pan/zoom and visibility never require layout or an external render target.
+import core::option::Option
+import luma::{CanvasScene, CanvasView, DisplayList, DisplayPoint, DisplayCommand, SvgDocument, Rect, Color, Widget, canvas_cubic, widget_canvas, canvas_grid}
+
+fn main() -> u32 {
+    let view = CanvasView::new().pan(10, 20)
+    let before = view.world(200, 150)
+    let zoomed = view.zoom_at(2, 200, 150)
+    let after = zoomed.world(200, 150)
+    if before.x() != after.x() || before.y() != after.y() {
+        ret 1
+    }
+    let mut display = DisplayList::new()
+    display.round_rect(Rect::new(0, 0, 50, 40), 3, Color::rgb(20, 20, 20), true)
+    let mut scene = CanvasScene::new()
+    scene.add(1, Rect::new(0, 0, 50, 40), display, true)
+    scene.add(2, Rect::new(10000, 10000, 50, 40), display, true)
+    if scene.visible_count(view, Rect::new(0, 0, 400, 300)) != 1 {
+        ret 2
+    }
+    if scene.hit(view, 15, 25).unwrap_or(0) != 1 || scene.hit(view, 300, 250).is_some() {
+        ret 3
+    }
+    if scene.display(view, Rect::new(0, 0, 400, 300)).len() != 1 {
+        ret 4
+    }
+    let points = canvas_cubic(DisplayPoint::new(0, 0), DisplayPoint::new(10, 0), DisplayPoint::new(20, 20), DisplayPoint::new(30, 20), 24)
+    if points.len() != 25 || points.get(24).unwrap_or(DisplayPoint::new(0, 0)).x() != 30 {
+        ret 5
+    }
+    if Widget::canvas("graph").kind() != widget_canvas() {
+        ret 6
+    }
+    let decorated = scene.with_overlay(Rect::new(0, 0, 50, 40), display)
+    let viewport = Rect::new(0, 0, 400, 300)
+    if decorated.display(view, viewport).len() != 2 || scene.display(view, viewport).len() != 1 {
+        ret 7
+    }
+    if decorated.hit(view, 15, 25).unwrap_or(0) != 1 {
+        ret 8
+    }
+    let document = SvgDocument::parse("<svg viewBox=\"0 0 24 24\"><path d=\"M 2 2 L 22 22\"/></svg>")
+    let mut icon = DisplayList::new()
+    icon.svg(Rect::new(4, 5, 24, 24), document, Color::rgb(240, 240, 240), 2)
+    let mut icons = CanvasScene::new()
+    icons.add(17, Rect::new(4, 5, 24, 24), icon, true)
+    let commands = icons.display(CanvasView::new().zoom_at(2, 0, 0), viewport).commands()
+    match commands.get(0) {
+        Some(command) => {
+            match command {
+                Svg(value) => {
+                    if value.bounds().width() != 48 || value.bounds().x() != 8 || value.stroke_width() != 2 || !value.document().equivalent(document) {
+                        ret 9
+                    }
+                }
+                _ => {
+                    ret 10
+                }
+            }
+        }
+        None => {
+            ret 11
+        }
+    }
+    if !icons.update_item(0, Rect::new(100, 100, 24, 24), icon) || icons.update_item(1, viewport, icon) || icons.len() != 1 {
+        ret 12
+    }
+    if icons.hit(CanvasView::new(), 5, 6).is_some() || icons.hit(CanvasView::new(), 105, 106).unwrap_or(0) != 17 {
+        ret 13
+    }
+    let world = Rect::new( - 100, 200, 2000, 1000)
+    let fitted = CanvasView::new().fit(world, viewport, 20).project_rect(world, viewport)
+    if fitted.x() < 19.99 || fitted.y() < 19.99 || fitted.right() > 380.01 || fitted.bottom() > 280.01 {
+        ret 14
+    }
+    let mut grid = DisplayList::new()
+    grid.line(0, 0, 400, 0, 1, Color::rgb(40, 40, 40))
+    let background = scene.with_background(viewport, grid)
+    if background.len() != scene.len() || background.hit(view, 15, 25).unwrap_or(0) != 1 {
+        ret 15
+    }
+    let painted = background.with_overlay(viewport, display).display(view, viewport)
+    if painted.len() != 3 || scene.display(view, viewport).len() != 1 {
+        ret 16
+    }
+    match painted.commands().get(0) {
+        Some(command) => {
+            match command {
+                Line(_) => {
+                }
+                _ => {
+                    ret 17
+                }
+            }
+        }
+        None => {
+            ret 18
+        }
+    }
+    let minor = Color::rgb(20, 20, 20) let major = Color::rgb(40, 40, 40)
+    let zoomed_grid = canvas_grid(CanvasView::new().pan( - 7, - 9).zoom_at(2, 0, 0), viewport, minor, major)
+    match zoomed_grid.commands().get(0) {
+        Some(command) => {
+            match command {
+                Line(line) => {
+                    if line.x0() != 24 || line.x1() != 24 || line.width() != 0.5 {
+                        ret 19
+                    }
+                }
+                _ => {
+                    ret 20
+                }
+            }
+        }
+        None => {
+            ret 21
+        }
+    }
+    let distant_grid = canvas_grid(CanvasView::new().zoom_at(0.001, 0, 0), viewport, minor, major)
+    if distant_grid.len() == 0 || distant_grid.len() > 100 {
+        ret 22
+    }
+    if canvas_grid(view, Rect::new(0, 0, 0, 0), minor, major).len() != 0 {
+        ret 23
+    }
+    ret 0
+}

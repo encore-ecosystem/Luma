@@ -1,6 +1,7 @@
 [project]
+encore = ">=0.1.6"
 name = "ui_native"
-version = "0.1.0"
+version = "0.0.0"
 description = "Private SDL3 native backend for Luma"
 licence = "MIT"
 dependencies = []

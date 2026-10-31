@@ -1,0 +1,74 @@
+//! Compact property grids and window-local popup placement.
+import refrain::geometry::{Rect, Size}
+import refrain::layout::{horizontal, vertical}
+import refrain::widget::Widget
+
+pub fn property_row(id: str, label: str, control: Widget) -> Widget {
+    let mut row = Widget::panel(id).with_classes("luma-property-row").with_direction(horizontal())
+    row.push(Widget::label(label).with_classes("luma-property-label"))
+    row.push(control.with_added_classes("luma-property-control"))
+    ret row
+}
+
+/// Expansion is controlled by the application; the header's id is the action.
+pub fn property_section(id: str, title: str, expanded: bool, content: Widget) -> Widget {
+    // A property section contains 26px rows. Give the flex parent a real basis:
+    // auto panels otherwise have a zero basis in Luma's retained flex layout.
+    let rows = if content.classes().contains("luma-property-row") {
+        1_usize
+    } else {
+        content.children().len()
+    }
+    let height = if expanded {
+        28_f32 +(rows as f32) * 26_f32
+    } else {
+        24_f32
+    }
+    let mut section = Widget::panel(id + "-section").with_classes("luma-property-section").with_direction(vertical()).with_geometry_basis(height)
+    section.push(Widget::button(id, if expanded {
+                "- "
+            } else {
+                "+ "
+            }
+            + title,)
+        .with_classes("luma-property-heading").with_attribute("aria-expanded", if expanded {
+                "true"
+            } else {
+                "false"
+            }
+            ,
+        ))
+    if expanded {
+        section.push(content.with_added_classes("luma-property-content"))
+    }
+    ret section
+}
+
+/// Prefer below the owner, flip above when needed, then clamp to the window.
+pub fn anchored_popup_bounds(anchor: Rect, desired: Size, available: Rect) -> Rect {
+    let width = if desired.width() < available.width() {
+        desired.width()
+    } else {
+        available.width()
+    }
+    let height = if desired.height() < available.height() {
+        desired.height()
+    } else {
+        available.height()
+    }
+    let mut x = anchor.x()
+    let mut y = anchor.bottom() + 4
+    if y + height > available.bottom() {
+        y = anchor.y() - height - 4
+    }
+    if x + width > available.right() {
+        x = available.right() - width
+    }
+    if x < available.x() {
+        x = available.x()
+    }
+    if y < available.y() {
+        y = available.y()
+    }
+    ret Rect::new(x, y, width, height)
+}

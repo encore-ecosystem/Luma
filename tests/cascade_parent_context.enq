@@ -1,0 +1,66 @@
+//! Inheritance reuse is local to the exact previous parent environment.
+import luma::{RetainedCascade, StyleSheet, Widget}
+
+fn same(left: Widget, right: Widget) -> bool {
+    if !left.style().equivalent(right.style()) || left.children().len() != right.children().len() {
+        ret false
+    }
+    let mut index = 0_usize
+    for child in left.children() {
+        match right.children().get(index) {
+            Some(other) => {
+                if !same(child, other) {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+        index += 1
+    }
+    ret true
+}
+
+fn main() -> u32 {
+    let sheet = StyleSheet::parse(".small { font-size: 12px; color: #112233; } .large { font-size: 24px; color: #445566; } .warm { --ink: #ff0000; } .cool { --ink: #00ff00; } label { background: var(--ink, #ffffff); }")
+    let mut state = RetainedCascade::new()
+    for step in 0..16 {
+        let mut root = Widget::panel("root")
+        let mut first = Widget::panel("first").with_classes(if step % 2 == 0 {
+                "small warm"
+            } else {
+                "large cool"
+            }
+        )
+        let mut second = Widget::panel("second").with_classes(if step % 2 == 0 {
+                "large cool"
+            } else {
+                "small warm"
+            }
+        )
+        if step % 3 != 0 {
+            first.push(Widget::label("Filler").with_id("filler"))
+        }
+        let mut nested = Widget::panel("nested")
+        nested.push(Widget::label("Moved").with_id("moved"))
+        if step % 2 == 0 {
+            first.push(nested)
+        } else {
+            second.push(nested)
+        }
+        if step % 4 == 0 {
+            second.push(Widget::label("Another").with_id("another"))
+        }
+        if step % 5 == 0 {
+            root.push(second) root.push(first)
+        } else {
+            root.push(first) root.push(second)
+        }
+        let retained = sheet.apply_retained(root, "", "", "", true, state)
+        if !same(retained, sheet.apply(root, "", "", "")) {
+            ret 1
+        }
+    }
+    ret 0
+}

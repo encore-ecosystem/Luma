@@ -1,0 +1,673 @@
+//! Virtualized editable table. Filtering and sorting run only when data changes.
+import core::result::Result
+import core::vec::Vec
+import luma::{AppEvent, Style, TextEditor, VirtualGrid, Widget}
+import luma::{IconAsset, Rect, StyleSheet, SvgDocument, layout_widget}
+import std::string::String
+
+struct Row {
+    id: usize name: str quantity: u32
+}
+
+pub struct TablePage {
+    rows: Vec[Row]
+    order: Vec[usize]
+    search: TextEditor
+    selected: usize
+    column: usize
+    descending: bool
+    editor: TextEditor
+    editing: bool
+    edit_column: usize
+    error: str
+    scroll: f32
+    height: f32
+    revision: usize
+    name_width: f32
+    id_width: f32
+    drag: str
+    drag_x: f32
+    drag_width: f32
+    sort_up: SvgDocument
+    sort_down: SvgDocument
+}
+
+impl for TablePage {
+    fn snapshot(self: Self) -> Self {
+        ret Self {
+            self.rows, self.order, self.search, self.selected, self.column,
+            self.descending, self.editor, self.editing, self.edit_column, self.error,
+            self.scroll, self.height, self.revision, self.name_width, self.id_width,
+            self.drag, self.drag_x, self.drag_width, self.sort_up, self.sort_down
+        }
+    }
+    pub fn new() -> Self {
+        let mut rows = Vec[Row]::new()
+        let mut order = Vec[usize]::new()
+        for index in 0_usize..1000_usize {
+            rows.push(Row {
+                    index, f "Item {index + 1}",((index * 37) % 1000) as u32
+                }
+                ,
+            )
+            order.push(index)
+        }
+        ret Self {
+            rows, order, TextEditor::new(""), 1000, 0, false, TextEditor::new(""), false, 1, "", 0.0, 400.0, 0, 240.0, 72.0, "", 0.0, 0.0,
+            IconAsset::bundled("chevron-up", "../assets/icons/chevron-up.svg").document(),
+            IconAsset::bundled("chevron-down", "../assets/icons/chevron-down.svg").document()
+        }
+    }
+    pub fn configure_root(self: Self, root: Widget) -> Widget {
+        let mut next = root.with_children(root.children())
+        for key in vec![13_u32, 27, 1073741905, 1073741906] {
+            next = next.with_application_key_capture(key)
+        }
+        ret next
+    }
+    pub fn view(self: Self) -> Widget {
+        let mut page = Widget::panel("table-page")
+        page.push(Widget::heading("Table").with_classes("form-title"))
+        let mut toolbar = Widget::panel("table-toolbar").with_classes("demo-toolbar")
+        toolbar.push(field("table-search", self.search).with_attribute("placeholder", "Filter names…").with_attribute("aria-label", "Filter rows"))
+        toolbar.push(Widget::label(f "{self.order.len()} / {self.rows.len()}").with_classes("table-count"))
+        page.push(toolbar)
+        let mut header = Widget::panel("table-header").with_classes("table-row")
+        for column in 0_usize..3_usize {
+            let name = match column {
+                0 => "ID" 1 => "Name" _ => "Quantity"
+            }
+            let mut cell = Widget::panel(f "table-heading-{column}").with_classes("table-heading")
+            if column < 2 {
+                cell = cell.with_computed_style(Style::default().with_width(self.width(column)).with_flex_basis(self.width(column)))
+            }
+            let sort = Widget::button(f "table-sort-{column}", name).with_classes("table-sort")
+            .with_attribute("aria-sort", if self.column != column {
+                    "none"
+                } elif self.descending {
+                    "descending"
+                } else {
+                    "ascending"
+                }
+                ,
+            )
+            cell.push(sort)
+            if self.column == column {
+                cell.push(Widget::icon(f "table-sort-icon-{column}", if self.descending {
+                            self.sort_down
+                        } else {
+                            self.sort_up
+                        }
+                        ,).with_classes("table-sort-icon").with_attribute("aria-hidden", "true"))
+            }
+            if column < 2 {
+                cell.push(Widget::button(f "table-resize-{column}", "").with_classes("table-resize").with_raw_input()
+                    .with_attribute("aria-label", "Resize " + name + " column"))
+            }
+            header.push(cell)
+        }
+        page.push(header)
+        let window = VirtualGrid::new(self.order.len(), 1, 34.0, 2).window(self.scroll, self.height)
+        let mut viewport = Widget::panel(f "table-scroll-{self.revision}").with_classes("table-scroll")
+        .with_attribute("data-luma-scrollable", "true")
+        .with_computed_style(Style::default().with_scroll(0.0, self.scroll))
+        viewport.push(spacer("table-before", window.before()))
+        let start = window.start()
+        let end = window.end()
+        for position in start..end {
+            let row = self.row(self.order.get(position).unwrap_or(0))
+            let mut line = Widget::panel(f "table-row-{row.id}").with_classes("table-row")
+            .with_attribute("aria-selected", if row.id == self.selected {
+                    "true"
+                } else {
+                    "false"
+                }
+                ,
+            )
+            line.push(self.cell(row, 0, f "{row.id + 1}"))
+            line.push(self.cell(row, 1, row.name))
+            line.push(self.cell(row, 2, f "{row.quantity}"))
+            viewport.push(line)
+        }
+        viewport.push(spacer("table-after", window.after()))
+        if self.order.len() == 0 {
+            viewport.push(Widget::label("No matching rows").with_classes("demo-status"))
+        }
+        page.push(viewport)
+        let mut edit = Widget::panel("table-edit").with_classes("demo-toolbar")
+        if !self.editing {
+            edit.push(Widget::button("table-edit-name", "Edit name").with_classes("form-button").with_disabled(self.selected >= self.rows.len()))
+            edit.push(Widget::button("table-edit-quantity", "Edit qty").with_classes("form-button").with_disabled(self.selected >= self.rows.len()))
+        }
+        if self.editing {
+            edit.push(field("table-editor", self.editor).with_attribute("aria-label", "Cell value"))
+            edit.push(Widget::button("table-apply", "Apply").with_classes("form-button form-primary"))
+            edit.push(Widget::button("table-cancel", "Cancel").with_classes("form-button"))
+        }
+        page.push(edit)
+        page.push(Widget::label(if self.error != "" {
+                    self.error
+                } elif self.editing {
+                    "Enter to apply · Escape to cancel"
+                } else {
+                    "Click to select · Up/Down to navigate · Enter to edit · Drag dividers to resize"
+                }
+            ).with_id("table-status").with_classes("demo-status"))
+        ret page
+    }
+    fn width(self: Self, column: usize) -> f32 {
+        ret if column == 0 {
+            self.id_width
+        } else {
+            self.name_width
+        }
+    }
+    fn cell(self: Self, row: Row, column: usize, text: str) -> Widget {
+        let mut cell = Widget::button(f "table-cell-{row.id}-{column}", text).with_classes(if column < 2 {
+                if column == 1 {
+                    "table-cell table-fixed table-name"
+                } else {
+                    "table-cell table-fixed"
+                }
+            } else {
+                "table-cell"
+            }
+        )
+        .with_attribute("aria-label", f "Row {row.id + 1}: {text}")
+        if column < 2 {
+            cell = cell.with_computed_style(Style::default().with_width(self.width(column)).with_flex_basis(self.width(column)))
+        }
+        ret cell
+    }
+    fn row(self: Self, id: usize) -> Row {
+        ret self.rows.get(id).unwrap_or(Row {
+                0, "", 0
+            }
+            ,
+        )
+    }
+    pub fn update(self: Self, event: AppEvent) -> Self {
+        let mut next = self.snapshot()
+        if event.is_focus_lost() {
+            next.drag = ""
+        }
+        if event.is_resize() {
+            next.height = if event.y() > 270.0 {
+                event.y() - 270.0
+            } else {
+                60.0_f32
+            }
+        }
+        if event.is_scroll() && String::from_str(event.target()).starts_with("table-scroll-") {
+            next.scroll = event.scroll_offset()
+            next.height = event.scroll_viewport_height()
+        }
+        if event.is_text_edit() {
+            match event.text_edit().target() {
+                "table-search" => {
+                    next.search = event.text_edit().apply(self.search)
+                    if next.search.value() != self.search.value() {
+                        ret next.reindex()
+                    }
+                }
+                "table-editor" => {
+                    next.editor = event.text_edit().apply(self.editor) next.error = ""
+                }
+                _ => {
+                }
+            }
+        }
+        if event.is_pointer_down() && String::from_str(event.target()).starts_with("table-resize-") {
+            next.drag = event.target()
+            next.drag_x = event.x()
+            next.drag_width = if next.drag == "table-resize-0" {
+                self.id_width
+            } else {
+                self.name_width
+            }
+        }
+        if event.is_pointer_move() && self.drag != "" {
+            let raw = self.drag_width + event.x() - self.drag_x
+            let minimum = if self.drag == "table-resize-0" {
+                48.0_f32
+            } else {
+                120.0_f32
+            }
+            let maximum = if self.drag == "table-resize-0" {
+                120.0_f32
+            } else {
+                360.0_f32
+            }
+            let width = if raw < minimum {
+                minimum
+            } elif raw > maximum {
+                maximum
+            } else {
+                raw
+            }
+            if self.drag == "table-resize-0" {
+                next.id_width = width
+            } else {
+                next.name_width = width
+            }
+        }
+        if event.is_pointer_up() {
+            next.drag = ""
+        }
+        if event.is_action() {
+            ret next.action(event.action())
+        }
+        if event.is_key() {
+            match event.key() {
+                27 => {
+                    next.editing = false next.error = ""
+                }
+                13 => {
+                    ret if self.editing {
+                        self.commit()
+                    } else {
+                        self.action("table-edit-name")
+                    }
+                }
+                1073741905 => {
+                    if !self.editing && event.target() != "table-search" {
+                        ret self.navigate(true)
+                    }
+                }
+                1073741906 => {
+                    if !self.editing && event.target() != "table-search" {
+                        ret self.navigate(false)
+                    }
+                }
+                _ => {
+                }
+            }
+        }
+        ret next
+    }
+    pub fn action(self: Self, action: str) -> Self {
+        let mut next = self.snapshot()
+        match action {
+            "table-sort-0" => {
+                ret self.sort_by(0)
+            }
+            "table-sort-1" => {
+                ret self.sort_by(1)
+            }
+            "table-sort-2" => {
+                ret self.sort_by(2)
+            }
+            "table-edit-name" => {
+                ret self.begin_edit(1)
+            }
+            "table-edit-quantity" => {
+                ret self.begin_edit(2)
+            }
+            "table-apply" => {
+                ret self.commit()
+            }
+            "table-cancel" => {
+                next.editing = false next.error = ""
+            }
+            _ => {
+                if String::from_str(action).starts_with("table-cell-") {
+                    let rest = action.slice_bytes(11, action.byte_len() - 11)
+                    let mut id = 0_usize
+                    for index in 0..rest.byte_len() {
+                        let byte = rest.get_byte_at(index).unwrap_or(0)
+                        if byte == 45 {
+                            break
+                        }
+                        if byte < 48 || byte > 57 {
+                            ret self
+                        }
+                        id = id * 10 +(byte - 48) as usize
+                    }
+                    if id < self.rows.len() {
+                        next.selected = id next.editing = false next.error = ""
+                    }
+                }
+            }
+        }
+        ret next
+    }
+    fn begin_edit(self: Self, column: usize) -> Self {
+        if self.selected >= self.rows.len() {
+            ret self
+        }
+        let mut next = self.snapshot()
+        let row = self.row(self.selected)
+        next.editor = TextEditor::new(if column == 1 {
+                row.name
+            } else {
+                f "{row.quantity}"
+            }
+        ).select_all()
+        next.editing = true
+        next.edit_column = column
+        next.error = ""
+        ret next
+    }
+    fn commit(self: Self) -> Self {
+        if !self.editing {
+            ret self
+        }
+        let text = String::from_str(self.editor.value()).trim().as_str()
+        ret self.commit_value(text)
+    }
+    fn commit_value(self: Self, text: str) -> Self {
+        let mut next = self.snapshot()
+        let old = self.row(self.selected)
+        if text == "" {
+            next.error = "A value is required." ret next
+        }
+        let mut updated = Row {
+            old.id, text, old.quantity
+        }
+        if self.edit_column == 2 {
+            let mut value = 0_u64
+            for index in 0..text.byte_len() {
+                let byte = text.get_byte_at(index).unwrap_or(0)
+                if byte < 48 || byte > 57 {
+                    next.error = "Quantity must be a whole number." ret next
+                }
+                value = value * 10 +(byte - 48) as u64
+                if value > 4294967295 {
+                    next.error = "Quantity is too large." ret next
+                }
+            }
+            updated = Row {
+                old.id, old.name, value as u32
+            }
+        }
+        let mut rows = Vec[Row]::new()
+        for row in self.rows {
+            rows.push(if row.id == self.selected {
+                    updated
+                } else {
+                    row
+                }
+            )
+        }
+        next.rows = rows
+        next.editing = false
+        next.error = ""
+        ret next.reindex()
+    }
+    fn sort_by(self: Self, column: usize) -> Self {
+        let mut next = self.snapshot()
+        next.column = column
+        next.descending = if self.column == column {
+            !self.descending
+        } else {
+            false
+        }
+        ret next.reindex()
+    }
+    fn reindex(self: Self) -> Self {
+        let mut next = self.snapshot()
+        let mut order = Vec[usize]::new()
+        for row in self.rows {
+            if contains(row.name, self.search.value()) {
+                order.push(row.id)
+            }
+        }
+        // Bottom-up merge sort keeps large data sets O(n log n).
+        let mut width = 1_usize
+        while width < order.len() {
+            let mut merged = Vec[usize]::new()
+            let mut start = 0_usize
+            while start < order.len() {
+                let middle = if start + width < order.len() {
+                    start + width
+                } else {
+                    order.len()
+                }
+                let end = if middle + width < order.len() {
+                    middle + width
+                } else {
+                    order.len()
+                }
+                let mut left = start
+                let mut right = middle
+                while left < middle || right < end {
+                    if right >= end ||(left < middle && self.before(order.get(left).unwrap_or(0), order.get(right).unwrap_or(0))) {
+                        merged.push(order.get(left).unwrap_or(0)) left += 1
+                    } else {
+                        merged.push(order.get(right).unwrap_or(0)) right += 1
+                    }
+                }
+                start = end
+            }
+            order = merged
+            width *= 2
+        }
+        next.order = order
+        next.scroll = 0.0
+        next.revision += 1
+        let mut selected_visible = false
+        for id in order {
+            if id == self.selected {
+                selected_visible = true
+            }
+        }
+        if !selected_visible {
+            next.selected = self.rows.len() next.editing = false
+        }
+        ret next
+    }
+    fn before(self: Self, left: usize, right: usize) -> bool {
+        let a = self.row(left)
+        let b = self.row(right)
+        let comparison = match self.column {
+            1 => compare(a.name, b.name)
+            2 => if a.quantity < b.quantity {
+                - 1_i32
+            } elif a.quantity > b.quantity {
+                1_i32
+            } else {
+                0_i32
+            }
+            _ => if a.id < b.id {
+                - 1_i32
+            } elif a.id > b.id {
+                1_i32
+            } else {
+                0_i32
+            }
+        }
+        ret if comparison == 0 {
+            a.id <= b.id
+        } elif self.descending {
+            comparison > 0
+        } else {
+            comparison < 0
+        }
+    }
+    fn navigate(self: Self, down: bool) -> Self {
+        if self.order.len() == 0 {
+            ret self
+        }
+        let mut position = 0_usize
+        let mut found = false
+        for index in 0..self.order.len() {
+            if self.order.get(index).unwrap_or(1000) == self.selected {
+                position = index found = true
+            }
+        }
+        if found && down && position + 1 < self.order.len() {
+            position += 1
+        }
+        if found && !down && position > 0 {
+            position -= 1
+        }
+        let mut next = self.snapshot()
+        next.selected = self.order.get(position).unwrap_or(1000)
+        let top =(position as f32) * 34.0
+        if top < self.scroll {
+            next.scroll = top
+        }
+        if top + 34.0 > self.scroll + self.height {
+            next.scroll = top + 34.0 - self.height
+        }
+        if next.scroll != self.scroll {
+            next.revision += 1
+        }
+        ret next
+    }
+}
+
+fn field(id: str, editor: TextEditor) -> Widget {
+    ret Widget::input(id, editor.value()).with_classes("table-input")
+    .with_selection(editor.selection_anchor(), editor.cursor())
+}
+fn spacer(id: str, height: f32) -> Widget {
+    ret Widget::spacer(0.0).with_id(id).with_classes("icon-spacer")
+    .with_computed_style(Style::default().with_height(height).with_flex_basis(height))
+}
+fn compare(a: str, b: str) -> i32 {
+    let count = if a.byte_len() < b.byte_len() {
+        a.byte_len()
+    } else {
+        b.byte_len()
+    }
+    for index in 0..count {
+        let left = a.get_byte_at(index).unwrap_or(0)
+        let right = b.get_byte_at(index).unwrap_or(0)
+        if left < right {
+            ret - 1
+        }
+        if left > right {
+            ret 1
+        }
+    }
+    ret if a.byte_len() < b.byte_len() {
+        - 1_i32
+    } elif a.byte_len() > b.byte_len() {
+        1_i32
+    } else {
+        0_i32
+    }
+}
+fn contains(name: str, query: str) -> bool {
+    if query.byte_len() > name.byte_len() {
+        ret false
+    }
+    for start in 0.. =(name.byte_len() - query.byte_len()) {
+        let mut matched = true
+        for index in 0..query.byte_len() {
+            let mut a = name.get_byte_at(start + index).unwrap_or(0)
+            let mut b = query.get_byte_at(index).unwrap_or(0)
+            if a >= 65 && a <= 90 {
+                a += 32
+            }
+            if b >= 65 && b <= 90 {
+                b += 32
+            }
+            if a != b {
+                matched = false break
+            }
+        }
+        if matched {
+            ret true
+        }
+    }
+    ret false
+}
+
+#attr(test)
+fn table_sort_filter_edit_and_virtualization() -> bool {
+    let initial = TablePage::new()
+    let descending = initial.action("table-sort-0")
+    if descending.order.get(0).unwrap_or(0) != 999 {
+        ret false
+    }
+    let by_quantity = initial.action("table-sort-2")
+    let mut previous = 0_u32
+    for id in by_quantity.order {
+        let quantity = by_quantity.row(id).quantity
+        if quantity < previous {
+            ret false
+        }
+        previous = quantity
+    }
+    let selected = initial.action("table-cell-17-1")
+    if selected.selected != 17 {
+        ret false
+    }
+    let renamed = selected.action("table-edit-name").commit_value("Updated row")
+    if renamed.row(17).name != "Updated row" || initial.row(17).name != "Item 18" {
+        ret false
+    }
+    let quantity = renamed.action("table-edit-quantity")
+    if !quantity.commit_value("-1").editing || !quantity.commit_value("4294967296").editing {
+        ret false
+    }
+    let updated = quantity.commit_value("42")
+    if updated.row(17).quantity != 42 || updated.row(17).name != "Updated row" {
+        ret false
+    }
+    let mut filtered = updated.snapshot()
+    filtered.search = TextEditor::new("UPDATED")
+    filtered = filtered.reindex()
+    if filtered.order.len() != 1 || filtered.order.get(0).unwrap_or(0) != 17 {
+        ret false
+    }
+    filtered.search = TextEditor::new("missing")
+    filtered = filtered.reindex()
+    if filtered.order.len() != 0 || filtered.selected != 1000 {
+        ret false
+    }
+    let mut scrolled = initial.snapshot()
+    scrolled.scroll = 12000.0
+    let view = scrolled.view()
+    let children = view.find("table-scroll-0").unwrap_or(Widget::spacer(0.0)).children().len()
+    let next = selected.navigate(true)
+    let drag = initial.update(AppEvent::pointer_down("table-resize-1", 300.0, 80.0))
+    let wide = drag.update(AppEvent::pointer_move("table-resize-1", 1000.0, 80.0))
+    let narrow = drag.update(AppEvent::pointer_move("table-resize-1", 0.0, 80.0))
+    ret children < 24 && next.selected == 18 && contains("Item", "ITEM") &&
+    wide.name_width == 360.0 && narrow.name_width == 120.0 &&
+    wide.update(AppEvent::pointer_up("table-resize-1", 1000.0, 80.0)).drag == ""
+}
+
+#attr(test)
+fn table_header_geometry() -> bool {
+    let sheet = match StyleSheet::from_file("app.css") {
+        Result::Ok(value) => value
+        Result::Err(_) => {
+            ret false
+        }
+    }
+    let ascending = TablePage::new()
+    let descending = ascending.action("table-sort-0")
+    let up = ascending.view().find("table-sort-icon-0").unwrap_or(Widget::spacer(0.0))
+    let down = descending.view().find("table-sort-icon-0").unwrap_or(Widget::spacer(0.0))
+    if up.svg().source() == "" || down.svg().source() == "" || up.svg().source() == down.svg().source() {
+        ret false
+    }
+    for width in vec![360.0_f32, 880.0] {
+        let mut root = Widget::panel("root")
+        root.push(ascending.view())
+        let layout = layout_widget(sheet.apply(root, "", "", ""), Rect::new(0.0, 0.0, width, 640.0))
+        let fallback = Rect::new(0.0, 0.0, 0.0, 0.0)
+        let handle = layout.find_bounds("table-resize-0").unwrap_or(fallback)
+        let header = layout.find_bounds("table-heading-1").unwrap_or(fallback)
+        let cell = layout.find_bounds("table-cell-0-1").unwrap_or(fallback)
+        if handle.width() != 8.0 || header.x() != cell.x() || header.width() != cell.width() {
+            ret false
+        }
+        let icon = layout.find_bounds("table-sort-icon-0").unwrap_or(fallback)
+        let mut reversed_root = Widget::panel("root")
+        reversed_root.push(descending.view())
+        let reversed = layout_widget(sheet.apply(reversed_root, "", "", ""), Rect::new(0.0, 0.0, width, 640.0))
+        let reversed_icon = reversed.find_bounds("table-sort-icon-0").unwrap_or(fallback)
+        if icon.width() != 16.0 || icon.height() != 16.0 || icon.y() != header.y() + 9.0 || icon.x() != reversed_icon.x() || icon.y() != reversed_icon.y() {
+            ret false
+        }
+        if layout.hit(icon.x() + 8.0, icon.y() + 8.0) != "table-sort-0" {
+            ret false
+        }
+    }
+    ret true
+}

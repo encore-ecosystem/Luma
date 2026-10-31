@@ -1,0 +1,417 @@
+//! Fixed-step Snake. No background work while paused or hidden.
+import core::vec::Vec
+import luma::{AppEvent, PositionStyle, Style, Widget}
+import std::time::perf_counter_ms
+
+struct Cell {
+    x: i32 y: i32
+}
+
+pub struct SnakePage {
+    body: Vec[Cell]
+    food: Cell
+    direction: u32
+    queued: Vec[u32]
+    running: bool
+    ended: bool
+    score: usize
+    best: usize
+    next_step: u64
+    revision: u64
+    seed: u64
+}
+
+impl for SnakePage {
+    fn snapshot(self: Self) -> Self {
+        ret Self {
+            self.body, self.food, self.direction, self.queued, self.running,
+            self.ended, self.score, self.best, self.next_step, self.revision, self.seed
+        }
+    }
+    pub fn new() -> Self {
+        let mut body = Vec[Cell]::new()
+        body.push(Cell {
+                6, 7
+            }
+            ,
+        )
+        body.push(Cell {
+                5, 7
+            }
+            ,
+        )
+        body.push(Cell {
+                4, 7
+            }
+            ,
+        )
+        ret Self {
+            body, Cell {
+                12, 7
+            }
+            , 0, Vec[u32]::new(), false, false, 0, 0, 0, 0, 12345
+        }
+    }
+    pub fn running(self: Self) -> bool {
+        ret self.running
+    }
+    pub fn revision(self: Self) -> u64 {
+        ret self.revision
+    }
+    pub fn pause(self: Self) -> Self {
+        let mut next = self.snapshot()
+        next.running = false
+        next.queued = Vec[u32]::new()
+        ret next
+    }
+    pub fn configure_root(self: Self, root: Widget) -> Widget {
+        let mut next = root.with_children(root.children())
+        for key in vec![1073741903_u32, 1073741904, 1073741905, 1073741906, 119, 97, 115, 100, 32, 27] {
+            next = next.with_application_key_capture(key)
+        }
+        ret next
+    }
+    pub fn view(self: Self) -> Widget {
+        let mut page = Widget::panel("snake-page").with_attribute("data-luma-scrollable", "true")
+        page.push(Widget::heading("Snake").with_classes("form-title"))
+        page.push(Widget::label(f "Score {self.score}   /   Best {self.best}").with_id("snake-score").with_classes("demo-status"))
+        let mut board = Widget::panel("snake-board")
+        let mut index = 0_usize
+        for cell in self.body {
+            board.push(tile(f "snake-segment-{index}", cell, if index == 0 {
+                        "snake-head"
+                    } else {
+                        "snake-body"
+                    }
+                    ,
+                ))
+            index += 1
+        }
+        if self.body.len() < 320 {
+            board.push(tile("snake-food", self.food, "snake-food"))
+        }
+        page.push(board)
+        let mut actions = Widget::panel("snake-actions").with_classes("demo-toolbar")
+        actions.push(Widget::button("snake-toggle", if self.running {
+                    "Pause"
+                } elif self.ended {
+                    "Play again"
+                } else {
+                    "Play"
+                }
+                ,
+            ).with_classes("form-button form-primary"))
+        actions.push(Widget::button("snake-restart", "Restart").with_classes("form-button"))
+        page.push(actions)
+        page.push(Widget::label(if self.ended {
+                    if self.body.len() == 320 {
+                        "You win!"
+                    } else {
+                        "Game over"
+                    }
+                } elif self.running {
+                    "Arrows / WASD to steer · Space to pause"
+                } else {
+                    "Paused · Space to play · Arrows / WASD to steer"
+                }
+            ).with_id("snake-status").with_classes("demo-status"))
+        ret page
+    }
+    pub fn update(self: Self, event: AppEvent) -> Self {
+        if event.is_focus_lost() {
+            ret self.pause()
+        }
+        if event.is_tick() {
+            ret self.advance(perf_counter_ms())
+        }
+        if event.is_action() {
+            ret self.action(event.action(), perf_counter_ms())
+        }
+        if event.is_key() {
+            match event.key() {
+                32 => {
+                    ret self.action("snake-toggle", perf_counter_ms())
+                }
+                27 => {
+                    ret self.pause()
+                }
+                1073741903 => {
+                    ret self.turn(0)
+                }
+                100 => {
+                    ret self.turn(0)
+                }
+                1073741905 => {
+                    ret self.turn(1)
+                }
+                115 => {
+                    ret self.turn(1)
+                }
+                1073741904 => {
+                    ret self.turn(2)
+                }
+                97 => {
+                    ret self.turn(2)
+                }
+                1073741906 => {
+                    ret self.turn(3)
+                }
+                119 => {
+                    ret self.turn(3)
+                }
+                _ => {
+                }
+            }
+        }
+        ret self
+    }
+    pub fn action(self: Self, action: str, now: u64) -> Self {
+        let mut next = self.snapshot()
+        match action {
+            "snake-restart" => {
+                next = Self::new()
+                next.best = self.best
+                next.revision = self.revision + 1
+                next.running = true
+            }
+            "snake-toggle" => {
+                if self.ended {
+                    ret self.action("snake-restart", now)
+                }
+                next.running = !self.running
+                next.queued = Vec[u32]::new()
+            }
+            _ => {
+                ret self
+            }
+        }
+        next.next_step = now + 120
+        ret next
+    }
+    fn turn(self: Self, direction: u32) -> Self {
+        if !self.running || self.queued.len() >= 2 {
+            ret self
+        }
+        let previous = if self.queued.len() == 0 {
+            self.direction
+        } else {
+            self.queued.get(self.queued.len() - 1).unwrap_or(self.direction)
+        }
+        // Validate against the last accepted turn, not the current heading.
+        // Two slots preserve quick corners without building a stale input backlog.
+        if direction == previous || direction ==(previous + 2) % 4 {
+            ret self
+        }
+        let mut queued = Vec[u32]::new()
+        for turn in self.queued {
+            queued.push(turn)
+        }
+        queued.push(direction)
+        let mut next = self.snapshot()
+        next.queued = queued
+        ret next
+    }
+    fn advance(self: Self, now: u64) -> Self {
+        if !self.running || now < self.next_step {
+            ret self
+        }
+        let mut next = self.snapshot()
+        let mut steps = 0
+        while next.running && now >= next.next_step && steps < 4 {
+            next = next.step()
+            next.next_step += 120
+            steps += 1
+        }
+        // Do not teleport after a debugger pause or a stalled window manager.
+        if now >= next.next_step {
+            next.next_step = now + 120
+        }
+        ret next
+    }
+    fn step(self: Self) -> Self {
+        if !self.running {
+            ret self
+        }
+        let mut next = self.snapshot()
+        let direction = self.queued.get(0).unwrap_or(self.direction)
+        let mut remaining = Vec[u32]::new()
+        for index in 1..self.queued.len() {
+            remaining.push(self.queued.get(index).unwrap_or(direction))
+        }
+        next.queued = remaining
+        let mut head = self.body.get(0).unwrap_or(Cell {
+                6, 7
+            }
+            ,
+        )
+        match direction {
+            0 => {
+                head.x += 1
+            }
+            1 => {
+                head.y += 1
+            }
+            2 => {
+                head.x -= 1
+            }
+            _ => {
+                head.y -= 1
+            }
+        }
+        let eating = head.x == self.food.x && head.y == self.food.y
+        let keep = self.body.len() - if eating {
+            0
+        } else {
+            1
+        }
+        let mut collision = head.x < 0 || head.x >= 20 || head.y < 0 || head.y >= 16
+        for index in 0..keep {
+            let cell = self.body.get(index).unwrap_or(head)
+            if cell.x == head.x && cell.y == head.y {
+                collision = true
+            }
+        }
+        next.revision += 1
+        if collision {
+            next.running = false
+            next.ended = true
+            ret next
+        }
+        let mut body = Vec[Cell]::new()
+        body.push(head)
+        for index in 0..keep {
+            body.push(self.body.get(index).unwrap_or(head))
+        }
+        next.body = body
+        next.direction = direction
+        if eating {
+            next.score += 1
+            if next.score > next.best {
+                next.best = next.score
+            }
+            if body.len() == 320 {
+                next.running = false
+                next.ended = true
+            } else {
+                next = next.place_food()
+            }
+        }
+        ret next
+    }
+    fn place_food(self: Self) -> Self {
+        let mut next = self.snapshot()
+        next.seed =(self.seed * 1664525 + 1013904223) % 4294967296
+        let mut vacant =(next.seed %((320 - self.body.len()) as u64)) as usize
+        for slot in 0..320 {
+            let candidate = Cell {
+                (slot % 20) as i32,(slot / 20) as i32
+            }
+            let mut occupied = false
+            for cell in self.body {
+                if cell.x == candidate.x && cell.y == candidate.y {
+                    occupied = true
+                }
+            }
+            if !occupied {
+                if vacant == 0 {
+                    next.food = candidate ret next
+                }
+                vacant -= 1
+            }
+        }
+        ret next
+    }
+}
+
+fn tile(id: str, cell: Cell, class: str) -> Widget {
+    ret Widget::panel(id).with_classes(class).with_computed_style(
+        Style::default().with_position(PositionStyle::default().with_absolute(true)
+            .with_left((cell.x as f32) * 16.0).with_top((cell.y as f32) * 16.0)))
+}
+
+#attr(test)
+fn snake_simulation() -> bool {
+    let initial = SnakePage::new()
+    let playing = initial.action("snake-toggle", 1000)
+    if playing.advance(1119).revision != 0 {
+        ret false
+    }
+    let moved = playing.advance(1120)
+    let head = moved.body.get(0).unwrap_or(Cell {
+            0, 0
+        }
+        ,
+    )
+    let original = initial.body.get(0).unwrap_or(Cell {
+            0, 0
+        }
+        ,
+    )
+    if head.x != 7 || original.x != 6 {
+        ret false
+    }
+    if moved.turn(2).queued.len() != 0 || moved.turn(3).turn(2).queued.len() != 2 {
+        ret false
+    }
+    let mut growing = playing.snapshot()
+    for index in 0..6 {
+        growing = growing.step()
+    }
+    if growing.score != 1 || growing.body.len() != 4 {
+        ret false
+    }
+    for cell in growing.body {
+        if cell.x == growing.food.x && cell.y == growing.food.y {
+            ret false
+        }
+    }
+    let mut dead = playing.snapshot()
+    for index in 0..20 {
+        if dead.running {
+            dead = dead.step()
+        }
+    }
+    ret dead.ended && !dead.running && !playing.pause().running && dead.action("snake-restart", 3000).running
+}
+
+#attr(test)
+fn snake_buffers_fast_turns() -> bool {
+    let playing = SnakePage::new().action("snake-toggle", 1000)
+    let up = playing.update(AppEvent::key_down(1073741906, 0, "snake-board"))
+    let left = up.update(AppEvent::key_down(1073741904, 0, "snake-board"))
+    if up.queued.len() != 1 || playing.queued.len() != 0 || left.queued.len() != 2 {
+        ret false
+    }
+    let first = left.advance(1120)
+    let first_head = first.body.get(0).unwrap_or(Cell {
+            0, 0
+        }
+        ,
+    )
+    let second = first.advance(1240)
+    let second_head = second.body.get(0).unwrap_or(Cell {
+            0, 0
+        }
+        ,
+    )
+    if first_head.x != 6 || first_head.y != 6 || first.direction != 3 || first.queued.len() != 1 ||
+    second_head.x != 5 || second_head.y != 6 || second.direction != 2 || second.queued.len() != 0 || !second.running {
+        ret false
+    }
+    // Repeats and opposite turns must not eat a slot. WASD uses the same queue.
+    let repeated = up.update(AppEvent::key_down(119, 0, "snake-board"))
+    let rejected = repeated.update(AppEvent::key_down(115, 0, "snake-board"))
+    let accepted = rejected.update(AppEvent::key_down(97, 0, "snake-board"))
+    let full = accepted.turn(1)
+    if repeated.queued.len() != 1 || rejected.queued.len() != 1 || accepted.queued.len() != 2 || full.queued.len() != 2 {
+        ret false
+    }
+    let paused = left.pause()
+    let resumed = paused.action("snake-toggle", 2000).advance(2120)
+    let caught_up = left.advance(1240)
+    ret paused.queued.len() == 0 && left.action("snake-toggle", 1100).queued.len() == 0 &&
+    left.update(AppEvent::focus_lost()).queued.len() == 0 &&
+    left.action("snake-restart", 2000).queued.len() == 0 &&
+    resumed.direction == 0 && caught_up.direction == 2 && caught_up.queued.len() == 0 &&
+    left.queued.len() == 2
+}

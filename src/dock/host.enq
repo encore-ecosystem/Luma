@@ -1,0 +1,434 @@
+//! Retained docking shells. Panel nodes and subscriptions outlive their location.
+import core::option::Option
+import core::vec::Vec
+import refrain::dock::model::{DockNodeId, DockPanel, DockWorkspace, PanelId, WindowId}
+import refrain::geometry::Rect
+import refrain::layout::{horizontal, vertical}
+import refrain::reactive::bindings::UiBindings
+import refrain::retained::NodeId
+import refrain::widget::Widget
+
+struct DockMount {
+    panel: PanelId
+    node: NodeId
+}
+struct HostedRoot {
+    window: WindowId
+    root: NodeId
+    shell: Option[NodeId]
+    signature: str
+}
+struct PreparedRoot {
+    index: usize
+    shell: NodeId
+    signature: str
+}
+
+/// An application supplies panel contents and native window roots. This host
+/// owns only their retained layout, never native windows or application state.
+pub struct DockHost {
+    workspace: DockWorkspace<H>
+    bindings: UiBindings<H>
+    parking: NodeId
+    panels: Vec[DockMount]
+    roots: Vec[HostedRoot]
+}
+
+impl for DockHost {
+    pub fn new(workspace: DockWorkspace<H>, bindings: UiBindings<H>) -> DockHost<H> {
+        let parking = bindings.mount(Widget::panel("luma-dock-parking"))
+        ret DockHost<H> {
+            workspace, bindings, parking, Vec[DockMount]::new(), Vec[HostedRoot]::new()
+        }
+    }
+    pub fn workspace(self: Self&) -> DockWorkspace<H> {
+        ret self.workspace
+    }
+    pub fn bindings(self: Self&) -> UiBindings<H> {
+        ret self.bindings
+    }
+    pub fn register(self: mut Self&, panel: DockPanel, content: Widget) -> bool {
+        if !self.workspace.register(panel) {
+            ret false
+        }
+        let wrapper = self.bindings.mount(Widget::panel(panel_id(panel.id()))
+            .with_classes("luma-dock-panel").with_direction(vertical()).with_flex(0, 1)
+            .with_child(content))
+        let tree = self.bindings.tree()
+        let _parked = tree.reparent(wrapper, self.parking, tree.children(self.parking).len())
+        self.panels.push(DockMount { panel.id(), wrapper })
+        ret true
+    }
+    pub fn panel_node(self: Self&, panel: PanelId) -> Option[NodeId] {
+        for entry in self.panels {
+            if entry.panel.same(panel) {
+                ret Option[NodeId]::Some(entry.node)
+            }
+        }
+        ret Option[NodeId]::None
+    }
+    pub fn stage_panel(self: mut Self&, panel: PanelId, content: Widget) -> bool {
+        let wrapper = match self.panel_node(panel) {
+            Some(node) => node None => {
+                ret false
+            }
+        }
+        let tree = self.bindings.tree()
+        match tree.children(wrapper).get(0) {
+            Some(node) => {
+                ret self.bindings.reconcile(node, content)
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+    /// The root is an empty docking container, not the complete editor chrome.
+    pub fn attach_window(self: mut Self&, window: WindowId, root: NodeId) -> bool {
+        let tree = self.bindings.tree()
+        if self.workspace.window(window).is_none() || !tree.contains(root) || tree.children(root).len() != 0 {
+            ret false
+        }
+        for host in self.roots {
+            if host.window.same(window) || tree.path(host.root, root).is_some() ||
+            tree.path(root, host.root).is_some() {
+                ret false
+            }
+        }
+        self.roots.push(HostedRoot { window, root, Option[NodeId]::None, "" })
+        ret true
+    }
+    pub fn window_root(self: Self&, window: WindowId) -> Option[NodeId] {
+        for host in self.roots {
+            if host.window.same(window) {
+                ret Option[NodeId]::Some(host.root)
+            }
+        }
+        ret Option[NodeId]::None
+    }
+    /// Call after returning the satellite's panels and committing their move,
+    /// before destroying the native window and its now-empty retained root.
+    pub fn detach_window(self: mut Self&, window: WindowId) -> bool {
+        if self.workspace.window(window).is_some() {
+            ret false
+        }
+        let root = match self.window_root(window) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let tree = self.bindings.tree()
+        for panel in self.panels {
+            if tree.path(root, panel.node).is_some() {
+                ret false
+            }
+        }
+        let mut remaining = Vec[HostedRoot]::new()
+        let mut removed = false
+        for host in self.roots {
+            if host.window.same(window) {
+                removed = true
+            } else {
+                remaining.push(host)
+            }
+        }
+        self.roots = remaining
+        ret removed
+    }
+    pub fn dispose(self: mut Self&) ->() {
+        for root in self.roots {
+            let _removed = self.bindings.unmount(root.root)
+        }
+        let _parked = self.bindings.unmount(self.parking)
+        self.roots = Vec[HostedRoot]::new()
+        self.panels = Vec[DockMount]::new()
+    }
+    /// Prepare all destinations before touching any source shell. Panels never
+    /// pass through unmount, including transfers between two native roots.
+    pub fn commit(self: mut Self&) -> bool {
+        let tree = self.bindings.tree()
+        for host in self.roots {
+            if !tree.contains(host.root) {
+                ret false
+            }
+        }
+        for panel in self.panels {
+            if !tree.contains(panel.node) {
+                ret false
+            }
+            for host in self.roots {
+                if tree.path(panel.node, host.root).is_some() {
+                    ret false
+                }
+            }
+        }
+        for window in self.workspace.windows() {
+            if self.workspace.panels_in(window.id()).len() > 0 && self.window_root(window.id()).is_none() {
+                ret false
+            }
+            for panel in self.workspace.panels_in(window.id()) {
+                if self.panel_node(panel).is_none() {
+                    ret false
+                }
+            }
+        }
+        let mut prepared = Vec[PreparedRoot]::new()
+        let mut index = 0_usize
+        for host in self.roots {
+            let root = match self.workspace.window(host.window) {
+                Some(window) => window.root() None => DockNodeId::empty()
+            }
+            let signature = topology(self.workspace, root)
+            if signature != host.signature {
+                let shell = self.bindings.mount(shell_widget(self.workspace, root, true))
+                prepared.push(PreparedRoot { index, shell, signature })
+            }
+            index += 1
+        }
+        for item in prepared {
+            let host = match self.roots.get(item.index) {
+                Some(value) => value None => {
+                    ret false
+                }
+            }
+            for panel in self.workspace.panels_in(host.window) {
+                let group = self.workspace.location(panel).unwrap_or(DockNodeId::empty())
+                let destination = match tree.find(item.shell, body_id(group)) {
+                    Some(node) => node None => {
+                        ret false
+                    }
+                }
+                let node = match self.panel_node(panel) {
+                    Some(value) => value None => {
+                        ret false
+                    }
+                }
+                if !tree.reparent(node, destination, tree.children(destination).len()) {
+                    ret false
+                }
+            }
+        }
+        for panel in self.panels {
+            if self.workspace.location(panel.panel).is_none() &&
+            !tree.parent(panel.node).unwrap_or(panel.node).same(self.parking) {
+                let _parked = tree.reparent(panel.node, self.parking, tree.children(self.parking).len())
+            }
+        }
+        for item in prepared {
+            let mut host = match self.roots.get(item.index) {
+                Some(value) => value None => {
+                    ret false
+                }
+            }
+            if !tree.reparent(item.shell, host.root, 0) {
+                ret false
+            }
+            match host.shell {
+                Some(old) => {
+                    let _removed = self.bindings.unmount(old)
+                }
+                None => {
+                }
+            }
+            host.shell = Option[NodeId]::Some(item.shell)
+            host.signature = item.signature
+            self.roots.set(item.index, host)
+        }
+        self.refresh_selection()
+        ret true
+    }
+    pub fn refresh_selection(self: mut Self&) ->() {
+        let tree = self.bindings.tree()
+        for panel in self.panels {
+            let group = self.workspace.location(panel.panel).unwrap_or(DockNodeId::empty())
+            let active = match self.workspace.node(group) {
+                Some(node) => node.active().unwrap_or(PanelId::new("")).same(panel.panel) None => false
+            }
+            let _visible = tree.set_classes(panel.node, if active {
+                    "luma-dock-panel"
+                } else {
+                    "luma-dock-panel hidden"
+                }
+                ,
+            )
+            match self.workspace.owner(group) {
+                Some(window) => {
+                    match self.window_root(window) {
+                        Some(root) => {
+                            match tree.find(root, tab_id(panel.panel)) {
+                                Some(tab) => {
+                                    let _selected = tree.set_classes(tab, if active {
+                                            "luma-dock-tab selected"
+                                        } else {
+                                            "luma-dock-tab"
+                                        }
+                                        ,
+                                    )
+                                }
+                                None => {
+                                }
+                            }
+                        }
+                        None => {
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+        }
+    }
+    /// Writes only pixel bases. It does not rebuild shells or restyle panels.
+    pub fn resize_geometry(self: mut Self&, window: WindowId, bounds: Rect) -> bool {
+        let root = match self.window_root(window) {
+            Some(node) => node None => {
+                ret false
+            }
+        }
+        let tree = self.bindings.tree()
+        for region in self.workspace.regions(window, bounds) {
+            match self.workspace.node(region.node()) {
+                Some(node) => {
+                    match self.workspace.node(node.parent()) {
+                        Some(parent) => {
+                            match tree.find(root, node_id(node.id())) {
+                                Some(target) => {
+                                    let size = if parent.horizontal() {
+                                        region.bounds().width()
+                                    } else {
+                                        region.bounds().height()
+                                    }
+                                    let _sized = tree.set_flex_basis(target, size)
+                                }
+                                None => {
+                                    ret false
+                                }
+                            }
+                        }
+                        None => {
+                        }
+                    }
+                }
+                None => {
+                    ret false
+                }
+            }
+        }
+        ret true
+    }
+    pub fn tab_target(self: Self&, id: str) -> Option[PanelId] {
+        for panel in self.panels {
+            if id == tab_id(panel.panel) {
+                ret Option[PanelId]::Some(panel.panel)
+            }
+        }
+        ret Option[PanelId]::None
+    }
+    pub fn group_target(self: Self&, window: WindowId, id: str) -> Option[DockNodeId] {
+        for panel in self.workspace.panels_in(window) {
+            let group = self.workspace.location(panel).unwrap_or(DockNodeId::empty())
+            if id == node_id(group) || id == body_id(group) {
+                ret Option[DockNodeId]::Some(group)
+            }
+        }
+        ret Option[DockNodeId]::None
+    }
+    pub fn node_element(self: Self&, node: DockNodeId) -> str {
+        ret node_id(node)
+    }
+    pub fn tab_element(self: Self&, panel: PanelId) -> str {
+        ret tab_id(panel)
+    }
+    pub fn splitter_target(self: Self&, window: WindowId, id: str) -> Option[DockNodeId] {
+        for region in self.workspace.regions(window, Rect::new(0, 0, 1, 1)) {
+            if id == "luma-dock-splitter-" + region.node().key() {
+                match self.workspace.node(region.node()) {
+                    Some(node) => {
+                        if !node.is_tabs() {
+                            ret Option[DockNodeId]::Some(node.id())
+                        }
+                    }
+                    None => {
+                    }
+                }
+            }
+        }
+        ret Option[DockNodeId]::None
+    }
+}
+fn tab_id(panel: PanelId) -> str {
+    ret "luma-dock-tab-" + panel.key()
+}
+fn panel_id(panel: PanelId) -> str {
+    ret "luma-dock-panel-" + panel.key()
+}
+fn node_id(node: DockNodeId) -> str {
+    ret "luma-dock-node-" + node.key()
+}
+fn body_id(node: DockNodeId) -> str {
+    ret "luma-dock-body-" + node.key()
+}
+fn topology(workspace: DockWorkspace&, id: DockNodeId) -> str {
+    let node = match workspace.node(id) {
+        Some(value) => value None => {
+            ret "empty"
+        }
+    }
+    let mut signature = id.key()
+    if node.is_tabs() {
+        for tab in node.tabs() {
+            let key = tab.key() signature = signature + f "/{key.len()}:{key}"
+        }
+    } else {
+        signature = signature + "(" + topology(workspace, node.first()) + ")(" + topology(workspace, node.second()) + ")"
+    }
+    ret signature
+}
+fn shell_widget(workspace: DockWorkspace&, id: DockNodeId, root: bool) -> Widget {
+    let node = match workspace.node(id) {
+        Some(value) => value None => {
+            ret Widget::panel("luma-dock-empty").with_classes("luma-dock-empty").with_flex(0, 1)
+        }
+    }
+    let grow = if root {
+        1.0_f32
+    } else {
+        0.0_f32
+    }
+    if node.is_tabs() {
+        let mut tabs = Widget::panel("luma-dock-tabs-" + id.key()).with_classes("luma-dock-tabs").with_direction(horizontal()).with_flex(28, 0)
+        for panel in node.tabs() {
+            match workspace.panel(panel) {
+                Some(descriptor) => {
+                    tabs.push(Widget::button(tab_id(panel), descriptor.title()).with_classes("luma-dock-tab").with_flex(156, 0))
+                }
+                None => {
+                }
+            }
+        }
+        ret Widget::panel(node_id(id)).with_classes("luma-dock-group").with_direction(vertical()).with_flex(0, grow)
+        .with_child(tabs).with_child(Widget::panel(body_id(id)).with_classes("luma-dock-body").with_direction(vertical()).with_flex(0, 1))
+    }
+    let mut split = Widget::panel(node_id(id)).with_classes(if node.horizontal() {
+            "luma-dock-split horizontal"
+        } else {
+            "luma-dock-split vertical"
+        }
+    )
+    .with_direction(if node.horizontal() {
+            horizontal()
+        } else {
+            vertical()
+        }
+    ).with_flex(0, grow)
+    split.push(shell_widget(workspace, node.first(), false))
+    split.push(Widget::button("luma-dock-splitter-" + id.key(), "")
+        .with_classes(if node.horizontal() {
+                "luma-dock-splitter column"
+            } else {
+                "luma-dock-splitter row"
+            }
+        ).with_flex(8, 0))
+    split.push(shell_widget(workspace, node.second(), false))
+    ret split
+}

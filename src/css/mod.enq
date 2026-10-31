@@ -1,15 +1,23 @@
 //! CSS declarations, stylesheets, selectors, variables, and cascade support.
 
-import color::{Color, black, transparent, white}
 import core::fmt::Debug
 import core::option::Option
+import core::panic::panic
 import core::result::Result
 import core::vec::Vec
-import geometry::Insets
+
+import std::io::eprintln
+import std::os::env
+import std::path::Path
+import std::time::perf_counter_ns
+
+import color::{Color, black, transparent, white}
+
+import refrain::css::imports::{load_css_file, memory_css_source}
+import refrain::geometry::Insets
 import refrain::layout::{align_center, align_end, align_start, align_stretch, horizontal, justify_center, justify_end, justify_space_around, justify_space_between, justify_space_evenly, justify_start, vertical}
 import refrain::style::{LinearGradient, Style, TransitionStyle, align_content_center, align_content_end, align_content_space_around, align_content_space_between, align_content_space_evenly, align_content_start, align_content_stretch, text_center, text_end, text_start}
-import refrain::widget::{Widget, widget_button, widget_checkbox, widget_color_picker, widget_color_swatch, widget_heading, widget_input, widget_label, widget_link, widget_panel, widget_progress, widget_radio, widget_range_slider, widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_textarea, widget_icon, widget_icon_button, widget_icon_card, widget_image}
-import std::os::{file_exists, read_file}
+import refrain::widget::{Widget, WidgetSelector, widget_button, widget_checkbox, widget_color_picker, widget_color_swatch, widget_heading, widget_icon, widget_icon_button, widget_icon_card, widget_image, widget_input, widget_label, widget_link, widget_panel, widget_progress, widget_radio, widget_range_slider, widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_textarea}
 
 extern fn luma_default_css_source() -> str
 
@@ -24,11 +32,118 @@ pub struct CssVariable {
     value: str
 }
 
+struct RuleCandidate {
+    kind: usize
+    value: str
+}
+
+struct InteractionCandidate {
+    subject: RuleCandidate
+    mask: u32
+}
+
+// Necessary selector subjects indexed once, never a full rule scan per node.
+struct RuleIndex {
+    heads: Vec[usize]
+    next: Vec[usize]
+    candidates: Vec[RuleCandidate]
+}
+
+fn rule_bucket(kind: usize, value: str) -> usize {
+    let mut hash = 1469598103934665603_u64 ^(kind as u64)
+    let mut index = 0_usize
+    while index < value.byte_len() {
+        hash =(hash ^(value.byte_at(index) as u64)) * 1099511628211_u64
+        index += 1
+    }
+    ret(hash % 512_u64) as usize
+}
+
+impl for RuleIndex {
+    pub fn new(candidates: Vec[RuleCandidate]) -> Self {
+        let mut heads = Vec[usize]::new()
+        let mut next = Vec[usize]::new()
+        while heads.len() < 512 {
+            heads.push(0)
+        }
+        let mut index = 0_usize
+        for candidate in candidates {
+            let bucket = rule_bucket(candidate.kind, candidate.value)
+            next.push(heads.get(bucket).unwrap_or(0))
+            heads.set(bucket, index + 1)
+            index += 1
+        }
+        ret Self { heads, next, candidates }
+    }
+    fn collect(self: Self, kind: usize, value: str, result: mut Vec[usize]) ->() {
+        let mut cursor = self.heads.get(rule_bucket(kind, value)).unwrap_or(0)
+        while cursor != 0 {
+            let index = cursor - 1
+            match self.candidates.get(index) {
+                Some(candidate) => {
+                    if candidate.kind == kind && candidate.value == value {
+                        let mut position = 0_usize
+                        while position < result.len() && result.get(position).unwrap_or(index) < index {
+                            position += 1
+                        }
+                        if result.get(position).unwrap_or(self.candidates.len()) != index {
+                            result.push(index)
+                            let mut slot = result.len() - 1
+                            while slot > position {
+                                result.set(slot, result.get(slot - 1).unwrap_or(index))
+                                slot -= 1
+                            }
+                            result.set(position, index)
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+            cursor = self.next.get(index).unwrap_or(0)
+        }
+        ret()
+    }
+    pub fn for_widget(self: Self, widget: Widget) -> Vec[usize] {
+        let mut result = Vec[usize]::new()
+        self.collect(0, "", result)
+        self.collect(1, widget.id(), result)
+        self.collect(3, widget_type(widget), result)
+        let classes = widget.classes()
+        let mut start = 0_usize
+        let mut cursor = 0_usize
+        while cursor <= classes.byte_len() {
+            let separator = cursor == classes.byte_len() || classes.byte_at(cursor) <= 32_u8
+            if separator {
+                if cursor > start {
+                    self.collect(2, classes.slice_bytes(start, cursor - start), result)
+                }
+                start = cursor + 1
+            }
+            cursor += 1
+        }
+        ret result
+    }
+}
+
+struct InteractionStyleState {
+    subtree_size: usize
+    hovered_within: bool
+    active_within: bool
+    focused: bool
+    focus_within: bool
+    widget_focused: bool
+    focus_visible: bool
+    children: Vec[InteractionStyleState]
+}
+
 struct SelectorNode {
     widget: Widget
     index: usize
     count: usize
     siblings: Vec[Widget]
+    interaction: InteractionStyleState
+    sibling_interactions: Vec[InteractionStyleState]
 }
 
 struct SelectorCombinator {
@@ -39,104 +154,1069 @@ struct SelectorCombinator {
 struct ComputedStyleCacheEntry {
     key: str
     declarations: str
+    base: Style
+    computed: Style
 }
 
-/// A bounded cache shared by every copy of one stylesheet value. It caches
-/// the resolved declaration sequence, not a final `Style`, so inheritance and
-/// application-authored base styles remain correct on every use.
-struct ComputedStyleCache {
-    entries: Vec[ComputedStyleCacheEntry]
-    hits: u64
-    misses: u64
+struct VariableCacheEntry {
+    key: str
+    variables: Vec[CssVariable]
 }
 
-impl for ComputedStyleCache {
-    fn new() -> ComputedStyleCache < H > {
-        ret ComputedStyleCache < H > {
-            Vec[ComputedStyleCacheEntry]::new(), 0_u64, 0_u64
+struct VariableIdentity {
+    values: Vec[CssVariable]
+    identity: u64
+    hash: u64
+}
+
+fn variable_text_hash(value: str, initial: u64) -> u64 {
+    let mut hash =(initial ^(value.byte_len() as u64)) * 1099511628211_u64
+    for index in 0..value.byte_len() {
+        hash =(hash ^(value.byte_at(index) as u64)) * 1099511628211_u64
+    }
+    ret hash
+}
+
+fn variable_content_hash(values: Vec[CssVariable]) -> u64 {
+    let mut hash = 1469598103934665603_u64
+    for variable in values {
+        hash = variable_text_hash(variable.value, variable_text_hash(variable.name, hash))
+    }
+    ret hash
+}
+
+#attr(test)
+fn css_variable_identity_contract() -> bool {
+    let mut sheet = StyleSheet::parse("label { color: var(--ink); }")
+    let first = vec![CssVariable { "--ink", "#ff0000" }]
+    let equal = vec![CssVariable { "--ink", "#ff0000" }]
+    let different = vec![CssVariable { "--ink", "#00ff00" }]
+    let identity = sheet.cache.variable_identity(first)
+    if identity == 0 || sheet.cache.variable_identity(first) != identity ||
+    sheet.cache.variable_identity(equal) != identity ||
+    sheet.cache.variable_identity(different) == identity {
+        ret false
+    }
+    // Force the content bucket to contain the right hash but wrong content.
+    // Even this collision must receive a different, fresh identity.
+    let hash = variable_content_hash(different)
+    sheet.cache.variable_contents.set((hash % 512) as usize,
+        Option[VariableIdentity]::Some(VariableIdentity { first, identity, hash }),)
+    let fresh = vec![CssVariable { "--ink", "#00ff00" }]
+    if sheet.cache.variable_identity(fresh) == identity {
+        ret false
+    }
+    let widget = Widget::label("Value").with_attribute("data-luma-css-variables", "--ink: #112233;")
+    let initial = sheet.apply(widget, "", "", "")
+    let misses = sheet.cache_misses()
+    let repeated = sheet.apply(widget, "", "", "")
+    ret initial.style().equivalent(repeated.style()) && sheet.cache_misses() == misses
+}
+
+struct CascadeEntry {
+    selector: WidgetSelector
+    explicit: bool
+    base: Style
+    computed: Style
+    variables: Vec[CssVariable]
+    inherited_variables: Vec[CssVariable]
+    interaction: u32
+    subtree_size: usize
+    child_index: usize
+    sibling_count: usize
+    depth: usize
+    authored: Style
+    parent_index: usize
+}
+
+/// Per-tree cascade state. Unlike the shared declaration cache, this retains
+/// exact authored inputs and avoids constructing CSS keys for unchanged nodes.
+pub struct RetainedCascade {
+    entries: Vec[CascadeEntry]
+    revision: u64
+    hovered: str
+    active: str
+    focused: str
+    keyboard_focus: bool
+    patches: Vec[CascadePatch]
+    patchable: bool
+    interaction_index: Option[InteractionIndex<H>]
+    interaction_evaluations: usize
+}
+
+struct CascadeInput {
+    widget: Widget
+    parent: usize
+    ordinal: usize
+    children: Vec[usize]
+    focused_within: bool
+}
+
+struct InteractionMark {
+    epoch: u64
+    forced: bool
+}
+
+struct InteractionIndex {
+    inputs: Vec[CascadeInput]
+    identifiers: Vec[Vec[usize]]
+    authored_focus: Vec[usize]
+    marks: Vec[InteractionMark]
+    epoch: u64
+    queue: Vec[usize]
+}
+
+struct CascadeUndo {
+    index: usize
+    entry: CascadeEntry
+}
+
+/// A computed local style destination; content and event captures stay retained.
+pub struct CascadePatch {
+    id: str
+    style: Style
+    focused: bool
+}
+
+impl for CascadePatch {
+    pub fn id(self: Self) -> str {
+        ret self.id
+    }
+    pub fn style(self: Self) -> Style {
+        ret self.style
+    }
+    pub fn focused(self: Self) -> bool {
+        ret self.focused
+    }
+}
+
+struct CascadeDelta {
+    patches: Vec[CascadePatch]
+    patchable: bool
+    evaluations: usize
+}
+
+impl for RetainedCascade {
+    pub fn new() -> Self<H> {
+        ret RetainedCascade<H> {
+            Vec[CascadeEntry]::new(), 0, "", "", "", true,
+            Vec[CascadePatch]::new(), false, Option[InteractionIndex<H>]::None, 0
+        }
+    }
+    pub fn matches_interaction(self: Self&, revision: u64, hovered: str, active: str,
+        focused: str, keyboard_focus: bool,) -> bool {
+        ret self.revision == revision && self.hovered == hovered && self.active == active &&
+        self.focused == focused && self.keyboard_focus == keyboard_focus
+    }
+    /// None means anonymous or geometric changes require ordinary reconciliation.
+    pub fn style_patches(self: Self&) -> Option[Vec[CascadePatch]] {
+        ret if self.patchable {
+            Option[Vec[CascadePatch]]::Some(self.patches)
+        } else {
+            Option[Vec[CascadePatch]]::None
+        }
+    }
+    /// Nodes whose CSS was evaluated in the last interaction-only transaction.
+    pub fn interaction_evaluations(self: Self&) -> usize {
+        ret self.interaction_evaluations
+    }
+    /// A retained interaction index belongs to its authored root, never to a
+    /// transient preview that happens to share the window or stylesheet.
+    pub fn matches_root(self: Self&, root: Widget) -> bool {
+        match self.interaction_index {
+            Some(index) => {
+                if index.inputs.len() == 0 {
+                    ret false
+                }
+                let authored = index.input(0).widget
+                ret authored.selector_equivalent(root) &&
+                authored.style().equivalent(root.style()) &&
+                authored.has_explicit_style() == root.has_explicit_style()
+            }
+            None => {
+                ret false
+            }
         }
     }
 
-    fn get(self: Self &, key: str) -> Option[str] {
-        let mut index = 0_usize
-        while index < self.entries.len() {
-            match self.entries.get(index) {
-                Option::Some(entry) => {
-                    if entry.key == key {
-                        self.hits += 1_u64
-                        ret Option[str]::Some(entry.declarations)
+    /// Adopt a retained sizing write without evaluating selectors. Flex basis
+    /// is not inherited; future hover/focus transactions must see its new base.
+    pub fn adopt_geometry(self: mut Self&, path: Vec[usize], local: Widget) -> bool {
+        let mut index = match self.interaction_index {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let position = match index.position(path) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let input = index.input(position)
+        let authored = local.with_children(input.widget.children())
+        if !input.widget.selector_inputs().equivalent(authored.selector_inputs(), true) {
+            ret false
+        }
+        let mut entry = match self.entries.get(position) {
+            Some(value) => value None => {
+                ret false
+            }
+        }
+        let basis = local.geometry_basis()
+        entry.authored = local.style()
+        entry.explicit = local.has_explicit_style()
+        entry.base = entry.base.with_flex_basis(basis)
+        entry.computed = entry.computed.with_flex_basis(basis)
+        self.entries.set(position, entry)
+        index.inputs.set(position, CascadeInput {
+                authored, input.parent, input.ordinal,
+                input.children, input.focused_within
+            }
+            ,
+        )
+        index.refresh_ancestors(position)
+        ret true
+    }
+}
+
+fn interaction_id_bucket(id: str) -> usize {
+    let mut hash = 1469598103934665603_u64
+    for index in 0..id.byte_len() {
+        hash =(hash ^ id.byte_at(index) as u64) * 1099511628211_u64
+    }
+    ret(hash % 256) as usize
+}
+
+impl for InteractionIndex {
+    pub fn input(self: Self&, position: usize) -> CascadeInput {
+        match self.inputs.get(position) {
+            Some(value) => {
+                ret value
+            }
+            None => {
+                panic("invalid retained CSS input index")
+            }
+        }
+        // panic exits; its current core signature is nevertheless unit-valued.
+        ret CascadeInput { Widget::spacer(0), 0, 0, Vec[usize]::new(), false }
+    }
+    pub fn new(root: Widget) -> Self<H> {
+        ret InteractionIndex::from_snapshot(root.selector_tree())
+    }
+    pub fn from_snapshot(root: Widget) -> Self<H> {
+        let mut buckets = Vec[Vec[usize]]::new()
+        for _index in 0..256 {
+            buckets.push(Vec[usize]::new())
+        }
+        let mut index = InteractionIndex<H> {
+            Vec[CascadeInput]::new(), buckets, Vec[usize]::new(),
+            Vec[InteractionMark]::new(), 0, Vec[usize]::new()
+        }
+        let _root = index.append(root, 0, 0)
+        ret index
+    }
+    pub fn position(self: Self&, path: Vec[usize]) -> Option[usize] {
+        if self.inputs.len() == 0 {
+            ret Option[usize]::None
+        }
+        let mut position = 0_usize
+        for ordinal in path {
+            match self.input(position).children.get(ordinal) {
+                Some(child) => {
+                    position = child
+                }
+                None => {
+                    ret Option[usize]::None
+                }
+            }
+        }
+        ret Option[usize]::Some(position)
+    }
+    // Stable names, source ordinals and authored focus keep all lookup/mark
+    // tables valid. Validate the complete branch before changing the index.
+    pub fn same_topology(self: Self&, position: usize, branch: Widget) -> bool {
+        let input = self.input(position)
+        if input.widget.id() != branch.id() || input.widget.kind() != branch.kind() ||
+        input.widget.tag() != branch.tag() ||
+        input.children.len() != branch.children().len() {
+            ret false
+        }
+        let mut ordinal = 0_usize
+        for child in branch.children() {
+            if !self.same_topology(input.children.get(ordinal).unwrap_or(self.inputs.len()), child) {
+                ret false
+            }
+            ordinal += 1
+        }
+        ret true
+    }
+    pub fn refresh_branch(self: mut Self&, position: usize, branch: Widget) ->() {
+        let input = self.input(position)
+        let mut ordinal = 0_usize
+        for child in branch.children() {
+            self.refresh_branch(input.children.get(ordinal).unwrap_or(self.inputs.len()), child)
+            ordinal += 1
+        }
+        if input.widget.focused() != branch.focused() {
+            let mut focused = Vec[usize]::new()
+            for previous in self.authored_focus {
+                if previous != position {
+                    focused.push(previous)
+                }
+            }
+            if branch.focused() {
+                focused.push(position)
+            }
+            self.authored_focus = focused
+        }
+        let mut focused_within = branch.focused()
+        for child in input.children {
+            focused_within = focused_within || self.input(child).focused_within
+        }
+        self.inputs.set(position, CascadeInput {
+                branch, input.parent, input.ordinal, input.children, focused_within
+            }
+            ,)
+        ret()
+    }
+    pub fn refresh_ancestors(self: mut Self&, position: usize) ->() {
+        let mut cursor = position
+        loop {
+            let input = self.input(cursor)
+            if input.parent == cursor {
+                break
+            }
+            let parent = self.input(input.parent)
+            let mut focused_within = parent.widget.focused()
+            for child in parent.children {
+                focused_within = focused_within || self.input(child).focused_within
+            }
+            let mut children = Vec[Widget]::new()
+            let mut ordinal = 0_usize
+            for child in parent.widget.children() {
+                children.push(if ordinal == input.ordinal {
+                        input.widget
+                    } else {
+                        child
+                    }
+                )
+                ordinal += 1
+            }
+            self.inputs.set(input.parent, CascadeInput {
+                    parent.widget.with_children(children), parent.parent, parent.ordinal,
+                    parent.children, focused_within
+                }
+                ,)
+            cursor = input.parent
+        }
+        ret()
+    }
+    fn append(self: mut Self&, widget: Widget, parent: usize, ordinal: usize) -> usize {
+        let index = self.inputs.len()
+        self.inputs.push(CascadeInput {
+                widget, parent, ordinal, Vec[usize]::new(), widget.focused()
+            }
+            ,
+        )
+        self.marks.push(InteractionMark { 0, false })
+        if widget.id() != "" {
+            let bucket = interaction_id_bucket(widget.id())
+            let mut entries = self.identifiers.get(bucket).unwrap_or(Vec[usize]::new())
+            entries.push(index)
+        }
+        if widget.focused() {
+            self.authored_focus.push(index)
+        }
+        let mut children = Vec[usize]::new()
+        let mut focused = widget.focused()
+        for child in widget.children() {
+            let added = self.append(child, index, children.len())
+            children.push(added)
+            focused = focused || self.input(added).focused_within
+        }
+        self.inputs.set(index, CascadeInput { widget, parent, ordinal, children, focused })
+        ret index
+    }
+    pub fn targets(self: Self&, id: str) -> Vec[usize] {
+        let mut targets = Vec[usize]::new()
+        if id == "" {
+            ret targets
+        }
+        for candidate in self.identifiers.get(interaction_id_bucket(id)).unwrap_or(Vec[usize]::new()) {
+            if self.input(candidate).widget.id() == id {
+                targets.push(candidate)
+            }
+        }
+        ret targets
+    }
+    pub fn mark(self: mut Self&, index: usize, forced: bool) ->() {
+        let previous = self.marks.get(index).unwrap_or(InteractionMark { 0, false })
+        if previous.epoch == self.epoch {
+            if forced && !previous.forced {
+                self.marks.set(index, InteractionMark {
+                        self.epoch, true
+                    }
+                    ,
+                )
+            }
+            ret()
+        }
+        self.marks.set(index, InteractionMark { self.epoch, forced })
+        // Numeric preorder is also parent-before-child dependency order.
+        self.queue.push(index)
+        let mut cursor = self.queue.len() - 1
+        while cursor > 0 {
+            let parent =(cursor - 1) / 2
+            let value = self.queue.get(parent).unwrap_or(index)
+            if value <= index {
+                break
+            }
+            self.queue.set(cursor, value)
+            cursor = parent
+        }
+        self.queue.set(cursor, index)
+        ret()
+    }
+    pub fn pop(self: mut Self&) -> usize {
+        let first = self.queue.get(0).unwrap_or(0)
+        let last = self.queue.pop().unwrap_or(first)
+        if self.queue.len() == 0 {
+            ret first
+        }
+        let mut cursor = 0_usize
+        while cursor * 2 + 1 < self.queue.len() {
+            let mut child = cursor * 2 + 1
+            if child + 1 < self.queue.len() && self.queue.get(child + 1).unwrap_or(last) < self.queue.get(child).unwrap_or(last) {
+                child += 1
+            }
+            let value = self.queue.get(child).unwrap_or(last)
+            if value >= last {
+                break
+            }
+            self.queue.set(cursor, value)
+            cursor = child
+        }
+        self.queue.set(cursor, last)
+        ret first
+    }
+    pub fn mark_paths(self: mut Self&, targets: Vec[usize]) ->() {
+        for target in targets {
+            let mut cursor = target
+            loop {
+                self.mark(cursor, false)
+                let parent = self.input(cursor).parent
+                if parent == cursor {
+                    break
+                }
+                cursor = parent
+            }
+        }
+        ret()
+    }
+}
+
+fn interaction_contains(targets: Vec[usize], index: usize, span: usize) -> bool {
+    for target in targets {
+        if target >= index && target < index + span {
+            ret true
+        }
+    }
+    ret false
+}
+
+fn indexed_interaction(index: InteractionIndex<H>, entries: Vec[CascadeEntry], position: usize,
+    hovered: Vec[usize], active: Vec[usize], focused: Vec[usize], explicit_focus: bool,
+    keyboard: bool,) -> InteractionStyleState {
+    let input = index.input(position)
+    let span = cascade_entry_at(entries, position).subtree_size
+    let direct = interaction_contains(focused, position, 1)
+    let marked = if explicit_focus {
+        input.widget.focused()
+    } else {
+        direct
+    }
+    ret InteractionStyleState {
+        span, interaction_contains(hovered, position, span),
+        interaction_contains(active, position, span), direct,
+        if explicit_focus {
+            input.focused_within
+        } else {
+            interaction_contains(focused, position, span)
+        }
+        ,
+        marked, marked &&(keyboard || input.widget.kind() == widget_input() || input.widget.kind() == widget_textarea()),
+        Vec[InteractionStyleState]::new()
+    }
+}
+
+fn cascade_entry_at(entries: Vec[CascadeEntry], position: usize) -> CascadeEntry {
+    match entries.get(position) {
+        Some(value) => {
+            ret value
+        }
+        None => {
+            panic("invalid retained CSS cascade index")
+        }
+    }
+    ret CascadeEntry {
+        Widget::spacer(0).selector_inputs(), false, Style::default(),
+        Style::default(), Vec[CssVariable]::new(), Vec[CssVariable]::new(), 0, 0, 0, 0, 0, Style::default(), 0
+    }
+}
+
+fn refresh_cascade_ancestor_interactions(state: mut RetainedCascade&, position: usize) ->() {
+    let index = match state.interaction_index {
+        Some(index) => index None => {
+            ret()
+        }
+    }
+    let hovered = index.targets(state.hovered)
+    let active = index.targets(state.active)
+    let focused = index.targets(state.focused)
+    let mut cursor = index.input(position).parent
+    loop {
+        let previous = cascade_entry_at(state.entries, cursor)
+        let interaction = indexed_interaction(index, state.entries, cursor, hovered, active, focused,
+            state.focused == "", state.keyboard_focus,)
+        state.entries.set(cursor, CascadeEntry {
+                previous.selector, previous.explicit, previous.base,
+                previous.computed, previous.variables, previous.inherited_variables, cascade_interaction_bits(interaction),
+                previous.subtree_size, previous.child_index, previous.sibling_count, previous.depth, previous.authored, previous.parent_index
+            }
+            ,
+        )
+        let parent = index.input(cursor).parent
+        if parent == cursor {
+            break
+        }
+        cursor = parent
+    }
+    ret()
+}
+
+// Persistent source snapshots copy only the ancestry of a changed branch.
+// The snapshot contains selectors, not event closures or renderer resources.
+fn replace_cascade_branch(root: Widget, path: Vec[usize], depth: usize, branch: Widget) -> Widget {
+    if depth == path.len() {
+        ret branch
+    }
+    let selected = path.get(depth).unwrap_or(root.children().len())
+    let mut children = Vec[Widget]::new()
+    let mut ordinal = 0_usize
+    for child in root.children() {
+        children.push(if ordinal == selected {
+                replace_cascade_branch(child, path, depth + 1, branch)
+            } else {
+                child
+            }
+        )
+        ordinal += 1
+    }
+    ret root.with_children(children)
+}
+
+fn shifted_cascade_position(position: usize, end: usize, removed: usize, added: usize) -> usize {
+    ret if position >= end {
+        position - removed + added
+    } else {
+        position
+    }
+}
+
+fn repositioned_cascade_entry(entry: CascadeEntry, parent: usize, span: usize) -> CascadeEntry {
+    ret CascadeEntry {
+        entry.selector, entry.explicit, entry.base, entry.computed, entry.variables,
+        entry.inherited_variables, entry.interaction, span, entry.child_index,
+        entry.sibling_count, entry.depth, entry.authored, parent
+    }
+}
+
+fn cascade_selector_tree_equal(entries: Vec[CascadeEntry], widget: Widget, offset: usize) -> bool {
+    match entries.get(offset) {
+        Some(entry) => {
+            if !entry.selector.equivalent(widget.selector_inputs(), true) {
+                ret false
+            }
+        }
+        None => {
+            ret false
+        }
+    }
+    let mut index = offset + 1
+    for child in widget.children() {
+        if !cascade_selector_tree_equal(entries, child, index) {
+            ret false
+        }
+        match entries.get(index) {
+            Some(entry) => {
+                index += entry.subtree_size
+            }
+            None => {
+                ret false
+            }
+        }
+    }
+    ret true
+}
+
+// If every authored CSS input is unchanged, parent/position/relational inputs
+// are unchanged too. Reuse computed styles, but always take content, resources
+// and closures from the new model. This also avoids allocating fresh cascade
+// entries and selector ancestry on geometry-only frames.
+fn replay_cascade(entries: Vec[CascadeEntry], widget: Widget, offset: usize,
+    focused_id: str,) -> Option[Widget] {
+    let entry = match entries.get(offset) {
+        Some(value) => value
+        None => {
+            ret Option[Widget]::None
+        }
+    }
+    let marked = if focused_id == "" {
+        widget
+    } else {
+        widget.with_focus(widget.id() == focused_id)
+    }
+    if !entry.selector.equivalent(marked.selector_inputs(), true) ||
+    entry.explicit != widget.has_explicit_style() || !entry.authored.equivalent(widget.style()) {
+        ret Option[Widget]::None
+    }
+    let mut children = Vec[Widget]::new()
+    let mut index = offset + 1
+    for child in widget.children() {
+        match replay_cascade(entries, child, index, focused_id) {
+            Some(value) => children.push(value)
+            None => {
+                ret Option[Widget]::None
+            }
+        }
+        match entries.get(index) {
+            Some(value) => {
+                index += value.subtree_size
+            }
+            None => {
+                ret Option[Widget]::None
+            }
+        }
+    }
+    if index != offset + entry.subtree_size {
+        ret Option[Widget]::None
+    }
+    ret Option[Widget]::Some(widget.with_computed_style(entry.computed)
+        .with_focus((entry.interaction & 16) != 0).with_children(children))
+}
+
+fn cascade_variables_equal(left: Vec[CssVariable], right: Vec[CssVariable]) -> bool {
+    // Cascaded variable sets are immutable. The same storage is the same
+    // exact input; do not compare every inherited variable for every child.
+    if left.as_ptr() as usize == right.as_ptr() as usize {
+        ret true
+    }
+    if left.len() != right.len() {
+        ret false
+    }
+    let mut index = 0_usize
+    for variable in left {
+        match right.get(index) {
+            Some(other) => {
+                if variable.name != other.name || variable.value != other.value {
+                    ret false
+                }
+            }
+            None => {
+                ret false
+            }
+        }
+        index += 1
+    }
+    ret true
+}
+
+fn cascade_interaction_bits(state: InteractionStyleState) -> u32 {
+    let mut bits = 0_u32
+    if state.hovered_within {
+        bits = bits | 1
+    }
+    if state.active_within {
+        bits = bits | 2
+    }
+    if state.focused {
+        bits = bits | 4
+    }
+    if state.focus_within {
+        bits = bits | 8
+    }
+    if state.widget_focused {
+        bits = bits | 16
+    }
+    if state.focus_visible {
+        bits = bits | 32
+    }
+    ret bits
+}
+
+/// A bounded cache shared by every copy of one stylesheet value. It caches
+/// computed styles together with their inherited base. A changed base reuses
+/// declarations, while unchanged input does no parsing or rule matching.
+struct ComputedStyleCache {
+    entries: Vec[ComputedStyleCacheEntry]
+    entry_slots: Vec[usize]
+    hits: u64
+    misses: u64
+    variables: Vec[VariableCacheEntry]
+    variable_slots: Vec[usize]
+    relational: bool
+    sibling_dependent: bool
+    sibling_interaction_dependent: bool
+    ancestor_dependent: bool
+    ancestor_interaction_dependent: bool
+    ancestor_structure_dependent: bool
+    position_dependent: bool
+    selector_ids: Vec[str]
+    selector_attributes: Vec[str]
+    anonymous_id_safe: bool
+    declaration_styles: Vec[ComputedStyleCacheEntry]
+    declaration_slots: Vec[usize]
+    variable_identities: Vec[Option[VariableIdentity]]
+    variable_contents: Vec[Option[VariableIdentity]]
+    next_variable_identity: u64
+}
+
+impl for ComputedStyleCache {
+    pub fn new(relational: bool, sibling_dependent: bool, ancestor_dependent: bool, rules: Vec[StyleRule]) -> ComputedStyleCache<H> {
+        let mut selector_ids = Vec[str]::new()
+        let mut selector_attributes = vec!["required", "readonly", "placeholder", "data-luma-css-variables"]
+        let mut anonymous_id_safe = !relational
+        let mut position_dependent = sibling_dependent
+        let mut ancestor_interaction_dependent = false
+        let mut ancestor_structure_dependent = false
+        let mut sibling_interaction_dependent = false
+        for rule in rules {
+            // Type positions inspect sibling descriptors, which stay immutable
+            // during this transaction. +/~ can inspect a sibling's live state.
+            sibling_interaction_dependent = sibling_interaction_dependent ||
+            string_contains(rule.selector, "+") || string_contains(rule.selector, "~")
+            let combinator = rightmost_combinator(rule.selector)
+            if string_contains(rule.selector, "(") ||
+            (combinator.kind != 0_usize && string_contains(rule.selector.slice(0_usize, combinator.index), ":empty")) {
+                ancestor_structure_dependent = true
+            }
+            // A pseudo selector on an ancestor can depend on interaction,
+            // including nested :not/:is forms. Static ancestors cannot.
+            if string_contains(rule.selector, "(") ||
+            (combinator.kind != 0_usize && string_contains(rule.selector.slice(0_usize, combinator.index), ":")) {
+                ancestor_interaction_dependent = true
+            }
+            if string_contains(rule.selector, ":nth-") || string_contains(rule.selector, ":first-") ||
+            string_contains(rule.selector, ":last-") || string_contains(rule.selector, ":only-") {
+                position_dependent = true
+            }
+            // IDs on ancestors matter too, but arbitrary application IDs do
+            // not. Virtualized rows can therefore reuse an equivalent style.
+            let mut cursor = 0_usize
+            while cursor < rule.selector.char_len() {
+                if rule.selector.slice(cursor, 1_usize) == "[" {
+                    let close = matching_bracket(rule.selector, cursor)
+                    let expression = trim(rule.selector.slice(cursor + 1_usize, close - cursor - 1_usize))
+                    let equals = find_character(expression, "=", 0_usize)
+                    let mut end = equals
+                    if equals > 0_usize && equals < expression.char_len() {
+                        let marker = expression.slice(equals - 1_usize, 1_usize)
+                        if marker == "~" || marker == "|" || marker == "^" || marker == "$" || marker == "*" {
+                            end -= 1_usize
+                        }
+                    }
+                    let name = trim(expression.slice(0_usize, end))
+                    selector_attributes.push(name)
+                    if name == "id" {
+                        anonymous_id_safe = false
+                    }
+                    cursor = close + 1_usize
+                } elif rule.selector.slice(cursor, 1_usize) == "#" {
+                    let start = cursor + 1_usize
+                    let end = selector_part_end(rule.selector, start)
+                    selector_ids.push(rule.selector.slice(start, end - start))
+                    cursor = end
+                } else {
+                    cursor += 1_usize
+                }
+            }
+            // Keep complex nested/attribute ID matching conservative.
+            if string_contains(rule.selector, "(") {
+                anonymous_id_safe = false
+            }
+        }
+        ret ComputedStyleCache<H> {
+            Vec[ComputedStyleCacheEntry]::new(), Vec[usize]::new(), 0_u64, 0_u64,
+            Vec[VariableCacheEntry]::new(), Vec[usize]::new(), relational, sibling_dependent, sibling_interaction_dependent, ancestor_dependent, ancestor_interaction_dependent, ancestor_structure_dependent, position_dependent,
+            selector_ids, selector_attributes, anonymous_id_safe,
+            Vec[ComputedStyleCacheEntry]::new(), Vec[usize]::new(),
+            Vec[Option[VariableIdentity]]::new(), Vec[Option[VariableIdentity]]::new(), 1
+        }
+    }
+
+    pub fn variable_identity(self: mut Self&, values: Vec[CssVariable]) -> u64 {
+        if values.len() == 0 {
+            ret 0
+        }
+        let storage = values.as_ptr() as usize
+        let slot =((storage / 8) ^(storage / 4096)) % 512
+        while self.variable_identities.len() <= slot {
+            self.variable_identities.push(Option[VariableIdentity]::None)
+        }
+        match self.variable_identities.get(slot).unwrap_or(Option[VariableIdentity]::None) {
+            Some(previous) => {
+                if previous.values.as_ptr() as usize == storage {
+                    ret previous.identity
+                }
+            }
+            None => {
+            }
+        }
+        // Fresh but equal sets share an identity too. Hashes only select a
+        // bucket; exact contents decide equality, so a collision cannot turn
+        // one set of CSS variables into another.
+        let hash = variable_content_hash(values)
+        let content_slot =(hash % 512) as usize
+        while self.variable_contents.len() <= content_slot {
+            self.variable_contents.push(Option[VariableIdentity]::None)
+        }
+        let mut identity = 0_u64
+        match self.variable_contents.get(content_slot).unwrap_or(Option[VariableIdentity]::None) {
+            Some(previous) => {
+                if previous.hash == hash && cascade_variables_equal(previous.values, values) {
+                    identity = previous.identity
+                }
+            }
+            None => {
+            }
+        }
+        // Keeping immutable vectors alive prevents address reuse. Assign a
+        // new monotonically increasing identity after a content eviction.
+        if identity == 0 {
+            identity = self.next_variable_identity
+            self.next_variable_identity += 1
+            self.variable_contents.set(content_slot, Option[VariableIdentity]::Some(VariableIdentity {
+                        values, identity, hash
+                    }
+                    ,
+                ))
+        }
+        self.variable_identities.set(slot, Option[VariableIdentity]::Some(VariableIdentity {
+                    values, identity, hash
+                }
+                ,
+            ))
+        ret identity
+    }
+
+    pub fn get(self: mut Self&, key: str, base: Style) -> Option[Style] {
+        let index = style_cache_bucket(key)
+        if index < self.entry_slots.len() {
+            match self.entry_slots.get(index) {
+                Option::Some(slot) => {
+                    if slot > 0_usize {
+                        match self.entries.get(slot - 1_usize) {
+                            Option::Some(entry) => {
+                                if entry.key == key {
+                                    self.hits += 1_u64
+                                    if entry.base.equivalent(base) {
+                                        ret Option[Style]::Some(entry.computed)
+                                    }
+                                    let computed = self.compute_declarations(base, entry.declarations)
+                                    self.entries.set(slot - 1_usize, ComputedStyleCacheEntry {
+                                            key, entry.declarations, base, computed
+                                        }
+                                        ,)
+                                    ret Option[Style]::Some(computed)
+                                }
+                            }
+                            Option::None => {
+                            }
+                        }
                     }
                 }
                 Option::None => {
                 }
             }
-            index += 1_usize
         }
         self.misses += 1_u64
-        ret Option[str]::None
+        ret Option[Style]::None
     }
 
-    fn put(self: Self &, key: str, declarations: str) ->() {
-        // Bound retained memory for applications that generate unstable IDs.
-        // Clearing is deliberately coarse and rare; normal retained trees keep
-        // a small, hot set of selector states.
-        if self.entries.len() >= 2048_usize {
-            self.entries = Vec[ComputedStyleCacheEntry]::new()
+    pub fn put(self: mut Self&, key: str, declarations: str, base: Style, computed: Style) ->() {
+        let index = style_cache_bucket(key)
+        while self.entry_slots.len() <= index {
+            self.entry_slots.push(0_usize)
         }
-        self.entries.push(ComputedStyleCacheEntry {
-                key, declarations
-            }
-            ,
-        )
+        let slot = match self.entry_slots.get(index) {
+            Option::Some(value) => value
+            Option::None => 0_usize
+        }
+        let entry = ComputedStyleCacheEntry {
+            key, declarations, base, computed
+        }
+        if slot == 0_usize {
+            self.entries.push(entry)
+            self.entry_slots.set(index, self.entries.len())
+        } else {
+            self.entries.set(slot - 1_usize, entry)
+        }
         ret()
     }
 
-    fn hit_count(self: Self &) -> u64 {
+    // Different widget IDs often produce identical cascades (for example a
+    // grid of icon cards). Parse that cascade once per inherited base style.
+    pub fn compute_declarations(self: mut Self&, base: Style, declarations: str) -> Style {
+        let bucket = style_cache_bucket(declarations)
+        let slot = self.declaration_slots.get(bucket).unwrap_or(0_usize)
+        if slot > 0_usize {
+            match self.declaration_styles.get(slot - 1_usize) {
+                Option::Some(entry) => {
+                    if entry.declarations == declarations && entry.base.equivalent(base) {
+                        ret entry.computed
+                    }
+                }
+                Option::None => {
+                }
+            }
+        }
+        let computed = apply_css(base, declarations)
+        while self.declaration_slots.len() <= bucket {
+            self.declaration_slots.push(0_usize)
+        }
+        let entry = ComputedStyleCacheEntry {
+            "", declarations, base, computed
+        }
+        if slot == 0_usize {
+            self.declaration_styles.push(entry)
+            self.declaration_slots.set(bucket, self.declaration_styles.len())
+        } else {
+            self.declaration_styles.set(slot - 1_usize, entry)
+        }
+        ret computed
+    }
+
+    pub fn hit_count(self: Self&) -> u64 {
         ret self.hits
     }
-    fn miss_count(self: Self &) -> u64 {
+    pub fn miss_count(self: Self&) -> u64 {
         ret self.misses
     }
+    pub fn get_variables(self: Self&, key: str) -> Option[Vec[CssVariable]] {
+        let index = style_cache_bucket(key)
+        if index < self.variable_slots.len() {
+            match self.variable_slots.get(index) {
+                Option::Some(slot) => {
+                    if slot > 0_usize {
+                        match self.variables.get(slot - 1_usize) {
+                            Option::Some(entry) => {
+                                if entry.key == key {
+                                    ret Option[Vec[CssVariable]]::Some(entry.variables)
+                                }
+                            }
+                            Option::None => {
+                            }
+                        }
+                    }
+                }
+                Option::None => {
+                }
+            }
+        }
+        ret Option[Vec[CssVariable]]::None
+    }
+    pub fn put_variables(self: mut Self&, key: str, variables: Vec[CssVariable]) ->() {
+        let index = style_cache_bucket(key)
+        while self.variable_slots.len() <= index {
+            self.variable_slots.push(0_usize)
+        }
+        let slot = match self.variable_slots.get(index) {
+            Option::Some(value) => value
+            Option::None => 0_usize
+        }
+        let entry = VariableCacheEntry {
+            key, variables
+        }
+        if slot == 0_usize {
+            self.variables.push(entry)
+            self.variable_slots.set(index, self.variables.len())
+        } else {
+            self.variables.set(slot - 1_usize, entry)
+        }
+        ret()
+    }
+}
+
+fn style_cache_bucket(key: str) -> usize {
+    let mut hash = 1469598103934665603_u64
+    let mut index = 0_usize
+    while index < key.len() {
+        hash =(hash ^(key.byte_at(index) as u64)) * 1099511628211_u64
+        index += 1_usize
+    }
+    ret(hash % 2048_u64) as usize
 }
 
 pub struct StyleSheet {
     rules: Vec[StyleRule]
+    candidates: Vec[RuleCandidate]
+    variable_rules: Vec[StyleRule]
+    variable_candidates: Vec[RuleCandidate]
     maximum_specificity: usize
     revision: u64
     source_path: str
-    cache: ComputedStyleCache < H >
+    cache: ComputedStyleCache<H>
+    rule_index: RuleIndex
+    ancestor_interactions: Vec[RuleCandidate]
+    local_interactions: Vec[InteractionCandidate]
 }
 
 impl for StyleSheet {
     pub fn parse(source: str) -> StyleSheet {
         let mut rules = Vec[StyleRule]::new()
+        let source = match memory_css_source(source, false) {
+            Result::Ok(clean) => clean
+            Result::Err(_) => source
+        }
         let source = strip_comments(source)
         let mut cursor = 0_usize
-        while cursor < source.char_len() {
+        while cursor < source.byte_len() {
             let open = rule_open(source, cursor)
-            if open == source.char_len() {
+            if open == source.byte_len() {
                 break
             }
             let close = rule_close(source, open)
-            if close == source.char_len() {
+            if close == source.byte_len() {
                 break
             }
-            let selector = trim(source.slice(cursor, open - cursor))
+            let selector = trim(source.slice_bytes(cursor, open - cursor))
             if selector != "" {
-                let declarations = source.slice(open + 1_usize, close - open - 1_usize)
+                let declarations = source.slice_bytes(open + 1_usize, close - open - 1_usize)
                 append_selector_rules(rules, selector, declarations)
             }
             cursor = close + 1_usize
         }
         let mut maximum_specificity = 0_usize
+        let mut ancestor_dependent = false
         for rule in rules {
+            if rightmost_combinator(rule.selector).kind != 0_usize ||
+            string_contains(rule.selector, " ") || string_contains(rule.selector, "\t") ||
+            string_contains(rule.selector, "\n") || string_contains(rule.selector, ">") ||
+            string_contains(rule.selector, "+") || string_contains(rule.selector, "~") {
+                ancestor_dependent = true
+            }
             if rule.specificity > maximum_specificity {
                 maximum_specificity = rule.specificity
             }
         }
+        let ordered = order_style_rules(rules)
+        let variable_rules = variable_style_rules(ordered)
         ret StyleSheet {
-            rules, maximum_specificity, stylesheet_revision(source), "",
-            ComputedStyleCache::new()
+            ordered, rule_candidates(ordered), variable_rules, rule_candidates(variable_rules), maximum_specificity, stylesheet_revision(source), "",
+            ComputedStyleCache::new(string_contains(source, ":has("),
+                string_contains(source, "+") || string_contains(source, "~") ||
+                string_contains(source, "-of-type") || string_contains(source, ":has("), ancestor_dependent, ordered,),
+            RuleIndex::new(rule_candidates(ordered)), ancestor_interaction_candidates(ordered), local_interaction_candidates(ordered)
         }
     }
 
@@ -147,21 +1227,23 @@ impl for StyleSheet {
     }
 
     pub fn try_parse(source: str) -> Result[StyleSheet, str] {
+        let source = memory_css_source(source, true)?
         if !css_balanced(source) {
             ret Result[StyleSheet, str]::Err("unclosed CSS rule or quoted value")
         }
         ret Result[StyleSheet, str]::Ok(StyleSheet::parse(source))
     }
 
+    /// Loads local @import rules relative to each importing file. Imports must
+    /// precede ordinary rules; errors include the import chain. No network IO.
     pub fn from_file(path: str) -> Result[StyleSheet, str] {
-        if !file_exists(path) {
-            ret Result[StyleSheet, str]::Err("stylesheet file does not exist: " + path)
-        }
-        match StyleSheet::try_parse(read_file(path)) {
+        let path = Path::new(path).resolve().as_str()
+        let source = load_css_file(path)?
+        match StyleSheet::try_parse(source) {
             Result::Ok(sheet) => {
                 ret Result[StyleSheet, str]::Ok(StyleSheet {
-                        sheet.rules, sheet.maximum_specificity,
-                        sheet.revision, path, ComputedStyleCache::new()
+                        sheet.rules, sheet.candidates, sheet.variable_rules, sheet.variable_candidates, sheet.maximum_specificity,
+                        sheet.revision, path, sheet.cache, sheet.rule_index, sheet.ancestor_interactions, sheet.local_interactions
                     }
                     ,)
             }
@@ -177,8 +1259,10 @@ impl for StyleSheet {
         let mut rules = Vec[StyleRule]::new()
         rules.extend(self.rules)
         rules.extend(other.rules)
+        let ordered = order_style_rules(rules)
+        let variable_rules = variable_style_rules(ordered)
         ret StyleSheet {
-            rules,
+            ordered, rule_candidates(ordered), variable_rules, rule_candidates(variable_rules),
             if self.maximum_specificity > other.maximum_specificity {
                 self.maximum_specificity
             } else {
@@ -186,7 +1270,10 @@ impl for StyleSheet {
             }
             ,
             self.revision ^(other.revision * 1099511628211_u64), other.source_path,
-            ComputedStyleCache::new()
+            ComputedStyleCache::new(self.cache.relational || other.cache.relational,
+                self.cache.sibling_dependent || other.cache.sibling_dependent,
+                self.cache.ancestor_dependent || other.cache.ancestor_dependent, ordered,),
+            RuleIndex::new(rule_candidates(ordered)), ancestor_interaction_candidates(ordered), local_interaction_candidates(ordered)
         }
     }
 
@@ -198,7 +1285,8 @@ impl for StyleSheet {
             Result::Ok(sheet) => {
                 ret StyleSheet::default().merge(sheet)
             }
-            Result::Err(_) => {
+            Result::Err(message) => {
+                eprintln("Luma: stylesheet reload failed; keeping previous styles: " + message)
                 ret self
             }
         }
@@ -221,18 +1309,474 @@ impl for StyleSheet {
     pub fn style(self: Self, widget: Widget, hovered: bool, active: bool, focused: bool) -> Style {
         let ancestors = Vec[SelectorNode]::new()
         let siblings = singleton_widget(widget)
+        let focus_within = focused || widget_contains_focus(widget)
+        let mut interaction = static_interaction_state(widget)
+        interaction.hovered_within = hovered
+        interaction.active_within = active
+        interaction.focused = focused
+        interaction.focus_visible = focused || widget.focused()
+        interaction.focus_within = focus_within
+        let mut sibling_interactions = Vec[InteractionStyleState]::new()
+        sibling_interactions.push(interaction)
         let variables = compute_variables(self, widget, ancestors, siblings, 0_usize, 1_usize,
-            hovered, active, focused, focused, Vec[CssVariable]::new(),)
+            hovered, active, focused, focus_within, interaction, sibling_interactions,
+            Vec[CssVariable]::new(),)
         ret compute_style(self, widget, ancestors, siblings, 0_usize, 1_usize,
-            hovered, active, focused, focused, variables,)
+            hovered, active, focused, focus_within, interaction,
+            sibling_interactions, variables,)
     }
 
     pub fn apply(self: Self, root: Widget, hovered_id: str, active_id: str, focused_id: str) -> Widget
     {
-        let state_root = mark_widget_focus(root, focused_id)
-        ret apply_stylesheet_node(self, state_root, hovered_id, active_id, focused_id, Option[Style]::None,
-            Vec[SelectorNode]::new(), Vec[CssVariable]::new(), singleton_widget(state_root), 0_usize,
-            1_usize,)
+        ret self.apply_with_focus_visibility(root, hovered_id, active_id, focused_id, true)
+    }
+
+    /// Resolves focus independently from its keyboard indicator. Text entry
+    /// keeps an indicator regardless of the input modality.
+    pub fn apply_with_focus_visibility(self: Self, root: Widget, hovered_id: str,
+        active_id: str, focused_id: str, keyboard_focus: bool,) -> Widget {
+        let mut state = RetainedCascade::new()
+        ret self.apply_cascade(root, hovered_id, active_id, focused_id, keyboard_focus, state, false)
+    }
+
+    /// Reuses resolved nodes while always taking content and event bindings
+    /// from the new authored tree. Complex selector dependencies conservatively
+    /// invalidate the cascade when any of their tree inputs change.
+    pub fn apply_retained(self: Self, root: Widget, hovered_id: str,
+        active_id: str, focused_id: str, keyboard_focus: bool,
+        state: mut RetainedCascade&,) -> Widget {
+        ret self.apply_cascade(root, hovered_id, active_id, focused_id, keyboard_focus, state, true)
+    }
+
+    /// Resolves one authored branch in its committed ancestor environment.
+    /// Identity, sibling positions and ancestor interaction must stay stable;
+    /// dependencies crossing the boundary request the ordinary full cascade.
+    pub fn apply_retained_subtree(self: Self, path: Vec[usize], branch: Widget,
+        state: mut RetainedCascade&,) -> Option[Widget] {
+        if state.revision != self.revision || self.cache.relational || self.cache.sibling_interaction_dependent {
+            ret Option[Widget]::None
+        }
+        let mut index = match state.interaction_index {
+            Some(value) => value
+            None => {
+                ret Option[Widget]::None
+            }
+        }
+        let position = match index.position(path) {
+            Some(value) => value
+            None => {
+                ret Option[Widget]::None
+            }
+        }
+        let input = index.input(position)
+        // Changing this node's type can alter :nth-of-type outside the branch.
+        if position == 0 || input.widget.id() != branch.id() ||
+        input.widget.kind() != branch.kind() || input.widget.tag() != branch.tag() ||
+        (branch.id() != "" && index.targets(branch.id()).len() != 1) {
+            ret Option[Widget]::None
+        }
+        let hovered = index.targets(state.hovered)
+        let active = index.targets(state.active)
+        let focused = index.targets(state.focused)
+        let before = indexed_interaction(index, state.entries, position,
+            hovered, active, focused, state.focused == "", state.keyboard_focus,)
+        let mut states = Vec[InteractionStyleState]::new()
+        let marked = append_interaction_style_state(branch, state.hovered, state.active,
+            state.focused, state.keyboard_focus, states,)
+        let after = states.get(0).unwrap_or(before)
+        let mut changed_within = 0_u32
+        if before.hovered_within != after.hovered_within {
+            changed_within = changed_within | 1_u32
+        }
+        if before.active_within != after.active_within {
+            changed_within = changed_within | 2_u32
+        }
+        if before.focus_within != after.focus_within {
+            changed_within = changed_within | 8_u32
+        }
+        let mut reversed = Vec[usize]::new()
+        let mut cursor = input.parent
+        loop {
+            reversed.push(cursor)
+            let parent = index.input(cursor).parent
+            if parent == cursor {
+                break
+            }
+            cursor = parent
+        }
+        let mut ancestors = Vec[SelectorNode]::new()
+        while reversed.len() > 0 {
+            let ancestor_position = reversed.pop().unwrap_or(0)
+            let ancestor = index.input(ancestor_position)
+            // A changed "within" bit only escapes this component when an
+            // outside ancestor has a selector which actually depends on it.
+            if changed_within != 0_u32 &&((local_interaction_mask(self, ancestor.widget) & changed_within) != 0_u32 ||
+                ancestor_interaction_affects_children(self, ancestor.widget)) {
+                ret Option[Widget]::None
+            }
+            let entry = cascade_entry_at(state.entries, ancestor_position)
+            let interaction = indexed_interaction(index, state.entries, ancestor_position,
+                hovered, active, focused, state.focused == "", state.keyboard_focus,)
+            let siblings = if ancestor.parent == ancestor_position {
+                singleton_widget(ancestor.widget)
+            } else {
+                index.input(ancestor.parent).widget.children()
+            }
+            ancestors.push(SelectorNode {
+                    ancestor.widget.with_computed_style(entry.computed).with_focus(interaction.widget_focused),
+                    ancestor.ordinal, siblings.len(), siblings, interaction, Vec[InteractionStyleState]::new()
+                }
+                ,)
+        }
+        let parent = cascade_entry_at(state.entries, input.parent)
+        let siblings = index.input(input.parent).widget.children()
+        let mut sibling_states = Vec[InteractionStyleState]::new()
+        for sibling in index.input(input.parent).children {
+            sibling_states.push(indexed_interaction(index, state.entries, sibling,
+                    hovered, active, focused, state.focused == "", state.keyboard_focus,))
+        }
+        let previous = cascade_entry_at(state.entries, position)
+        let mut retained = Vec[CascadeEntry]::new()
+        for offset in 0..previous.subtree_size {
+            let entry = cascade_entry_at(state.entries, position + offset)
+            retained.push(repositioned_cascade_entry(entry,
+                    if offset == 0 {
+                        0
+                    } else {
+                        entry.parent_index - position
+                    }
+                    , entry.subtree_size,))
+        }
+        let mut next = Vec[CascadeEntry]::new()
+        let mut delta = CascadeDelta<S>{ Vec[CascadePatch]::new(), false, 0 }
+        let styled = apply_stylesheet_node(self, marked, Option[Style]::Some(parent.computed),
+            ancestors, parent.variables, siblings, input.ordinal, siblings.len(),
+            0, states, sibling_states, retained, next, false, true, delta, 0, false,)
+        let end = position + previous.subtree_size
+        let added = next.len()
+        let selectors = branch.selector_tree()
+        if added == previous.subtree_size && index.same_topology(position, selectors) {
+            // No offsets or ancestor spans changed. Update just this branch;
+            // rebuilding hundreds of unrelated index entries and 256 ID
+            // buckets for a moving two-node overlay was the hot-frame cost.
+            let mut local_position = 0_usize
+            for replacement in next {
+                let parent_position = if local_position == 0 {
+                    input.parent
+                } else {
+                    position + replacement.parent_index
+                }
+                state.entries.set(position + local_position,
+                    repositioned_cascade_entry(replacement, parent_position, replacement.subtree_size),)
+                local_position += 1
+            }
+            index.refresh_branch(position, selectors)
+            index.refresh_ancestors(position)
+            refresh_cascade_ancestor_interactions(state, position)
+            state.patches = Vec[CascadePatch]::new()
+            state.patchable = true
+            state.interaction_evaluations = delta.evaluations
+            ret Option[Widget]::Some(styled)
+        }
+        let mut merged = Vec[CascadeEntry]::new()
+        merged.reserve(state.entries.len() - previous.subtree_size + added)
+        let mut old_position = 0_usize
+        for entry in state.entries {
+            if old_position == position {
+                let mut local_position = 0_usize
+                for replacement in next {
+                    let parent_position = if local_position == 0 {
+                        input.parent
+                    } else {
+                        position + replacement.parent_index
+                    }
+                    merged.push(repositioned_cascade_entry(replacement, parent_position, replacement.subtree_size))
+                    local_position += 1
+                }
+            }
+            if old_position < position || old_position >= end {
+                let parent_position = shifted_cascade_position(entry.parent_index, end, previous.subtree_size, added)
+                let span = if old_position < position && old_position + entry.subtree_size > position {
+                    entry.subtree_size - previous.subtree_size + added
+                } else {
+                    entry.subtree_size
+                }
+                merged.push(repositioned_cascade_entry(entry, parent_position, span))
+            }
+            old_position += 1
+        }
+        let snapshot = replace_cascade_branch(index.input(0).widget, path, 0, selectors)
+        state.entries = merged
+        state.interaction_index = Option[InteractionIndex<H>]::Some(InteractionIndex::from_snapshot(snapshot))
+        refresh_cascade_ancestor_interactions(state, position)
+        state.patches = Vec[CascadePatch]::new()
+        state.patchable = true
+        state.interaction_evaluations = delta.evaluations
+        ret Option[Widget]::Some(styled)
+    }
+
+    /// Evaluates an interaction-only transaction against committed CSS inputs.
+    /// Relational/sibling selectors and geometric changes use the complete
+    /// cascade; their semantics are never approximated by this indexed path.
+    pub fn stage_interaction(self: Self, hovered_id: str, active_id: str, focused_id: str,
+        keyboard_focus: bool, state: mut RetainedCascade&,) -> bool {
+        state.interaction_evaluations = 0
+        if state.revision != self.revision || self.cache.relational || self.cache.sibling_interaction_dependent {
+            ret false
+        }
+        let mut index = match state.interaction_index {
+            Some(value) => value
+            None => {
+                ret false
+            }
+        }
+        if index.inputs.len() != state.entries.len() || state.entries.len() == 0 {
+            ret false
+        }
+        index.epoch += 1
+        index.queue.clear()
+        state.patches = Vec[CascadePatch]::new()
+        state.patchable = true
+        let hovered = index.targets(hovered_id)
+        let active = index.targets(active_id)
+        let focused = index.targets(focused_id)
+        if state.hovered != hovered_id {
+            index.mark_paths(index.targets(state.hovered))
+            index.mark_paths(hovered)
+        }
+        if state.active != active_id {
+            index.mark_paths(index.targets(state.active))
+            index.mark_paths(active)
+        }
+        if state.focused != focused_id || state.keyboard_focus != keyboard_focus {
+            index.mark_paths(index.targets(state.focused))
+            index.mark_paths(focused)
+            if state.focused == "" || focused_id == "" {
+                index.mark_paths(index.authored_focus)
+            }
+        }
+        let mut undo = Vec[CascadeUndo]::new()
+        while index.queue.len() > 0 {
+            let position = index.pop()
+            let input = index.input(position)
+            let previous = cascade_entry_at(state.entries, position)
+            let interaction = indexed_interaction(index, state.entries, position,
+                hovered, active, focused, focused_id == "", keyboard_focus,)
+            let bits = cascade_interaction_bits(interaction)
+            let parent = if input.parent == position {
+                Option[Style]::None
+            } else {
+                Option[Style]::Some(state.entries.get(input.parent).unwrap_or(previous).computed)
+            }
+            let inherited_variables = if input.parent == position {
+                Vec[CssVariable]::new()
+            } else {
+                state.entries.get(input.parent).unwrap_or(previous).variables
+            }
+            let base = match parent {
+                Some(style) => input.widget.style().inherit_text(style)
+                None => input.widget.style()
+            }
+            let forced = index.marks.get(position).unwrap_or(InteractionMark { 0, false }).forced
+            if !forced && bits == previous.interaction && previous.base.equivalent(base) &&
+            cascade_variables_equal(previous.inherited_variables, inherited_variables) {
+                continue
+            }
+            // Most ancestors only acquire a "within" bit when the pointer or
+            // focus moves. Record it without re-running unrelated declarations.
+            // Ancestor selectors still invalidate their dependent descendants.
+            if !forced &&((bits ^ previous.interaction) &(local_interaction_mask(self, input.widget) | 16_u32)) == 0_u32 &&
+            previous.base.equivalent(base) && cascade_variables_equal(previous.inherited_variables, inherited_variables) {
+                undo.push(CascadeUndo { position, previous })
+                state.entries.set(position, CascadeEntry {
+                        previous.selector, previous.explicit, previous.base, previous.computed, previous.variables,
+                        previous.inherited_variables, bits, previous.subtree_size, previous.child_index,
+                        previous.sibling_count, previous.depth, previous.authored, previous.parent_index
+                    }
+                    ,
+                )
+                if bits != previous.interaction && ancestor_interaction_affects_children(self, input.widget) {
+                    for child in position + 1..position + previous.subtree_size {
+                        index.mark(child, true)
+                    }
+                }
+                continue
+            }
+            state.interaction_evaluations += 1
+            let widget = input.widget.with_computed_style(base).with_focus(interaction.widget_focused)
+            let mut ancestors = Vec[SelectorNode]::new()
+            let mut reversed = Vec[usize]::new()
+            let mut cursor = input.parent
+            if cursor != position {
+                loop {
+                    reversed.push(cursor)
+                    let owner = index.inputs.get(cursor).unwrap_or(input).parent
+                    if owner == cursor {
+                        break
+                    }
+                    cursor = owner
+                }
+            }
+            while reversed.len() > 0 {
+                let ancestor_index = reversed.pop().unwrap_or(0)
+                let ancestor_input = index.inputs.get(ancestor_index).unwrap_or(input)
+                let ancestor_entry = state.entries.get(ancestor_index).unwrap_or(previous)
+                let ancestor_state = indexed_interaction(index, state.entries, ancestor_index,
+                    hovered, active, focused, focused_id == "", keyboard_focus,)
+                let siblings = if ancestor_input.parent == ancestor_index {
+                    singleton_widget(ancestor_input.widget)
+                } else {
+                    index.inputs.get(ancestor_input.parent).unwrap_or(input).widget.children()
+                }
+                ancestors.push(SelectorNode {
+                        ancestor_input.widget.with_computed_style(ancestor_entry.computed).with_focus(ancestor_state.widget_focused),
+                        ancestor_input.ordinal, siblings.len(), siblings, ancestor_state,
+                        Vec[InteractionStyleState]::new()
+                    }
+                    ,)
+            }
+            let siblings = if input.parent == position {
+                singleton_widget(widget)
+            } else {
+                index.inputs.get(input.parent).unwrap_or(input).widget.children()
+            }
+            let variables = compute_variables(self, widget, ancestors, siblings, input.ordinal,
+                siblings.len(), interaction.hovered_within, interaction.active_within, interaction.focused,
+                interaction.focus_within, interaction, Vec[InteractionStyleState]::new(), inherited_variables,)
+            let computed = compute_style(self, widget, ancestors, siblings, input.ordinal,
+                siblings.len(), interaction.hovered_within, interaction.active_within, interaction.focused,
+                interaction.focus_within, interaction, Vec[InteractionStyleState]::new(), variables,)
+            undo.push(CascadeUndo { position, previous })
+            state.entries.set(position, CascadeEntry {
+                    widget.selector_inputs(), previous.explicit, base, computed, variables,
+                    inherited_variables, bits, previous.subtree_size, previous.child_index,
+                    previous.sibling_count, previous.depth, previous.authored, previous.parent_index
+                }
+                ,)
+            if !previous.computed.equivalent(computed) ||
+            ((previous.interaction & 16) != 0) != interaction.widget_focused {
+                if widget.id() == "" || index.targets(widget.id()).len() != 1 ||
+                !previous.computed.layout_equivalent(computed) {
+                    state.patchable = false
+                }
+                state.patches.push(CascadePatch {
+                        widget.id(), computed, interaction.widget_focused
+                    }
+                    ,
+                )
+            }
+            if bits != previous.interaction && ancestor_interaction_affects_children(self, widget) {
+                for child in position + 1..position + previous.subtree_size {
+                    index.mark(child, true)
+                }
+            }
+            if !previous.computed.inheritance_equivalent(computed) || !cascade_variables_equal(previous.variables, variables) {
+                for child in input.children {
+                    index.mark(child, false)
+                }
+            }
+        }
+        if !state.patchable {
+            // Cache writes are provisional until the entire batch is paint-only.
+            for saved in undo {
+                state.entries.set(saved.index, saved.entry)
+            }
+            state.patches = Vec[CascadePatch]::new()
+            ret false
+        }
+        state.hovered = hovered_id
+        state.active = active_id
+        state.focused = focused_id
+        state.keyboard_focus = keyboard_focus
+        ret true
+    }
+
+    fn apply_cascade(self: Self, root: Widget, hovered_id: str,
+        active_id: str, focused_id: str, keyboard_focus: bool,
+        state: mut RetainedCascade&, retain: bool,) -> Widget {
+        state.patches = Vec[CascadePatch]::new()
+        state.patchable = false
+        if retain && state.revision == self.revision && state.hovered == hovered_id &&
+        state.active == active_id && state.focused == focused_id && state.keyboard_focus == keyboard_focus {
+            match replay_cascade(state.entries, root, 0, focused_id) {
+                Some(value) => {
+                    ret value
+                }
+                None => {
+                }
+            }
+        }
+        let mut invalidate = state.revision != self.revision
+        if self.cache.relational || self.cache.sibling_dependent {
+            invalidate = invalidate || state.hovered != hovered_id || state.active != active_id ||
+            state.focused != focused_id || state.keyboard_focus != keyboard_focus
+            match state.entries.get(0) {
+                Some(previous) => {
+                    invalidate = invalidate || !cascade_selector_tree_equal(state.entries, root, 0)
+                }
+                None => {
+                    invalidate = true
+                }
+            }
+        }
+        let trace = env("LUMA_TRACE_CSS").unwrap_or("") == "1"
+        let started = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        let mut next = Vec[CascadeEntry]::new()
+        let mut delta = CascadeDelta<S> {
+            Vec[CascadePatch]::new(), retain && state.revision == self.revision, 0
+        }
+        let mut interaction_states = Vec[InteractionStyleState]::new()
+        let marked_root = append_interaction_style_state(root, hovered_id, active_id,
+            focused_id, keyboard_focus, interaction_states,)
+        let interaction_at = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        let mut root_sibling_interactions = Vec[InteractionStyleState]::new()
+        match interaction_states.get(0_usize) {
+            Option[InteractionStyleState]::Some(root_interaction) => {
+                root_sibling_interactions.push(root_interaction)
+            }
+            Option[InteractionStyleState]::None => {
+            }
+        }
+        let result = apply_stylesheet_node(self, marked_root, Option[Style]::None,
+            Vec[SelectorNode]::new(), Vec[CssVariable]::new(), singleton_widget(marked_root),
+            0_usize, 1_usize, 0_usize, interaction_states,
+            root_sibling_interactions, state.entries, next, invalidate, retain, delta, 0, true,)
+        let cascade_at = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        if retain {
+            state.entries = next
+            state.revision = self.revision
+            state.hovered = hovered_id
+            state.active = active_id
+            state.focused = focused_id
+            state.keyboard_focus = keyboard_focus
+            state.patches = delta.patches
+            state.patchable = delta.patchable
+            let index = InteractionIndex::new(root)
+            // ID-addressed display patches are only valid for unique targets.
+            // Duplicate IDs still receive ordinary per-node CSS reconciliation.
+            for patch in state.patches {
+                if index.targets(patch.id()).len() != 1 {
+                    state.patchable = false
+                }
+            }
+            state.interaction_index = Option[InteractionIndex<H>]::Some(index)
+        }
+        if trace {
+            eprintln(f"LUMA_CSS states_us={(interaction_at-started)/1000} cascade_us={(cascade_at-interaction_at)/1000} index_us={(perf_counter_ns()-cascade_at)/1000} evaluated={delta.evaluations} nodes={interaction_states.len()}")
+        }
+        ret result
     }
 
     pub fn len(self: Self) -> usize {
@@ -242,6 +1786,203 @@ impl for StyleSheet {
     fn maximum_specificity(self: Self) -> usize {
         ret self.maximum_specificity
     }
+}
+
+// Precompute a necessary condition on each selector's target widget. Complex
+// pseudo selectors still use the complete matcher after this cheap filter.
+fn rule_candidates(rules: Vec[StyleRule]) -> Vec[RuleCandidate] {
+    let mut candidates = Vec[RuleCandidate]::new()
+    for rule in rules {
+        let combinator = rightmost_combinator(rule.selector)
+        let subject = if combinator.kind == 0_usize {
+            rule.selector
+        } else {
+            trim(rule.selector.slice(combinator.index + 1_usize,
+                    rule.selector.char_len() - combinator.index - 1_usize,))
+        }
+        let first = subject.slice(0_usize, 1_usize)
+        if first == "#" || first == "." {
+            candidates.push(RuleCandidate {
+                    if first == "#" {
+                        1_usize
+                    } else {
+                        2_usize
+                    }
+                    ,
+                    subject.slice(1_usize, selector_part_end(subject, 1_usize) - 1_usize)
+                }
+                ,)
+        } elif first != "" && first != ":" && first != "[" && first != "*" {
+            candidates.push(RuleCandidate {
+                    3_usize, subject.slice(0_usize, selector_part_end(subject, 0_usize))
+                }
+                ,
+            )
+        } else {
+            candidates.push(RuleCandidate {
+                    0_usize, ""
+                }
+                ,
+            )
+        }
+    }
+    ret candidates
+}
+
+fn rule_candidate_matches(candidate: RuleCandidate, widget: Widget) -> bool {
+    if candidate.kind == 1_usize {
+        ret widget.id() == candidate.value
+    }
+    if candidate.kind == 2_usize {
+        ret has_class(widget.classes(), candidate.value)
+    }
+    if candidate.kind == 3_usize {
+        ret widget_type(widget) == candidate.value
+    }
+    ret true
+}
+
+// Only ancestors which can be the subject of an interaction selector affect
+// descendant styles. A hovered menu item must not invalidate the viewport or
+// the complete workspace merely because another rule uses `.row:hover label`.
+fn ancestor_interaction_candidates(rules: Vec[StyleRule]) -> Vec[RuleCandidate] {
+    let mut result = Vec[RuleCandidate]::new()
+    for rule in rules {
+        let mut selector = rule.selector
+        let mut combinator = rightmost_combinator(selector)
+        while combinator.kind != 0 {
+            selector = trim(selector.slice(0, combinator.index))
+            let previous = rightmost_combinator(selector)
+            let subject = if previous.kind == 0 {
+                selector
+            } else {
+                trim(selector.slice(previous.index + 1, selector.char_len() - previous.index - 1))
+            }
+            if string_contains(subject, ":hover") || string_contains(subject, ":active") ||
+            string_contains(subject, ":focus") || string_contains(subject, ":has(") {
+                let mut subjects = Vec[StyleRule]::new()
+                subjects.push(StyleRule { subject, "", 0 })
+                result.push(rule_candidates(subjects).get(0).unwrap_or(RuleCandidate { 0, "" }))
+            }
+            combinator = previous
+        }
+    }
+    ret result
+}
+
+fn ancestor_interaction_affects_children(sheet: StyleSheet, widget: Widget) -> bool {
+    for candidate in sheet.ancestor_interactions {
+        if rule_candidate_matches(candidate, widget) {
+            ret true
+        }
+    }
+    ret false
+}
+
+fn interaction_selector_mask(selector: str) -> u32 {
+    let mut mask = 0_u32
+    if string_contains(selector, ":hover") {
+        mask = mask | 1_u32
+    }
+    if string_contains(selector, ":active") {
+        mask = mask | 2_u32
+    }
+    if string_contains(selector, ":focus") {
+        mask = mask | 4_u32 | 8_u32 | 16_u32 | 32_u32
+    }
+    ret mask
+}
+
+fn local_interaction_candidates(rules: Vec[StyleRule]) -> Vec[InteractionCandidate] {
+    let mut result = Vec[InteractionCandidate]::new()
+    for rule in rules {
+        let mut selector = rule.selector
+        let mut local = true
+        loop {
+            let split = rightmost_combinator(selector)
+            let subject = if split.kind == 0 {
+                selector
+            } else {
+                trim(selector.slice(split.index + 1, selector.char_len() - split.index - 1))
+            }
+            let mut mask = if local {
+                interaction_selector_mask(subject)
+            } else {
+                0_u32
+            }
+            if string_contains(subject, ":nth-") || string_contains(subject, ":first-") ||
+            string_contains(subject, ":last-") || string_contains(subject, ":only-") {
+                mask = mask | 64_u32
+            }
+            if string_contains(subject, ":empty") {
+                mask = mask | 128_u32
+            }
+            if mask != 0_u32 {
+                let mut subjects = Vec[StyleRule]::new()
+                subjects.push(StyleRule { subject, "", 0 })
+                result.push(InteractionCandidate {
+                        rule_candidates(subjects).get(0).unwrap_or(RuleCandidate {
+                                0, ""
+                            }
+                        ), mask
+                    }
+                )
+            }
+            if split.kind == 0 {
+                break
+            }
+            selector = trim(selector.slice(0, split.index))
+            local = false
+        }
+    }
+    ret result
+}
+
+fn local_interaction_mask(sheet: StyleSheet, widget: Widget) -> u32 {
+    let mut mask = 0_u32
+    let id = widget.id()
+    let classes = widget.classes()
+    let tag = widget_type(widget)
+    for candidate in sheet.local_interactions {
+        let subject = candidate.subject
+        if subject.kind == 0_usize ||(subject.kind == 1_usize && id == subject.value) ||
+        (subject.kind == 2_usize && has_class(classes, subject.value)) ||
+        (subject.kind == 3_usize && tag == subject.value) {
+            mask = mask | candidate.mask
+        }
+    }
+    ret mask
+}
+
+// Sort once per stylesheet, stably: equal specificity keeps source order.
+fn order_style_rules(source: Vec[StyleRule]) -> Vec[StyleRule] {
+    let mut ordered = Vec[StyleRule]::new()
+    for rule in source {
+        let mut index = ordered.len()
+        ordered.push(rule)
+        while index > 0_usize {
+            let previous = ordered.get(index - 1_usize).unwrap_or(rule)
+            if previous.specificity <= rule.specificity {
+                break
+            }
+            ordered.set(index, previous)
+            index -= 1_usize
+        }
+        ordered.set(index, rule)
+    }
+    ret ordered
+}
+
+fn variable_style_rules(source: Vec[StyleRule]) -> Vec[StyleRule] {
+    let mut rules = Vec[StyleRule]::new()
+    for rule in source {
+        let mut variables = Vec[CssVariable]::new()
+        collect_variables(variables, rule.declarations)
+        if variables.len() > 0_usize {
+            rules.push(rule)
+        }
+    }
+    ret rules
 }
 
 fn stylesheet_revision(source: str) -> u64 {
@@ -256,25 +1997,42 @@ fn stylesheet_revision(source: str) -> u64 {
 
 fn css_balanced(source: str) -> bool {
     let mut depth = 0_i32
-    let mut quote = ""
+    let mut quote = 0_u8
     let mut escaped = false
+    let mut comment = false
     let mut index = 0_usize
-    while index < source.char_len() {
-        let current = source.slice(index, 1_usize)
-        if quote != "" {
+    let length = source.byte_len()
+    while index < length {
+        let current = source.byte_at(index)
+        let next = if index + 1_usize < length {
+            source.byte_at(index + 1_usize)
+        } else {
+            0_u8
+        }
+        if comment {
+            if current == 42_u8 && next == 47_u8 {
+                comment = false
+                index += 2_usize
+                continue
+            }
+        } elif quote != 0_u8 {
             if escaped {
                 escaped = false
-            } elif current == "\\" {
+            } elif current == 92_u8 {
                 escaped = true
             } elif current == quote {
-                quote = ""
+                quote = 0_u8
             }
         } else {
-            if current == "\"" || current == "'" {
+            if current == 47_u8 && next == 42_u8 {
+                comment = true
+                index += 2_usize
+                continue
+            } elif current == 34_u8 || current == 39_u8 {
                 quote = current
-            } elif current == "{" {
+            } elif current == 123_u8 {
                 depth += 1_i32
-            } elif current == "}" {
+            } elif current == 125_u8 {
                 depth -= 1_i32
                 if depth < 0_i32 {
                     ret false
@@ -283,192 +2041,330 @@ fn css_balanced(source: str) -> bool {
         }
         index += 1_usize
     }
-    ret depth == 0_i32 && quote == ""
+    ret depth == 0_i32 && quote == 0_u8 && !comment
 }
 
+// CSS punctuation is ASCII. Scan bytes, preserving UTF-8 selector/value
+// slices at punctuation boundaries rather than rescanning codepoints per byte.
 fn rule_open(value: str, start: usize) -> usize {
     let mut index = start
-    let mut quote = ""
+    let mut quote = 0_u8
     let mut escaped = false
-    while index < value.char_len() {
-        let current = value.slice(index, 1_usize)
-        if quote != "" {
+    let length = value.byte_len()
+    while index < length {
+        let current = value.byte_at(index)
+        if quote != 0_u8 {
             if escaped {
                 escaped = false
-            } elif current == "\\" {
+            } elif current == 92_u8 {
                 escaped = true
             } elif current == quote {
-                quote = ""
+                quote = 0_u8
             }
         } else {
-            if current == "\"" || current == "'" {
+            if current == 34_u8 || current == 39_u8 {
                 quote = current
-            } elif current == "{" {
+            } elif current == 123_u8 {
                 ret index
             }
         }
-        index = index + 1_usize
+        index += 1_usize
     }
-    ret value.char_len()
+    ret length
 }
 
 fn rule_close(value: str, open: usize) -> usize {
     let mut index = open
     let mut depth = 0_usize
-    let mut quote = ""
+    let mut quote = 0_u8
     let mut escaped = false
-    while index < value.char_len() {
-        let current = value.slice(index, 1_usize)
-        if quote != "" {
+    let length = value.byte_len()
+    while index < length {
+        let current = value.byte_at(index)
+        if quote != 0_u8 {
             if escaped {
                 escaped = false
-            } elif current == "\\" {
+            } elif current == 92_u8 {
                 escaped = true
             } elif current == quote {
-                quote = ""
+                quote = 0_u8
             }
         } else {
-            if current == "\"" || current == "'" {
+            if current == 34_u8 || current == 39_u8 {
                 quote = current
-            } elif current == "{" {
-                depth = depth + 1_usize
-            } elif current == "}" {
+            } elif current == 123_u8 {
+                depth += 1_usize
+            } elif current == 125_u8 {
                 if depth == 1_usize {
                     ret index
                 }
                 if depth > 0_usize {
-                    depth = depth - 1_usize
+                    depth -= 1_usize
                 }
             }
         }
-        index = index + 1_usize
+        index += 1_usize
     }
-    ret value.char_len()
+    ret length
 }
 
-fn mark_widget_focus(widget: Widget, focused_id: str) -> Widget {
-    let source = widget.children()
-    let mut children = Vec[Widget]::new()
-    let mut index = 0_usize
-    while index < source.len() {
-        match source.get(index) {
-            Option[Widget]::Some(child) => {
-                children.push(mark_widget_focus(child, focused_id))
-            }
-            Option[Widget]::None => {
-            }
-        }
-        index = index + 1_usize
-    }
-    let focused = if focused_id == "" {
+// Build the focus-marked tree and a preorder state table in one traversal.
+// Each entry carries its subtree span so the cascade can advance to the next
+// sibling without searching descendant trees for pseudo-state IDs.
+fn append_interaction_style_state(widget: Widget, hovered_id: str,
+    active_id: str, focused_id: str, keyboard_focus: bool,
+    states: mut Vec[InteractionStyleState],) -> Widget {
+    let index = states.len()
+    let id = widget.id()
+    let hovered = hovered_id != "" && id == hovered_id
+    let active = active_id != "" && id == active_id
+    let focused = focused_id != "" && id == focused_id
+    let widget_focused = if focused_id == "" {
         widget.focused()
     } else {
-        widget.id() == focused_id
+        focused
     }
-    ret widget.with_focus(focused).with_children(children)
+    let focus_visible = widget_focused &&(keyboard_focus ||
+        widget.kind() == widget_input() || widget.kind() == widget_textarea())
+    states.push(InteractionStyleState {
+            1_usize, hovered, active, focused,
+            widget_focused, widget_focused, focus_visible, Vec[InteractionStyleState]::new(),
+        }
+        ,)
+    let mut subtree_size = 1_usize
+    let mut hovered_within = hovered
+    let mut active_within = active
+    let mut focus_within = widget_focused
+    let mut children = Vec[Widget]::new()
+    let mut child_states = Vec[InteractionStyleState]::new()
+    for child in widget.children() {
+        let child_index = states.len()
+        let marked_child = append_interaction_style_state(child, hovered_id,
+            active_id, focused_id, keyboard_focus, states,)
+        children.push(marked_child)
+        match states.get(child_index) {
+            Option[InteractionStyleState]::Some(child_state) => {
+                subtree_size += child_state.subtree_size
+                hovered_within = hovered_within || child_state.hovered_within
+                active_within = active_within || child_state.active_within
+                focus_within = focus_within || child_state.focus_within
+                child_states.push(child_state)
+            }
+            Option[InteractionStyleState]::None => {
+                child_states.push(static_interaction_state(child))
+            }
+        }
+    }
+    states.set(index, InteractionStyleState {
+            subtree_size, hovered_within, active_within, focused,
+            focus_within, widget_focused, focus_visible, child_states,
+        }
+        ,)
+    ret widget.with_focus(widget_focused).with_children(children)
 }
 
 fn compute_style(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorNode], siblings: Vec[Widget],
     child_index: usize, sibling_count: usize,
-    hovered: bool, active: bool, focused: bool, focus_within: bool, variables: Vec[CssVariable],) ->
+    hovered: bool, active: bool, focused: bool, focus_within: bool,
+    interaction: InteractionStyleState, sibling_interactions: Vec[InteractionStyleState],
+    variables: Vec[CssVariable],) ->
 Style {
     if widget.has_explicit_style() {
-        ret widget.style()
+        ret widget.geometry_style(widget.style())
     }
     let key = computed_style_cache_key(sheet, widget, ancestors, siblings, child_index,
-        sibling_count, hovered, active, focused, focus_within, variables,)
-    match sheet.cache.get(key) {
-        Option::Some(declarations) => {
-            ret apply_css(widget.style(), declarations)
+        sibling_count, hovered, active, focused, focus_within,
+        interaction, sibling_interactions, variables,)
+    match sheet.cache.get(key, widget.style()) {
+        Option::Some(computed) => {
+            ret widget.geometry_style(computed)
         }
         Option::None => {
         }
     }
     let mut declarations = ""
-    let mut matched_declarations = Vec[str]::new()
-    let mut matched_specificities = Vec[usize]::new()
-    let mut index = 0_usize
-    while index < sheet.rules.len() {
+    for index in sheet.rule_index.for_widget(widget) {
         match sheet.rules.get(index) {
             Option[StyleRule]::Some(rule) => {
                 if selector_tree_matches(rule.selector, widget, ancestors,
                     ancestors.len(), siblings, child_index, sibling_count, hovered, active, focused,
-                    focus_within,) {
-                    matched_declarations.push(rule.declarations)
-                    matched_specificities.push(rule.specificity)
+                    focus_within, interaction, sibling_interactions,) {
+                    if declarations != "" {
+                        declarations = declarations + ";"
+                    }
+                    declarations = declarations + resolve_variables(rule.declarations, variables)
                 }
             }
             Option[StyleRule]::None => {
             }
         }
-        index = index + 1_usize
     }
-    let mut score = 0_usize
-    let maximum = sheet.maximum_specificity()
-    while score <= maximum {
-        let mut matched_index = 0_usize
-        while matched_index < matched_declarations.len() {
-            match matched_specificities.get(matched_index) {
-                Option[usize]::Some(specificity) => {
-                    if specificity == score {
-                        if declarations != "" {
-                            declarations = declarations + ";"
-                        }
-                        match matched_declarations.get(matched_index) {
-                            Option[str]::Some(value) => {
-                                declarations = declarations + resolve_variables(value, variables)
-                            }
-                            Option[str]::None => {
-                            }
-                        }
-                    }
-                }
-                Option[usize]::None => {
-                }
-            }
-            matched_index = matched_index + 1_usize
+    let computed = sheet.cache.compute_declarations(widget.style(), declarations)
+    sheet.cache.put(key, declarations, widget.style(), computed)
+    ret widget.geometry_style(computed)
+}
+
+fn selector_cache_signature(widget: Widget, sheet: StyleSheet) -> str {
+    let retain_id = selector_retains_id(widget, sheet)
+    let selector_widget = if retain_id {
+        widget
+    } else {
+        widget.with_id("")
+    }
+    let mut signature = selector_widget.selector_signature_for_attributes(sheet.cache.selector_attributes) + "#focus:" + Debug::fmt(widget.focused())
+    if sheet.cache.relational ||(local_interaction_mask(sheet, widget) & 128_u32) != 0_u32 {
+        signature = signature + "#empty:" + Debug::fmt(widget.text() == "") + "#children:" + Debug::fmt(widget.children().len())
+    }
+    if sheet.cache.relational {
+        for child in widget.children() {
+            let child_signature = selector_cache_signature(child, sheet)
+            signature = signature + "#child:" + Debug::fmt(child_signature.len()) + ":" + child_signature
         }
-        score = score + 1_usize
     }
-    sheet.cache.put(key, declarations)
-    ret apply_css(widget.style(), declarations)
+    ret signature
+}
+
+fn selector_retains_id(widget: Widget, sheet: StyleSheet) -> bool {
+    ret selector_id_required(widget.id(), sheet)
+}
+
+fn selector_id_required(value: str, sheet: StyleSheet) -> bool {
+    if !sheet.cache.anonymous_id_safe {
+        ret true
+    }
+    for id in sheet.cache.selector_ids {
+        if id == value {
+            ret true
+        }
+    }
+    ret false
+}
+
+fn cascade_node_selector_equal(left: WidgetSelector, right: WidgetSelector, sheet: StyleSheet) -> bool {
+    ret cascade_selector_inputs_equal(left, right, sheet, true)
+}
+
+fn cascade_selector_inputs_equal(left: WidgetSelector, right: WidgetSelector, sheet: StyleSheet, compare_children: bool) -> bool {
+    if left.id() == right.id() {
+        ret left.equivalent_for_attributes(right, true, sheet.cache.selector_attributes, compare_children)
+    }
+    if selector_id_required(left.id(), sheet) || selector_id_required(right.id(), sheet) {
+        ret false
+    }
+    ret left.equivalent_for_attributes(right, false, sheet.cache.selector_attributes, compare_children)
 }
 
 fn computed_style_cache_key(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorNode],
     siblings: Vec[Widget], child_index: usize, sibling_count: usize, hovered: bool, active: bool,
-    focused: bool, focus_within: bool, variables: Vec[CssVariable],) -> str {
-    let mut key = Debug::fmt(sheet.revision) + "#" + widget.selector_signature() + "#" +
-    Debug::fmt(child_index) + "/" + Debug::fmt(sibling_count) + "#" + Debug::fmt(hovered) +
-    Debug::fmt(active) + Debug::fmt(focused) + Debug::fmt(focus_within)
-    for ancestor in ancestors {
-        key = key + "#a:" + ancestor.widget.selector_signature() + ":" + Debug::fmt(ancestor.index) +
-        "/" + Debug::fmt(ancestor.count)
+    focused: bool, focus_within: bool, interaction: InteractionStyleState,
+    sibling_interactions: Vec[InteractionStyleState],
+    variables: Vec[CssVariable],) -> str {
+    let mut key = Debug::fmt(sheet.revision) + "#" + selector_cache_signature(widget, sheet) + "#i:" +
+    if sheet.cache.relational {
+        interaction_cache_signature(interaction, true)
+    } else {
+        Debug::fmt(cascade_interaction_bits(interaction) & local_interaction_mask(sheet, widget))
     }
-    for sibling in siblings {
-        key = key + "#s:" + sibling.selector_signature()
+    if (local_interaction_mask(sheet, widget) & 64_u32) != 0_u32 {
+        key = key + "#position:" + Debug::fmt(child_index) + "/" + Debug::fmt(sibling_count)
     }
-    for variable in variables {
-        key = key + "#v:" + variable.name + "=" + variable.value
+    // Flat selectors do not depend on ancestor identities or interaction.
+    // Depth still distinguishes :root after reparenting the same widget.
+    key = key + "#depth:" + Debug::fmt(ancestors.len())
+    if sheet.cache.ancestor_dependent {
+        for ancestor in ancestors {
+            key = key + "#a:" + selector_cache_signature(ancestor.widget, sheet)
+            if (local_interaction_mask(sheet, ancestor.widget) & 64_u32) != 0_u32 {
+                key = key + ":" + Debug::fmt(ancestor.index) + "/" + Debug::fmt(ancestor.count)
+            }
+            if sheet.cache.relational || ancestor_interaction_affects_children(sheet, ancestor.widget) {
+                key = key + "#ai:" + interaction_cache_signature(ancestor.interaction, sheet.cache.relational)
+            }
+            if sheet.cache.sibling_dependent {
+                for sibling in ancestor.siblings {
+                    key = key + "#as:" + selector_cache_signature(sibling, sheet)
+                }
+                for sibling_interaction in ancestor.sibling_interactions {
+                    key = key + "#asi:" + interaction_cache_signature(sibling_interaction,
+                        sheet.cache.relational,)
+                }
+            }
+        }
     }
+    // Only selectors which inspect siblings need their signatures. Including
+    // the entire row for every card made ordinary grids quadratic even on hits.
+    if sheet.cache.sibling_dependent {
+        for sibling in siblings {
+            key = key + "#s:" + selector_cache_signature(sibling, sheet)
+        }
+        for sibling_interaction in sibling_interactions {
+            key = key + "#si:" + interaction_cache_signature(sibling_interaction,
+                sheet.cache.relational,)
+        }
+    }
+    // A variable set can contain dozens of long values. Serialize its exact
+    // retained identity once instead of rebuilding that string for each node.
+    key = key + "#variables:" + Debug::fmt(sheet.cache.variable_identity(variables))
     ret key
+}
+
+fn interaction_cache_signature(state: InteractionStyleState, relational: bool) -> str {
+    let mut signature = Debug::fmt(state.hovered_within) + Debug::fmt(state.active_within) +
+    Debug::fmt(state.focused) + Debug::fmt(state.focus_within) + Debug::fmt(state.focus_visible)
+    if relational {
+        for child in state.children {
+            let child_signature = interaction_cache_signature(child, true)
+            signature = signature + "#c:" + Debug::fmt(child_signature.len()) + ":" + child_signature
+        }
+    }
+    ret signature
 }
 
 fn compute_variables(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorNode], siblings: Vec[Widget],
     child_index: usize, sibling_count: usize, hovered: bool,
-    active: bool, focused: bool, focus_within: bool, inherited: Vec[CssVariable],) -> Vec[CssVariable]
+    active: bool, focused: bool, focus_within: bool,
+    interaction: InteractionStyleState, sibling_interactions: Vec[InteractionStyleState],
+    inherited: Vec[CssVariable],) -> Vec[CssVariable]
 {
+    // Most nodes only inherit custom properties. Avoid constructing and
+    // hashing a second full cascade key when no variable rule can match.
+    let mut candidate_index = 0_usize
+    let mut may_declare = false
+    for rule in sheet.variable_rules {
+        let candidate = sheet.variable_candidates.get(candidate_index).unwrap_or(RuleCandidate {
+                0_usize, ""
+            }
+            ,
+        )
+        if rule_candidate_matches(candidate, widget) &&
+        !(rule.selector == ":root" && ancestors.len() > 0_usize) {
+            may_declare = true
+            break
+        }
+        candidate_index += 1_usize
+    }
+    if !may_declare {
+        ret widget_css_variables(widget, inherited)
+    }
+    let key = computed_style_cache_key(sheet, widget, ancestors, siblings, child_index,
+        sibling_count, hovered, active, focused, focus_within,
+        interaction, sibling_interactions, inherited,)
+    match sheet.cache.get_variables(key) {
+        Option::Some(cached) => {
+            ret widget_css_variables(widget, cached)
+        }
+        Option::None => {
+        }
+    }
     let mut result = copy_variables(inherited)
-    let mut matched_declarations = Vec[str]::new()
-    let mut matched_specificities = Vec[usize]::new()
     let mut index = 0_usize
-    while index < sheet.rules.len() {
-        match sheet.rules.get(index) {
+    while index < sheet.variable_rules.len() {
+        match sheet.variable_rules.get(index) {
             Option[StyleRule]::Some(rule) => {
                 if selector_tree_matches(rule.selector, widget, ancestors,
                     ancestors.len(), siblings, child_index, sibling_count, hovered, active, focused,
-                    focus_within,) {
-                    matched_declarations.push(rule.declarations)
-                    matched_specificities.push(rule.specificity)
+                    focus_within, interaction, sibling_interactions,) {
+                    collect_variables(result, rule.declarations)
                 }
             }
             Option[StyleRule]::None => {
@@ -476,31 +2372,24 @@ fn compute_variables(sheet: StyleSheet, widget: Widget, ancestors: Vec[SelectorN
         }
         index = index + 1_usize
     }
-    let mut score = 0_usize
-    let maximum = sheet.maximum_specificity()
-    while score <= maximum {
-        let mut matched_index = 0_usize
-        while matched_index < matched_declarations.len() {
-            match matched_specificities.get(matched_index) {
-                Option[usize]::Some(specificity) => {
-                    if specificity == score {
-                        match matched_declarations.get(matched_index) {
-                            Option[str]::Some(value) => {
-                                collect_variables(result, value)
-                            }
-                            Option[str]::None => {
-                            }
-                        }
-                    }
-                }
-                Option[usize]::None => {
-                }
-            }
-            matched_index = matched_index + 1_usize
+    sheet.cache.put_variables(key, result)
+    ret widget_css_variables(widget, result)
+}
+
+// Runtime values are data bindings, not an explicit Style that bypasses the
+// cascade. Copy only when a widget declares its own values; inherited/cache
+// vectors remain immutable and can be shared by unrelated siblings.
+fn widget_css_variables(widget: Widget, inherited: Vec[CssVariable]) -> Vec[CssVariable] {
+    match widget.attribute("data-luma-css-variables") {
+        Option::Some(declarations) => {
+            let mut values = copy_variables(inherited)
+            collect_variables(values, declarations)
+            ret values
         }
-        score = score + 1_usize
+        Option::None => {
+            ret inherited
+        }
     }
-    ret result
 }
 
 fn copy_variables(source: Vec[CssVariable]) -> Vec[CssVariable] {
@@ -519,57 +2408,155 @@ fn copy_variables(source: Vec[CssVariable]) -> Vec[CssVariable] {
     ret result
 }
 
-fn apply_stylesheet_node(sheet: StyleSheet, widget: Widget, hovered_id: str, active_id: str,
-    focused_id: str, parent: Option[Style], ancestors: Vec[SelectorNode], inherited_variables: Vec[CssVariable],
-    siblings: Vec[Widget], child_index: usize, sibling_count: usize,) -> Widget {
-    let inherited = match parent {
-        Option[Style]::Some(parent_style) => {
-            widget.with_computed_style(widget.style().inherit_text(parent_style))
-        }
-        Option[Style]::None => {
-            widget
+fn apply_stylesheet_node(sheet: StyleSheet, widget: Widget,
+    parent: Option[Style], ancestors: Vec[SelectorNode], inherited_variables: Vec[CssVariable],
+    siblings: Vec[Widget], child_index: usize, sibling_count: usize,
+    state_index: usize, states: Vec[InteractionStyleState],
+    sibling_interactions: Vec[InteractionStyleState], previous: Vec[CascadeEntry],
+    next: mut Vec[CascadeEntry], invalidate: bool, retain: bool,
+    delta: mut CascadeDelta&, parent_index: usize, parent_stable: bool,) -> Widget {
+    let interaction = match states.get(state_index) {
+        Option[InteractionStyleState]::Some(state) => state
+        Option[InteractionStyleState]::None => InteractionStyleState {
+            1_usize, false, false, widget.focused(), widget.focused(),
+            widget.focused(), widget.focused(), Vec[InteractionStyleState]::new(),
         }
     }
-    let id = inherited.id()
-    let hovered = hovered_id != "" && widget_contains_id(inherited, hovered_id)
-    let active = active_id != "" && widget_contains_id(inherited, active_id)
-    let focused = id != "" && id == focused_id
-    let focus_within = focused_id != "" && widget_contains_id(inherited, focused_id)
-    let variables = compute_variables(sheet, inherited, ancestors, siblings, child_index, sibling_count,
-        hovered, active, focused, focus_within, inherited_variables,)
-    let styled = inherited.with_computed_style(compute_style(sheet, inherited, ancestors, siblings, child_index,
+    let cached = previous.get(state_index)
+    // Reuse the inherited base when both its authored input and its parent's
+    // inheritance are unchanged. Parent positions are verified explicitly:
+    // an insertion/reparenting must not reuse another parent's environment.
+    let base_stable = parent_stable && match cached {
+        Some(entry) => entry.parent_index == parent_index && entry.authored.equivalent(widget.style())
+        None => false
+    }
+    let base_style = if base_stable {
+        match cached {
+            Some(entry) => entry.base None => widget.style()
+        }
+    } else {
+        match parent {
+            Some(parent_style) => widget.style().inherit_text(parent_style)
+            None => widget.style()
+        }
+    }
+    let base = widget.with_computed_style(base_style)
+    let inherited = base.with_focus(interaction.widget_focused)
+    let hovered = interaction.hovered_within
+    let active = interaction.active_within
+    let focused = interaction.focused
+    let focus_within = interaction.focus_within
+    // Ancestor selectors only invalidate descendants of the changed ancestor.
+    // Unrelated branches retain their styles when hover, focus or classes change.
+    let context_unchanged = match cached {
+        Some(entry) => cascade_selector_inputs_equal(entry.selector, widget.selector_inputs(), sheet, sheet.cache.ancestor_structure_dependent) &&
+        entry.depth == ancestors.len() &&(!ancestor_interaction_affects_children(sheet, widget) || entry.interaction == cascade_interaction_bits(interaction)) &&
+        (!sheet.cache.position_dependent ||(entry.child_index == child_index && entry.sibling_count == sibling_count))
+        None => false
+    }
+    let child_invalidate = invalidate ||(sheet.cache.ancestor_dependent && !context_unchanged)
+    let reuse = !invalidate && match cached {
+        Some(entry) => cascade_node_selector_equal(entry.selector, widget.selector_inputs(), sheet) &&
+        entry.explicit == widget.has_explicit_style() &&
+        (base_stable || entry.base.equivalent(inherited.style())) &&
+        (!sheet.cache.position_dependent ||(entry.child_index == child_index && entry.sibling_count == sibling_count)) &&
+        entry.depth == ancestors.len() && entry.interaction == cascade_interaction_bits(interaction) &&
+        cascade_variables_equal(entry.inherited_variables, inherited_variables)
+        None => false
+    }
+    let variables = if reuse {
+        match cached {
+            Some(entry) => entry.variables None => inherited_variables
+        }
+    } else {
+        delta.evaluations += 1
+        compute_variables(sheet, inherited, ancestors, siblings, child_index, sibling_count,
+            hovered, active, focused, focus_within, interaction, sibling_interactions,
+            inherited_variables,)
+    }
+    let computed = if reuse {
+        match cached {
+            Some(entry) => entry.computed None => inherited.style()
+        }
+    } else {
+        compute_style(sheet, inherited, ancestors, siblings, child_index,
             sibling_count,
-            hovered, active, focused, focus_within, variables,))
+            hovered, active, focused, focus_within, interaction, sibling_interactions,
+            variables,)
+    }
+    let styled = inherited.with_computed_style(computed)
+    let child_parent_stable = reuse || match cached {
+        Some(entry) => entry.computed.inheritance_equivalent(computed)
+        None => false
+    }
+    if retain {
+        match cached {
+            Some(entry) => {
+                if entry.selector.id() != widget.id() {
+                    delta.patchable = false
+                }
+                if !entry.computed.equivalent(computed) ||
+                ((entry.interaction & 16) != 0) != interaction.widget_focused {
+                    if widget.id() == "" || !entry.computed.layout_equivalent(computed) {
+                        delta.patchable = false
+                    }
+                    delta.patches.push(CascadePatch {
+                            widget.id(), computed, interaction.widget_focused
+                        }
+                        ,
+                    )
+                }
+            }
+            None => {
+                delta.patchable = false
+            }
+        }
+        next.push(CascadeEntry {
+                widget.selector_inputs(), widget.has_explicit_style(), inherited.style(), computed, variables,
+                inherited_variables, cascade_interaction_bits(interaction), interaction.subtree_size,
+                child_index, sibling_count, ancestors.len(), widget.style(), parent_index
+            }
+            ,)
+    }
     let source = styled.children()
     let mut children = Vec[Widget]::new()
-    let child_ancestors = append_ancestor(ancestors, styled, child_index, sibling_count, siblings)
+    let mut child_interactions = Vec[InteractionStyleState]::new()
+    let mut child_state_index = state_index + 1_usize
+    for child in source {
+        match states.get(child_state_index) {
+            Option[InteractionStyleState]::Some(child_state) => {
+                child_interactions.push(child_state)
+                child_state_index += child_state.subtree_size
+            }
+            Option[InteractionStyleState]::None => {
+                child_interactions.push(InteractionStyleState {
+                        1_usize, false, false, false, false, false, false,
+                        Vec[InteractionStyleState]::new(),
+                    }
+                    ,)
+                child_state_index += 1_usize
+            }
+        }
+    }
+    let child_ancestors = append_ancestor(ancestors, styled, child_index,
+        sibling_count, siblings, interaction, sibling_interactions,)
     let mut index = 0_usize
+    child_state_index = state_index + 1_usize
     while index < source.len() {
         match source.get(index) {
             Option[Widget]::Some(child) => {
-                children.push(apply_stylesheet_node(sheet, child, hovered_id, active_id, focused_id,
-                        Option[Style]::Some(styled.style()), child_ancestors, variables, source, index,
-                        source.len(),))
-            }
-            Option[Widget]::None => {
-            }
-        }
-        index = index + 1_usize
-    }
-    ret styled.with_children(children)
-}
-
-fn widget_contains_id(widget: Widget, expected: str) -> bool {
-    if widget.id() == expected {
-        ret true
-    }
-    let children = widget.children()
-    let mut index = 0_usize
-    while index < children.len() {
-        match children.get(index) {
-            Option[Widget]::Some(child) => {
-                if widget_contains_id(child, expected) {
-                    ret true
+                children.push(apply_stylesheet_node(sheet, child,
+                        Option[Style]::Some(styled.style()), child_ancestors, variables,
+                        source, index, source.len(), child_state_index, states,
+                        child_interactions, previous, next, child_invalidate, retain, delta,
+                        state_index, child_parent_stable,))
+                match states.get(child_state_index) {
+                    Option[InteractionStyleState]::Some(child_state) => {
+                        child_state_index += child_state.subtree_size
+                    }
+                    Option[InteractionStyleState]::None => {
+                        child_state_index += 1_usize
+                    }
                 }
             }
             Option[Widget]::None => {
@@ -577,7 +2564,7 @@ fn widget_contains_id(widget: Widget, expected: str) -> bool {
         }
         index = index + 1_usize
     }
-    ret false
+    ret styled.with_children(children)
 }
 
 pub fn css_style(declarations: str) -> Style {
@@ -742,7 +2729,12 @@ fn apply_declaration(style: Style, declaration: str) -> Style {
         ret style
     }
     if property == "flex-basis" {
-        ret style.with_flex_basis(css_dimension(value))
+        ret style.with_flex_basis(if value == "auto" {
+                - 2.0_f32
+            } else {
+                css_dimension(value)
+            }
+        )
     }
     if property == "flex-grow" {
         ret style.with_flex_grow(css_number(value))
@@ -945,7 +2937,17 @@ fn apply_declaration(style: Style, declaration: str) -> Style {
         ret style.with_font_size(css_font_size(style, value))
     }
     if property == "font-weight" {
-        ret style.with_font_weight(css_number(value) as u32)
+        if value == "normal" {
+            ret style.with_font_weight(400_u32)
+        }
+        if value == "bold" {
+            ret style.with_font_weight(700_u32)
+        }
+        let weight = css_number(value)
+        if weight >= 1.0_f32 && weight <= 1000.0_f32 {
+            ret style.with_font_weight(weight as u32)
+        }
+        ret style
     }
     if property == "text-align" {
         if value == "center" {
@@ -1121,13 +3123,13 @@ fn css_linear_gradient(style: Style, value: str) -> Style {
 fn css_flex(style: Style, value: str) -> Style {
     let input = trim(value)
     if input == "none" {
-        ret style.with_flex_grow(0.0_f32).with_flex_shrink(0.0_f32).with_flex_basis( - 1.0_f32)
+        ret style.with_flex_grow(0.0_f32).with_flex_shrink(0.0_f32).with_flex_basis( - 2.0_f32)
     }
     if input == "auto" {
-        ret style.with_flex_grow(1.0_f32).with_flex_shrink(1.0_f32).with_flex_basis( - 1.0_f32)
+        ret style.with_flex_grow(1.0_f32).with_flex_shrink(1.0_f32).with_flex_basis( - 2.0_f32)
     }
     if input == "initial" {
-        ret style.with_flex_grow(0.0_f32).with_flex_shrink(1.0_f32).with_flex_basis( - 1.0_f32)
+        ret style.with_flex_grow(0.0_f32).with_flex_shrink(1.0_f32).with_flex_basis( - 2.0_f32)
     }
     let parts = css_tokens(input)
     if parts.len() == 0_usize {
@@ -1140,11 +3142,20 @@ fn css_flex(style: Style, value: str) -> Style {
     let second = token_at(parts, 1_usize)
     if parts.len() == 2_usize &&(second == "auto" || ends_with(second, "px") || ends_with(second, "%"))
     {
-        ret style.with_flex_grow(grow).with_flex_shrink(1.0_f32).with_flex_basis(css_dimension(second))
+        ret style.with_flex_grow(grow).with_flex_shrink(1.0_f32).with_flex_basis(if second == "auto" {
+                - 2.0_f32
+            } else {
+                css_dimension(second)
+            }
+        )
     }
     let shrink = css_number(second)
     let basis = if parts.len() >= 3_usize {
-        css_dimension(token_at(parts, 2_usize))
+        if token_at(parts, 2_usize) == "auto" {
+            - 2.0_f32
+        } else {
+            css_dimension(token_at(parts, 2_usize))
+        }
     } else {
         0.0_f32
     }
@@ -2192,41 +4203,55 @@ fn find_text(value: str, expected: str, start: usize) -> usize {
 }
 
 fn strip_comments(source: str) -> str {
-    let mut result = ""
+    let mut parts = Vec[str]::new()
     let mut index = 0_usize
-    let mut comment = false
-    let mut quote = ""
+    let mut start = 0_usize
+    let mut quote = 0_u8
     let mut escaped = false
-    while index < source.char_len() {
-        let current = source.slice(index, 1_usize)
-        let next = if index + 1_usize < source.char_len() {
-            source.slice(index + 1_usize, 1_usize)
+    let length = source.byte_len()
+    while index < length {
+        let current = source.byte_at(index)
+        let next = if index + 1_usize < length {
+            source.byte_at(index + 1_usize)
         } else {
-            ""
+            0_u8
         }
-        if !comment && quote == "" && current == "/" && next == "*" {
-            comment = true
-            result = result + " "
-            index = index + 2_usize
-        } elif comment && current == "*" && next == "/" {
-            comment = false index = index + 2_usize
-        } else {
-            if !comment {
-                result = result + current
-                if quote != "" {
-                    if escaped {
-                        escaped = false
-                    } elif current == "\\" {
-                        escaped = true
-                    } elif current == quote {
-                        quote = ""
-                    }
-                } elif current == "\"" || current == "'" {
-                    quote = current
-                }
+        if quote != 0_u8 {
+            if escaped {
+                escaped = false
+            } elif current == 92_u8 {
+                escaped = true
+            } elif current == quote {
+                quote = 0_u8
             }
-            index = index + 1_usize
+        } elif current == 34_u8 || current == 39_u8 {
+            quote = current
+        } elif current == 47_u8 && next == 42_u8 {
+            parts.push(source.slice_bytes(start, index - start))
+            parts.push(" ")
+            index += 2_usize
+            while index + 1_usize < length &&
+            !(source.byte_at(index) == 42_u8 && source.byte_at(index + 1_usize) == 47_u8) {
+                index += 1_usize
+            }
+            index = if index + 1_usize < length {
+                index + 2_usize
+            } else {
+                length
+            }
+            start = index
+            continue
         }
+        index += 1_usize
+    }
+    if parts.len() == 0_usize {
+        ret source
+    }
+    parts.push(source.slice_bytes(start, length - start))
+    // Concatenate whole unchanged spans, not one allocated string per character.
+    let mut result = ""
+    for part in parts {
+        result = result + part
     }
     ret result
 }
@@ -2341,7 +4366,8 @@ fn selector_list_specificity(selectors: str) -> usize {
 
 fn selector_matches(selector: str, widget: Widget, child_index: usize, sibling_count: usize, siblings:
     Vec[Widget],
-    root: bool, hovered: bool, active: bool, focused: bool, focus_within: bool,) -> bool {
+    root: bool, hovered: bool, active: bool, focused: bool, focus_within: bool,
+    interaction: InteractionStyleState,) -> bool {
     let input = trim(selector)
     if input == "*" {
         ret true
@@ -2382,16 +4408,16 @@ fn selector_matches(selector: str, widget: Widget, child_index: usize, sibling_c
             if marker == ":" {
                 if starts_with(value, "not(") {
                     if functional_selector_matches(value, widget, child_index, sibling_count, siblings,
-                        root, hovered, active, focused, focus_within,) {
+                        root, hovered, active, focused, focus_within, interaction,) {
                         ret false
                     }
                 } elif starts_with(value, "is(") || starts_with(value, "where(") {
                     if !functional_selector_matches(value, widget, child_index, sibling_count, siblings,
-                        root, hovered, active, focused, focus_within,) {
+                        root, hovered, active, focused, focus_within, interaction,) {
                         ret false
                     }
                 } elif starts_with(value, "has(") {
-                    if !has_selector_matches(value, widget) {
+                    if !has_selector_matches(value, widget, interaction) {
                         ret false
                     }
                 } elif value == "hover" && !hovered {
@@ -2406,9 +4432,9 @@ fn selector_matches(selector: str, widget: Widget, child_index: usize, sibling_c
                     ret false
                 } elif value == "enabled" && widget.disabled() {
                     ret false
-                } elif value == "focus-visible" && !focused && !widget.focused() {
+                } elif value == "focus-visible" && !interaction.focus_visible {
                     ret false
-                } elif value == "focus-within" && !focus_within && !widget_contains_focus(widget) {
+                } elif value == "focus-within" && !focus_within {
                     ret false
                 } elif value == "root" && !root {
                     ret false
@@ -2502,7 +4528,8 @@ fn widget_contains_focus(widget: Widget) -> bool {
 
 fn functional_selector_matches(value: str, widget: Widget, child_index: usize, sibling_count: usize,
     siblings: Vec[Widget],
-    root: bool, hovered: bool, active: bool, focused: bool, focus_within: bool,) -> bool {
+    root: bool, hovered: bool, active: bool, focused: bool, focus_within: bool,
+    interaction: InteractionStyleState,) -> bool {
     let open = find_character(value, "(", 0_usize)
     if open == value.char_len() || !ends_with(value, ")") {
         ret false
@@ -2525,7 +4552,7 @@ fn functional_selector_matches(value: str, widget: Widget, child_index: usize, s
         if index == selectors.char_len() ||(current == "," && depth == 0_usize) {
             let selector = trim(selectors.slice(start, index - start))
             if selector_matches(selector, widget, child_index, sibling_count, siblings,
-                root, hovered, active, focused, focus_within,) {
+                root, hovered, active, focused, focus_within, interaction,) {
                 ret true
             }
             start = index + 1_usize
@@ -2535,7 +4562,7 @@ fn functional_selector_matches(value: str, widget: Widget, child_index: usize, s
     ret false
 }
 
-fn has_selector_matches(value: str, widget: Widget) -> bool {
+fn has_selector_matches(value: str, widget: Widget, interaction: InteractionStyleState) -> bool {
     let open = find_character(value, "(", 0_usize)
     if open == value.char_len() || !ends_with(value, ")") {
         ret false
@@ -2557,7 +4584,7 @@ fn has_selector_matches(value: str, widget: Widget) -> bool {
         }
         if index == selectors.char_len() ||(current == "," && depth == 0_usize) {
             let selector = trim(selectors.slice(start, index - start))
-            if relative_selector_matches(selector, widget) {
+            if relative_selector_matches(selector, widget, interaction) {
                 ret true
             }
             start = index + 1_usize
@@ -2567,21 +4594,27 @@ fn has_selector_matches(value: str, widget: Widget) -> bool {
     ret false
 }
 
-fn relative_selector_matches(selector: str, widget: Widget) -> bool {
+fn relative_selector_matches(selector: str, widget: Widget, interaction: InteractionStyleState) -> bool {
     if selector == "" {
         ret false
     }
     let children = widget.children()
-    let ancestors = append_ancestor(Vec[SelectorNode]::new(), widget, 0_usize, 1_usize, singleton_widget(widget))
+    let siblings = singleton_widget(widget)
+    let sibling_interactions = singleton_interaction(interaction)
+    let child_interactions = interaction.children
+    let ancestors = append_ancestor(Vec[SelectorNode]::new(), widget, 0_usize,
+        1_usize, siblings, interaction, sibling_interactions,)
     if starts_with(selector, ">") {
         let target = trim(selector.slice(1_usize, selector.char_len() - 1_usize))
         let mut index = 0_usize
         while index < children.len() {
             match children.get(index) {
                 Option[Widget]::Some(child) => {
+                    let child_interaction = interaction_at(child_interactions, index, child,)
                     if selector_tree_matches(target, child, ancestors, ancestors.len(), children, index,
-                        children.len(),
-                        false, false, false, false,) {
+                        children.len(), child_interaction.hovered_within,
+                        child_interaction.active_within, child_interaction.focused,
+                        child_interaction.focus_within, child_interaction, child_interactions,) {
                         ret true
                     }
                 }
@@ -2592,24 +4625,31 @@ fn relative_selector_matches(selector: str, widget: Widget) -> bool {
         }
         ret false
     }
-    ret descendant_selector_matches(selector, widget, Vec[SelectorNode]::new(),
-        singleton_widget(widget), 0_usize, 1_usize,)
+    ret descendant_selector_matches(selector, widget, interaction, Vec[SelectorNode]::new(),
+        singleton_widget(widget), 0_usize, 1_usize, singleton_interaction(interaction),)
 }
 
-fn descendant_selector_matches(selector: str, widget: Widget, ancestors: Vec[SelectorNode],
-    siblings: Vec[Widget], child_index: usize, sibling_count: usize,) -> bool {
+fn descendant_selector_matches(selector: str, widget: Widget, interaction: InteractionStyleState,
+    ancestors: Vec[SelectorNode], siblings: Vec[Widget], child_index: usize, sibling_count: usize,
+    sibling_interactions: Vec[InteractionStyleState],) -> bool {
     let children = widget.children()
-    let child_ancestors = append_ancestor(ancestors, widget, child_index, sibling_count, siblings)
+    let child_interactions = interaction.children
+    let child_ancestors = append_ancestor(ancestors, widget, child_index,
+        sibling_count, siblings, interaction,
+        sibling_interactions,)
     let mut index = 0_usize
     while index < children.len() {
         match children.get(index) {
             Option[Widget]::Some(child) => {
+                let child_interaction = interaction_at(child_interactions, index, child,)
                 if selector_tree_matches(selector, child, child_ancestors, child_ancestors.len(), children,
-                    index, children.len(), false, false, false, false,) {
+                    index, children.len(), child_interaction.hovered_within,
+                    child_interaction.active_within, child_interaction.focused,
+                    child_interaction.focus_within, child_interaction, child_interactions,) {
                     ret true
                 }
-                if descendant_selector_matches(selector, child, child_ancestors, children, index, children.len())
-                {
+                if descendant_selector_matches(selector, child, child_interaction,
+                    child_ancestors, children, index, children.len(), child_interactions,) {
                     ret true
                 }
             }
@@ -2738,19 +4778,37 @@ fn nth_expression_matches(expression: str, position: usize) -> bool {
     ret delta % a == 0_i32 && delta / a >= 0_i32
 }
 
+fn interaction_at(states: Vec[InteractionStyleState], index: usize,
+    widget: Widget,) -> InteractionStyleState {
+    match states.get(index) {
+        Option[InteractionStyleState]::Some(state) => {
+            ret state
+        }
+        Option[InteractionStyleState]::None => {
+            let focused = widget.focused()
+            ret InteractionStyleState {
+                1_usize, false, false, focused,
+                widget_contains_focus(widget), focused, focused, static_interaction_state(widget).children,
+            }
+        }
+    }
+}
+
 fn selector_tree_matches(selector: str, widget: Widget, ancestors: Vec[SelectorNode], count: usize,
     siblings: Vec[Widget], child_index: usize, sibling_count: usize,
-    hovered: bool, active: bool, focused: bool, focus_within: bool,) -> bool {
+    hovered: bool, active: bool, focused: bool, focus_within: bool,
+    interaction: InteractionStyleState,
+    sibling_interactions: Vec[InteractionStyleState],) -> bool {
     let input = trim(selector)
     let combinator = rightmost_combinator(input)
     if combinator.kind == 0_usize {
         ret selector_matches(input, widget, child_index, sibling_count, siblings, count == 0_usize, hovered,
-            active, focused, focus_within,)
+            active, focused, focus_within, interaction,)
     }
     let left = trim(input.slice(0_usize, combinator.index))
     let right = trim(input.slice(combinator.index + 1_usize, input.char_len() - combinator.index - 1_usize))
     if !selector_matches(right, widget, child_index, sibling_count, siblings, count == 0_usize, hovered,
-        active, focused, focus_within,) {
+        active, focused, focus_within, interaction,) {
         ret false
     }
     if combinator.kind == 2_usize {
@@ -2760,8 +4818,10 @@ fn selector_tree_matches(selector: str, widget: Widget, ancestors: Vec[SelectorN
         match ancestors.get(count - 1_usize) {
             Option[SelectorNode]::Some(parent) => {
                 ret selector_tree_matches(left, parent.widget, ancestors,
-                    count - 1_usize, parent.siblings, parent.index, parent.count, false, false, false,
-                    false,)
+                    count - 1_usize, parent.siblings, parent.index, parent.count,
+                    parent.interaction.hovered_within, parent.interaction.active_within,
+                    parent.interaction.focused, parent.interaction.focus_within,
+                    parent.interaction, parent.sibling_interactions,)
             }
             Option[SelectorNode]::None => {
                 ret false
@@ -2775,8 +4835,10 @@ fn selector_tree_matches(selector: str, widget: Widget, ancestors: Vec[SelectorN
             match ancestors.get(index) {
                 Option[SelectorNode]::Some(parent) => {
                     if selector_tree_matches(left, parent.widget, ancestors, index, parent.siblings,
-                        parent.index, parent.count,
-                        false, false, false, false,) {
+                        parent.index, parent.count, parent.interaction.hovered_within,
+                        parent.interaction.active_within, parent.interaction.focused,
+                        parent.interaction.focus_within, parent.interaction,
+                        parent.sibling_interactions,) {
                         ret true
                     }
                 }
@@ -2792,8 +4854,14 @@ fn selector_tree_matches(selector: str, widget: Widget, ancestors: Vec[SelectorN
         }
         match siblings.get(child_index - 1_usize) {
             Option[Widget]::Some(previous) => {
+                let previous_interaction = interaction_at(sibling_interactions,
+                    child_index - 1_usize, previous,)
                 ret selector_tree_matches(left, previous, ancestors, count, siblings,
-                    child_index - 1_usize, sibling_count, false, false, false, false,)
+                    child_index - 1_usize, sibling_count,
+                    previous_interaction.hovered_within,
+                    previous_interaction.active_within, previous_interaction.focused,
+                    previous_interaction.focus_within, previous_interaction,
+                    sibling_interactions,)
             }
             Option[Widget]::None => {
                 ret false
@@ -2806,8 +4874,13 @@ fn selector_tree_matches(selector: str, widget: Widget, ancestors: Vec[SelectorN
             index = index - 1_usize
             match siblings.get(index) {
                 Option[Widget]::Some(previous) => {
+                    let previous_interaction = interaction_at(sibling_interactions,
+                        index, previous,)
                     if selector_tree_matches(left, previous, ancestors, count, siblings, index, sibling_count,
-                        false, false, false, false,) {
+                        previous_interaction.hovered_within,
+                        previous_interaction.active_within, previous_interaction.focused,
+                        previous_interaction.focus_within, previous_interaction,
+                        sibling_interactions,) {
                         ret true
                     }
                 }
@@ -2884,7 +4957,9 @@ fn starts_in_combinator(value: str) -> bool {
 }
 
 fn append_ancestor(ancestors: Vec[SelectorNode], widget: Widget, index_in_parent: usize,
-    sibling_count: usize, siblings: Vec[Widget],) -> Vec[SelectorNode] {
+    sibling_count: usize, siblings: Vec[Widget],
+    interaction: InteractionStyleState,
+    sibling_interactions: Vec[InteractionStyleState],) -> Vec[SelectorNode] {
     let mut result = Vec[SelectorNode]::new()
     let mut index = 0_usize
     while index < ancestors.len() {
@@ -2898,16 +4973,39 @@ fn append_ancestor(ancestors: Vec[SelectorNode], widget: Widget, index_in_parent
         index = index + 1_usize
     }
     result.push(SelectorNode {
-            widget, index_in_parent, sibling_count, siblings
+            widget, index_in_parent, sibling_count, siblings,
+            interaction, sibling_interactions,
         }
         ,
     )
     ret result
 }
 
+fn static_interaction_state(widget: Widget) -> InteractionStyleState {
+    let focused = widget.focused()
+    let mut children = Vec[InteractionStyleState]::new()
+    let mut subtree_size = 1_usize
+    let mut focus_within = focused
+    for child in widget.children() {
+        let child_state = static_interaction_state(child)
+        subtree_size += child_state.subtree_size
+        focus_within = focus_within || child_state.focus_within
+        children.push(child_state)
+    }
+    ret InteractionStyleState {
+        subtree_size, false, false, focused, focus_within, focused, focused, children,
+    }
+}
+
 fn singleton_widget(widget: Widget) -> Vec[Widget] {
     let mut result = Vec[Widget]::new()
     result.push(widget)
+    ret result
+}
+
+fn singleton_interaction(interaction: InteractionStyleState) -> Vec[InteractionStyleState] {
+    let mut result = Vec[InteractionStyleState]::new()
+    result.push(interaction)
     ret result
 }
 
@@ -3071,20 +5169,7 @@ fn unquote_css_value(value: str) -> str {
 }
 
 fn string_contains(value: str, expected: str) -> bool {
-    if expected == "" {
-        ret true
-    }
-    if expected.char_len() > value.char_len() {
-        ret false
-    }
-    let mut index = 0_usize
-    while index + expected.char_len() <= value.char_len() {
-        if value.slice(index, expected.char_len()) == expected {
-            ret true
-        }
-        index = index + 1_usize
-    }
-    ret false
+    ret expected == "" || value.find_from(expected, 0_usize) < value.byte_len()
 }
 
 fn matching_bracket(value: str, open: usize) -> usize {
@@ -3134,11 +5219,16 @@ fn matching_parenthesis(value: str, open: usize) -> usize {
 }
 
 fn has_class(classes: str, expected: str) -> bool {
+    if expected == "" || !classes.contains(expected) {
+        ret false
+    }
     let mut start = 0_usize
     let mut index = 0_usize
-    while index <= classes.char_len() {
-        if index == classes.char_len() || whitespace(classes.slice(index, 1_usize)) {
-            if index > start && classes.slice(start, index - start) == expected {
+    let length = classes.byte_len()
+    while index <= length {
+        let byte = classes.byte_at(index)
+        if index == length || byte == 32_u8 || byte == 9_u8 || byte == 10_u8 || byte == 13_u8 {
+            if index > start && classes.slice_bytes(start, index - start) == expected {
                 ret true
             }
             start = index + 1_usize

@@ -1,0 +1,54 @@
+//! One window's frame cannot consume another root's pending property updates.
+import luma::{ReactiveUi, RendererKind, StyleSheet, UiBindings, UiContext, Widget, Window}
+
+fn main() -> u32 {
+    let mut context = UiContext::new()
+    let mut left = context.signal[str]("Left") let mut right = context.signal[str]("Right")
+    let mut bindings = UiBindings::new(context)
+    let tree = bindings.tree()
+    let a = bindings.mount(Widget::panel("a").with_child(Widget::label("Left").with_id("left")))
+    let b = bindings.mount(Widget::panel("b").with_child(Widget::label("Right").with_id("right")))
+    let left_node = tree.find(a, "left").unwrap_or(a)
+    let right_node = tree.find(b, "right").unwrap_or(b)
+    let left_value = left let right_value = right
+    let _left = bindings.bind_text(left_node, | cx | {
+            ret cx.read[str](left_value)
+        }
+        ,
+    )
+    let _right = bindings.bind_text(right_node, | cx | {
+            ret cx.read[str](right_value)
+        }
+        ,
+    )
+    let initial_a = tree.snapshot(a).unwrap_or(Widget::panel("a"))
+    let initial_b = tree.snapshot(b).unwrap_or(Widget::panel("b"))
+    let _initial = tree.take_changes()
+    let window_a = Window::create_with_renderer("Dock root A", 160, 120, RendererKind::Software)
+    .with_stylesheet(StyleSheet::default()).with_bindings(bindings, a)
+    let window_b = Window::create_with_renderer("Dock root B", 160, 120, RendererKind::Software)
+    .with_stylesheet(StyleSheet::default()).with_bindings(bindings, b)
+    if !window_a.available() || !window_b.available() {
+        window_a.destroy() window_b.destroy() ret 1
+    }
+    let mut ui_a = ReactiveUi::new(window_a.reactive_layout(initial_a))
+    let mut ui_b = ReactiveUi::new(window_b.reactive_layout(initial_b))
+    ui_a.set_declarative_root(initial_a) ui_b.set_declarative_root(initial_b)
+    left.set("Changed A") right.set("Changed B")
+    ui_a = window_a.stage_bindings(ui_a)
+    if window_a.has_pending_bindings() || !window_b.has_pending_bindings() ||
+    ui_a.find_widget("left").unwrap_or(initial_a).text() != "Changed A" ||
+    ui_b.find_widget("right").unwrap_or(initial_b).text() != "Right" {
+        window_a.destroy() window_b.destroy() ret 2
+    }
+    ui_b = window_b.stage_bindings(ui_b)
+    if window_b.has_pending_bindings() || ui_b.find_widget("right").unwrap_or(initial_b).text() != "Changed B" {
+        window_a.destroy() window_b.destroy() ret 3
+    }
+    if bindings.authored_view_for(a).unwrap_or(initial_a).find("left").unwrap_or(initial_a).text() != "Changed A" ||
+    bindings.authored_view_for(b).unwrap_or(initial_b).find("right").unwrap_or(initial_b).text() != "Changed B" {
+        window_a.destroy() window_b.destroy() ret 4
+    }
+    window_a.destroy() window_b.destroy()
+    ret 0
+}

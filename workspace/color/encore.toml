@@ -1,0 +1,9 @@
+[project]
+name = "color"
+version = "0.0.0"
+repository = "https://github.com/encore-ecosystem/encore-index"
+encore = ">=0.1.6"
+description = "Color primitives for Encore applications"
+readme = "README.md"
+licence = "MIT"
+dependencies = ["sys@core"]

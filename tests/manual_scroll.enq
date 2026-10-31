@@ -1,0 +1,39 @@
+//! Wheel routing retains patched children and consumes scroll at panel limits.
+import luma::{Widget, StyleSheet, Rect, ReactiveUi, layout_widget}
+fn main() -> u32 {
+    let mut panel = Widget::panel("properties").with_attribute("data-luma-scrollable", "true")
+    for index in 0..10 {
+        panel.push(Widget::button(f "row-{index}", f "Row {index}"))
+    }
+    let root = Widget::panel("root").with_child(panel).with_child(Widget::render_surface("canvas"))
+    let sheet = StyleSheet::parse("#root { flex-direction: row; padding: 0; gap: 0; } #properties { flex: 0 0 100px; flex-direction: column; overflow: hidden; padding: 0; gap: 0; } #properties button { flex: 0 0 26px; min-height: 26px; } #canvas { flex: 1 1 0; }")
+    let mut ui = ReactiveUi::new(layout_widget(sheet.apply(root, "", "", ""), Rect::new(0, 0, 200, 100)))
+    let old = ui.find_widget("row-3").unwrap_or(Widget::button("row-3", "Missing"))
+    if !ui.replace_subtree("row-3", old.with_text("Patched")) {
+        ret 1
+    }
+    if !ui.scroll_at(50, 50, 52) || ui.hit(10, 5) != "row-2" {
+        ret 2
+    }
+    if ui.find_widget("row-3").unwrap_or(old).text() != "Patched" {
+        ret 3
+    }
+    if !ui.scroll_at(50, 50, 1000) || ui.find_layout("row-9").unwrap_or(ui.layout()).bounds().bottom() != 100 {
+        ret 4
+    }
+    if !ui.scroll_at(50, 50, 1000) {
+        ret 5
+    }
+    if ui.scroll_at(150, 50, 26) || ui.scroll_at( - 1, 50, 26) {
+        ret 6
+    }
+    let preserved = ui.preserve_scroll_offsets(sheet.apply(root, "", "", ""))
+    let retained = layout_widget(preserved, Rect::new(0, 0, 200, 100))
+    if retained.find_bounds("row-9").unwrap_or(Rect::new(0, 0, 0, 0)).bottom() != 100 {
+        ret 7
+    }
+    if !ui.scroll_at(50, 50, - 1000) || ui.hit(10, 5) != "row-0" {
+        ret 8
+    }
+    ret 0
+}

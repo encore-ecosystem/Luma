@@ -1,0 +1,182 @@
+import core::vec::Vec
+import luma::{Event, Rect, Style, event_pointer_down, event_pointer_up, event_focus_lost, key_right, key_tab}
+import luma::{TimelineDocument, TimelineTrack, TimelineItem, TimelineView, timeline_snap}
+import luma::{TimelineEditor, TimelineEdit}
+fn main() -> u32 {
+    let tracks = vec![TimelineTrack { 1_u64, "Animation", false, false }, TimelineTrack {
+            2_u64, "Audio", false, true
+        }
+        , TimelineTrack {
+            3_u64, "Locked", true, false
+        }
+    ]
+    let item = TimelineItem { 1_u64, 1_u64, 2_f64, 4_f64, "Walk", false, false }
+    let mut document = TimelineDocument { tracks, vec![item], 10_f64, 30_f64 }
+    if document.validate().is_err() {
+        ret 1_u32
+    }
+    let moved = match document.placement(item, 9_f64, 2_u64, 0_u32, true) {
+        Ok(v) => v Err(_) => {
+            ret 2_u32
+        }
+    }
+    if moved.track != 2_u64 || moved.start != 8_f64 || moved.end != 10_f64 {
+        ret 3_u32
+    }
+    if document.placement(item, 1_f64, 3_u64, 0_u32, true).is_ok() {
+        ret 4_u32
+    }
+    if timeline_snap(0.049_f64, 30_f64) != 1_f64 / 30_f64 {
+        ret 5_u32
+    }
+    let trim = match document.placement(item, 3_f64, 1_u64, 1_u32, true) {
+        Ok(v) => v Err(_) => {
+            ret 6_u32
+        }
+    }
+    if trim.start != 3_f64 || trim.end != 4_f64 {
+        ret 7_u32
+    }
+    let key = TimelineItem { 2_u64, 1_u64, 1_f64, 1_f64, "Event", true, false }
+    let moved_key = match document.placement(key, 3_f64, 2_u64, 0_u32, true) {
+        Ok(v) => v Err(_) => {
+            ret 8_u32
+        }
+    }
+    if moved_key.start != 3_f64 || moved_key.end != 3_f64 {
+        ret 9_u32
+    }
+    let mut view = TimelineView::new() let original = view.time(580_f32, 1000_f32)
+    view.zoom(0.5_f64, 580_f32, 1000_f32, 10_f64)
+    if view.time(580_f32, 1000_f32) != original {
+        ret 10_u32
+    }
+    view.pan( - 100_f64, 10_f64) if view.left != 0_f64 {
+        ret 11_u32
+    }
+    if view.row(25_f32, 3_usize) != 3_usize || view.row(27_f32, 3_usize) != 0_usize {
+        ret 12_u32
+    }
+    document.items.push(item) if document.validate().is_ok() {
+        ret 13_u32
+    }
+    if !interaction() {
+        ret 20_u32
+    }
+    let mut many = Vec[TimelineItem]::new()
+    for i in 0_usize..10000_usize {
+        many.push(TimelineItem {
+                (10000_usize - i) as u64, 1_u64, 0_f64, 1_f64, "Clip", false, false
+            }
+            ,
+        )
+    }
+    document.items = many if document.validate().is_err() {
+        ret 14_u32
+    }
+    let first = document.items.get_unchecked_borrowed(0_usize) if first.id != 10000_u64 {
+        ret 15_u32
+    }
+    document.items.push(TimelineItem { 5000_u64, 1_u64, 0_f64, 1_f64, "Duplicate", false, false })
+    if document.validate().is_ok() {
+        ret 16_u32
+    }
+    ret 0_u32
+}
+
+fn pointer(kind: u32, x: f32, y: f32, buttons: u32) -> Event {
+    ret Event {
+        kind, x, y, 0_f32, 0_f32, buttons, 0_u32, 0_u32, 0_f32, 0_f32, "", 0_u64
+    }
+}
+fn interaction() -> bool {
+    let document = TimelineDocument {
+        vec![TimelineTrack { 1_u64, "A", false, false }, TimelineTrack {
+                2_u64, "B", false, false
+            }
+        ], vec![TimelineItem {
+                1_u64, 1_u64, 2_f64, 4_f64, "Clip", false, false
+            }
+        ], 10_f64, 30_f64
+    }
+    let bounds = Rect::new(0_f32, 0_f32, 1000_f32, 200_f32)
+    let mut editor = TimelineEditor::new() editor.focus(true)
+    match editor.input(Event::key_down(key_right(), 0_u32), document, bounds, 0_f64) {
+        Seek(time) => {
+            if time != 1_f64 / 30_f64 {
+                ret false
+            }
+        }
+        _ => {
+            ret false
+        }
+    }
+    match editor.input(pointer(event_pointer_down(), 380_f32, 42_f32, 1_u32), document, bounds, 0_f64) {
+        Begin(id) => {
+            if id != 1_u64 {
+                ret false
+            }
+        }
+        _ => {
+            ret false
+        }
+    }
+    match editor.input(Event::pointer_move(464_f32, 74_f32, 84_f32, 32_f32, 1_u32), document, bounds, 0_f64) {
+        Preview(p) => {
+            if p.track != 2_u64 || p.start != 3_f64 || p.end != 5_f64 {
+                ret false
+            }
+        }
+        _ => {
+            ret false
+        }
+    }
+    match editor.input(pointer(event_pointer_up(), 464_f32, 74_f32, 0_u32), document, bounds, 0_f64) {
+        Commit => {
+        }
+        _ => {
+            ret false
+        }
+    }
+    if editor.active() {
+        ret false
+    }
+    match editor.input(pointer(event_pointer_down(), 580_f32, 10_f32, 1_u32), document, bounds, 0_f64) {
+        Seek(time) => {
+            if time != 5_f64 {
+                ret false
+            }
+        }
+        _ => {
+            ret false
+        }
+    }
+    editor.input(pointer(event_pointer_up(), 580_f32, 10_f32, 0_u32), document, bounds, 0_f64)
+    match editor.input(Event::key_down(key_tab(), 0_u32), document, bounds, 0_f64) {
+        Ignored => {
+        }
+        _ => {
+            ret false
+        }
+    }
+    editor.focus(true) editor.input(pointer(event_pointer_down(), 380_f32, 42_f32, 1_u32), document, bounds, 0_f64)
+    match editor.input(pointer(event_focus_lost(), 0_f32, 0_f32, 0_u32), document, bounds, 0_f64) {
+        Cancel => {
+        }
+        _ => {
+            ret false
+        }
+    }
+    if editor.active() {
+        ret false
+    }
+    editor.set_disabled(true)
+    match editor.input(pointer(event_pointer_down(), 380_f32, 42_f32, 1_u32), document, bounds, 0_f64) {
+        Ignored => {
+        }
+        _ => {
+            ret false
+        }
+    }
+    ret editor.display(document, bounds, 3_f64, Style::default(), Style::default(), Style::default()).len() > 20_usize
+}

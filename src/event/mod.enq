@@ -73,105 +73,105 @@ pub struct UiEvent {
 }
 
 impl for UiEvent {
-    pub fn new(kind: u32, target: str) -> UiEvent < H > {
-        ret UiEvent < H > {
+    pub fn new(kind: u32, target: str) -> UiEvent<H> {
+        ret UiEvent<H> {
             kind, target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
             0.0_f32, 0.0_f32, 0_u32, 0_u32, "", "", 0.0_f32, "", false, false
         }
     }
 
     pub fn pointer(kind: u32, target: str, x: f32, y: f32, delta_x: f32,
-        delta_y: f32,) -> UiEvent < H > {
-        ret UiEvent < H > {
+        delta_y: f32,) -> UiEvent<H> {
+        ret UiEvent<H> {
             kind, target, "", ui_phase_target(), x, y, delta_x, delta_y,
             0_u32, 0_u32, "", "", 0.0_f32, "", false, false
         }
     }
 
-    pub fn keyboard(kind: u32, target: str, key: u32, modifiers: u32) -> UiEvent < H > {
-        ret UiEvent < H > {
+    pub fn keyboard(kind: u32, target: str, key: u32, modifiers: u32) -> UiEvent<H> {
+        ret UiEvent<H> {
             kind, target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
             0.0_f32, 0.0_f32, key, modifiers, "", "", 0.0_f32, "", false, false
         }
     }
 
-    pub fn input(target: str, text: str) -> UiEvent < H > {
-        ret UiEvent < H > {
+    pub fn input(target: str, text: str) -> UiEvent<H> {
+        ret UiEvent<H> {
             ui_event_input(), target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
             0.0_f32, 0.0_f32, 0_u32, 0_u32, text, "", 0.0_f32, "", false, false
         }
     }
 
     pub fn transition(kind: u32, target: str, property_name: str,
-        elapsed_time: f32,) -> UiEvent < H > {
-        ret UiEvent < H > {
+        elapsed_time: f32,) -> UiEvent<H> {
+        ret UiEvent<H> {
             kind, target, "", ui_phase_target(), 0.0_f32, 0.0_f32,
             0.0_f32, 0.0_f32, 0_u32, 0_u32, "", property_name,
             elapsed_time, "", false, false
         }
     }
 
-    pub fn kind(self: Self &) -> u32 {
+    pub fn kind(self: Self&) -> u32 {
         ret self.kind
     }
-    pub fn target(self: Self &) -> str {
+    pub fn target(self: Self&) -> str {
         ret self.target
     }
-    pub fn current_target(self: Self &) -> str {
+    pub fn current_target(self: Self&) -> str {
         ret self.current_target
     }
-    pub fn phase(self: Self &) -> u32 {
+    pub fn phase(self: Self&) -> u32 {
         ret self.phase
     }
-    pub fn x(self: Self &) -> f32 {
+    pub fn x(self: Self&) -> f32 {
         ret self.x
     }
-    pub fn y(self: Self &) -> f32 {
+    pub fn y(self: Self&) -> f32 {
         ret self.y
     }
-    pub fn delta_x(self: Self &) -> f32 {
+    pub fn delta_x(self: Self&) -> f32 {
         ret self.delta_x
     }
-    pub fn delta_y(self: Self &) -> f32 {
+    pub fn delta_y(self: Self&) -> f32 {
         ret self.delta_y
     }
-    pub fn key(self: Self &) -> u32 {
+    pub fn key(self: Self&) -> u32 {
         ret self.key
     }
-    pub fn modifiers(self: Self &) -> u32 {
+    pub fn modifiers(self: Self&) -> u32 {
         ret self.modifiers
     }
-    pub fn text(self: Self &) -> str {
+    pub fn text(self: Self&) -> str {
         ret self.text
     }
-    pub fn property_name(self: Self &) -> str {
+    pub fn property_name(self: Self&) -> str {
         ret self.property_name
     }
     /// CSS-compatible elapsed time in seconds, excluding transition delay.
-    pub fn elapsed_time(self: Self &) -> f32 {
+    pub fn elapsed_time(self: Self&) -> f32 {
         ret self.elapsed_time
     }
-    pub fn pseudo_element(self: Self &) -> str {
+    pub fn pseudo_element(self: Self&) -> str {
         ret self.pseudo_element
     }
-    pub fn propagation_stopped(self: Self &) -> bool {
+    pub fn propagation_stopped(self: Self&) -> bool {
         ret self.propagation_stopped
     }
-    pub fn default_prevented(self: Self &) -> bool {
+    pub fn default_prevented(self: Self&) -> bool {
         ret self.default_prevented
     }
 
-    pub fn stop_propagation(self: Self &) ->() {
+    pub fn stop_propagation(self: mut Self&) ->() {
         self.propagation_stopped = true
         ret()
     }
 
-    pub fn prevent_default(self: Self &) ->() {
+    pub fn prevent_default(self: mut Self&) ->() {
         self.default_prevented = true
         ret()
     }
 
-    pub fn enter(self: Self &, current_target: str, phase: u32) ->() {
+    pub fn enter(self: mut Self&, current_target: str, phase: u32) ->() {
         self.current_target = current_target
         self.phase = phase
         ret()
@@ -181,7 +181,7 @@ impl for UiEvent {
 /// The compiler lowers a pipe closure passed to this trait into an owning
 /// heap environment and an ordinary EHIR dynamic-trait implementation.
 pub trait UiEventHandler {
-    fn handle(self: Self, event: UiEvent < H >) ->()
+    fn handle(self: Self, event: UiEvent<H>) ->()
 }
 
 pub struct UiEventListener {
@@ -195,13 +195,16 @@ pub struct UiEventHandlers {
 }
 
 impl for UiEventHandlers {
-    pub fn new() -> UiEventHandlers < H > {
-        ret UiEventHandlers < H > {
+    pub fn len(self: Self&) -> usize {
+        ret self.listeners.len()
+    }
+    pub fn new() -> UiEventHandlers<H> {
+        ret UiEventHandlers<H> {
             Vec[UiEventListener]::new()
         }
     }
 
-    pub fn add(self: Self &, kind: u32, capture: bool, handler: dyn UiEventHandler) ->() {
+    pub fn add(self: mut Self&, kind: u32, capture: bool, handler: dyn UiEventHandler) ->() {
         self.listeners.push(UiEventListener {
                 kind, capture, handler
             }
@@ -210,7 +213,7 @@ impl for UiEventHandlers {
         ret()
     }
 
-    pub fn dispatch(self: Self &, kind: u32, capture: bool, event: UiEvent < H >) ->() {
+    pub fn dispatch(self: Self&, kind: u32, capture: bool, event: UiEvent<H>) ->() {
         let mut index = 0_usize
         while index < self.listeners.len() {
             if event.propagation_stopped() {

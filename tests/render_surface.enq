@@ -1,5 +1,5 @@
 import core::option::Option
-import luma::{ExternalVulkanImage, RendererKind, Widget, Window}
+import luma::{ExternalVulkanImage, ReactiveUi, RendererKind, Style, Widget, Window}
 
 fn main() -> u32 {
     let window = Window::create_with_renderer(
@@ -8,9 +8,20 @@ fn main() -> u32 {
         ret 1_u32
     }
     let layout = window.layout(Widget::render_surface("scene"))
+    let mut reactive = ReactiveUi::new(layout)
+    let indexed = window.surface_slot(reactive, "scene")
+    if !indexed.is_some() || window.surface_slot(reactive, "missing").is_some() {
+        window.destroy() ret 11
+    }
     let mut frame = window.prepare_frame(layout, false)
     match frame.surface("scene") {
         Option::Some(slot) => {
+            let direct = indexed.unwrap_or(slot)
+            if direct.generation() != slot.generation() || direct.pixel_width() != slot.pixel_width() ||
+            direct.pixel_height() != slot.pixel_height() || direct.pixel_x() != slot.pixel_x() ||
+            direct.pixel_y() != slot.pixel_y() || direct.density() != slot.density() {
+                window.destroy() ret 12
+            }
             if slot.pixel_width() == 0_u32 || slot.pixel_height() == 0_u32 ||
             slot.logical_bounds().width() != 100.0_f32 ||
             slot.logical_bounds().height() != 80.0_f32 {
@@ -32,6 +43,14 @@ fn main() -> u32 {
             if !frame.submit_external("scene", slot.generation(), image) {
                 window.destroy()
                 ret 5_u32
+            }
+            let pooled = ExternalVulkanImage::new(1, slot.pixel_width() + 64,
+                slot.pixel_height() + 64, 5,).with_region(0, 0, slot.pixel_width(), slot.pixel_height())
+            if !frame.submit_external("scene", slot.generation(), pooled) ||
+            frame.submit_external("scene", slot.generation() + 1, pooled) ||
+            pooled.with_region(65, 0, slot.pixel_width(), slot.pixel_height()).valid() ||
+            pooled.with_region(0, 0, 0, slot.pixel_height()).valid() {
+                window.destroy() ret 10
             }
             // Camera-only frames reuse captured surface geometry instead of
             // recursively traversing the owned layout tree every update.
@@ -57,6 +76,36 @@ fn main() -> u32 {
             window.destroy()
             ret 6_u32
         }
+    }
+    // Retained capture must preserve fractional geometry and ancestor clipping
+    // after a structural replacement, not reuse the previous frame's slot.
+    let mut root = Widget::panel("clip").with_style(Style::default().with_overflow_hidden(true))
+    root.push(Widget::render_surface("scene").with_style(Style::default().with_absolute(true)
+            .with_left(5.25).with_top(6.5).with_width(110.5).with_height(90.25)))
+    root.push(Widget::label("Not a render surface").with_id("label"))
+    reactive.replace_layout(window.layout(root))
+    let full = window.prepare_frame(reactive.layout(), false)
+    let expected = match full.surface("scene") {
+        Some(value) => value None => {
+            window.destroy() ret 13
+        }
+    }
+    let actual = match window.surface_slot(reactive, "scene") {
+        Some(value) => value None => {
+            window.destroy() ret 13
+        }
+    }
+    if actual.generation() != expected.generation() || actual.pixel_x() != expected.pixel_x() ||
+    actual.pixel_y() != expected.pixel_y() || actual.pixel_width() != expected.pixel_width() ||
+    actual.pixel_height() != expected.pixel_height() ||
+    actual.logical_bounds().x() != expected.logical_bounds().x() ||
+    window.surface_slot(reactive, "label").is_some() || !actual.clip().is_some() {
+        window.destroy() ret 13
+    }
+    let a = actual.clip().unwrap_or(actual.logical_bounds())
+    let b = expected.clip().unwrap_or(expected.logical_bounds())
+    if a.x() != b.x() || a.y() != b.y() || a.width() != b.width() || a.height() != b.height() {
+        window.destroy() ret 14
     }
     if !window.destroy() {
         ret 7_u32

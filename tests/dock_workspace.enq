@@ -1,0 +1,140 @@
+//! Tab order, split collapse, minimum sizes, floating-window return and bounded identities.
+import luma::{DockDrag, DockNodeId, DockPanel, DockPlacement, DockWorkspace, PanelId, Rect, Size, WindowId}
+
+fn group(workspace: DockWorkspace&, name: str) -> DockNodeId {
+    ret workspace.location(PanelId::new(name)).unwrap_or(DockNodeId::empty())
+}
+fn main() -> u32 {
+    let main = WindowId::new(1)
+    let floating = WindowId::new(2)
+    let mut workspace = DockWorkspace::new(main)
+    let view = PanelId::new("viewport") let details = PanelId::new("details")
+    let outliner = PanelId::new("outliner") let content = PanelId::new("content")
+    if !workspace.register(DockPanel::new("viewport", "Viewport", Size::new(780, 240))) ||
+    !workspace.register(DockPanel::new("details", "Details", Size::new(280, 180))) ||
+    !workspace.register(DockPanel::new("outliner", "World Outliner", Size::new(200, 160))) ||
+    !workspace.register(DockPanel::new("content", "Content Browser", Size::new(280, 180))) {
+        ret 1
+    }
+    if workspace.register(DockPanel::new("details", "Duplicate", Size::zero())) {
+        ret 2
+    }
+    if !workspace.show(view, main) || !workspace.show(details, main) ||
+    !workspace.show(outliner, main) || !workspace.show(content, main) || workspace.show(details, main) {
+        ret 3
+    }
+    let initial = group(workspace, "viewport")
+    if !workspace.dock(details, initial, DockPlacement::Center, 0) {
+        ret 4
+    }
+    let first = match workspace.node(initial) {
+        Some(node) => node None => {
+            ret 5
+        }
+    }
+    if !first.active().unwrap_or(view).same(details) || !first.tabs().get(0).unwrap_or(view).same(details) {
+        ret 5
+    }
+    let revision = workspace.revision()
+    if workspace.dock(view, initial, DockPlacement::Center, 99) || workspace.revision() != revision {
+        ret 6
+    }
+    if workspace.preview(view, initial, DockPlacement::Left, Rect::new(0, 0, 1062, 600)).is_none() {
+        ret 27
+    }
+    if !workspace.dock(details, initial, DockPlacement::Right, 0) {
+        ret 7
+    }
+    let detail_group = group(workspace, "details")
+    if detail_group.same(initial) || !workspace.dock(outliner, initial, DockPlacement::Left, 0) {
+        ret 8
+    }
+    if !workspace.dock(content, initial, DockPlacement::Bottom, 0) {
+        ret 9
+    }
+    let host = workspace.window(main)
+    let root = match host {
+        Some(window) => window.root() None => {
+            ret 10
+        }
+    }
+    if !workspace.dock(content, root, DockPlacement::Bottom, 0) {
+        ret 28
+    }
+    let root = match workspace.window(main) {
+        Some(window) => window.root() None => {
+            ret 29
+        }
+    }
+    let minimum = workspace.minimum(root)
+    if minimum.width() != 1264 || minimum.height() != 478 {
+        ret 11
+    }
+    let regions = workspace.regions(main, Rect::new(0, 0, 1440, 900))
+    if regions.len() != 7 {
+        ret 12
+    }
+    let before_preview = workspace.revision()
+    if workspace.preview(details, initial, DockPlacement::Left, Rect::new(0, 0, 900, 600)).is_some() ||
+    workspace.preview(details, initial, DockPlacement::Left, Rect::new(0, 0, 1100, 600)).is_none() ||
+    workspace.revision() != before_preview {
+        ret 13
+    }
+    if !workspace.detach(details, floating) || !workspace.owner(group(workspace, "details")).unwrap_or(main).same(floating) {
+        ret 14
+    }
+    if !workspace.close_window(floating) || workspace.window(floating).is_some() ||
+    !workspace.owner(group(workspace, "details")).unwrap_or(floating).same(main) ||
+    workspace.node(detail_group).is_some() {
+        ret 15
+    }
+    let capacity = workspace.capacity()
+    for _index in 0..100 {
+        if !workspace.detach(details, floating) || !workspace.close_window(floating) {
+            ret 16
+        }
+    }
+    if workspace.capacity() > capacity || workspace.panels_in(main).len() != 4 {
+        ret 17
+    }
+    if !workspace.hide(details) || workspace.location(details).is_some() || !workspace.show(details, main) {
+        ret 18
+    }
+    if workspace.close_window(main) || workspace.show(PanelId::new("unknown"), main) {
+        ret 19
+    }
+    let mut alone = DockWorkspace::new(main)
+    let _registered = alone.register(DockPanel::new("viewport", "Viewport", Size::new(780, 240)))
+    let _shown = alone.show(view, main)
+    if !alone.detach(view, floating) || alone.panels_in(main).len() != 0 ||
+    !alone.close_window(floating) || alone.panels_in(main).len() != 1 {
+        ret 20
+    }
+    let foreign = group(alone, "viewport")
+    if workspace.node(foreign).is_some() || workspace.dock(details, foreign, DockPlacement::Center, 0) {
+        ret 21
+    }
+    let mut drag = DockDrag::new()
+    let source = group(workspace, "details")
+    let before_drag = workspace.revision()
+    if !drag.begin(workspace, details, main, 10, 10) || drag.motion(13, 14) ||
+    drag.begin(workspace, view, main, 10, 10) {
+        ret 22
+    }
+    if !drag.motion(16, 10) || !drag.active() || workspace.revision() != before_drag {
+        ret 23
+    }
+    drag.cancel()
+    if drag.armed() || !group(workspace, "details").same(source) || workspace.revision() != before_drag {
+        ret 24
+    }
+    if !drag.begin(workspace, details, main, 10, 10) {
+        ret 25
+    }
+    let _started = drag.motion(16, 10)
+    if drag.finish(workspace, foreign, DockPlacement::Center, 0) || drag.armed() ||
+    !group(workspace, "details").same(source) {
+        ret 26
+    }
+    ret 0
+}

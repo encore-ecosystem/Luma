@@ -1,0 +1,267 @@
+//! Independent styled UI layers for embedded views and game overlays.
+//! A layer owns its focus, capture and retained scrolling; it never presents.
+import core::option::Option
+import core::vec::Vec
+
+import refrain::application::{Event, PreparedFrame, event_focus_lost, event_key_down, event_key_up, event_pointer_down, event_pointer_move, event_pointer_up, event_scroll, event_text_input, key_backspace, key_delete, key_end, key_enter, key_home, key_left, key_right, key_tab}
+import refrain::css::StyleSheet
+import refrain::geometry::Rect
+import refrain::interaction::{InteractionState, TextEditor}
+import refrain::widget::{ReactiveUi, Widget, WidgetLayout, layout_widget, widget_button, widget_checkbox, widget_input, widget_select, widget_slider}
+
+pub struct LayerInput {
+    consumed: bool
+    target: str
+    action: str
+    value: f32
+    text: str
+}
+pub struct UiLayer {
+    root: Widget
+    sheet: StyleSheet
+    interaction: InteractionState
+    tree: ReactiveUi
+    bounds: Rect
+    modal: bool
+    keyboard: bool
+    editing: str
+    editor: TextEditor
+}
+fn interactive(widget: Widget) -> bool {
+    let k = widget.kind()
+    ret !widget.disabled() &&(k == widget_button() || k == widget_checkbox() || k == widget_slider() || k == widget_select() || k == widget_input())
+}
+
+fn editing_tree(widget: Widget, id: str, editor: TextEditor) -> Widget {
+    let mut children = Vec[Widget]::new() for child in widget.children() {
+        children.push(editing_tree(child, id, editor))
+    }
+    let node = widget.with_children(children)
+    ret if id != "" && widget.id() == id {
+        node.with_text(editor.value()).with_cursor(editor.cursor()).with_selection(editor.selection_start(), editor.selection_end()).with_focus(true)
+    } else {
+        node
+    }
+}
+
+impl for UiLayer {
+    pub fn new(root: Widget, sheet: StyleSheet, bounds: Rect) -> Self {
+        ret Self {
+            root, sheet, InteractionState::new(), ReactiveUi::new(layout_widget(sheet.apply(root, "", "", ""), bounds)), bounds, false, true, "", TextEditor::new("")
+        }
+    }
+    pub fn set_modal(self: mut Self, modal: bool) ->() {
+        self.modal = modal
+    }
+    pub fn set_root(self: mut Self, root: Widget, bounds: Rect) ->() {
+        if self.editing != "" {
+            match root.find(self.editing) {
+                Some(input) => {
+                    if input.text() != self.editor.value() {
+                        self.editor = TextEditor::new(input.text())
+                    }
+                }
+                None => {
+                    self.editing = ""
+                }
+            }
+        }
+        self.root = root self.bounds = bounds self.refresh()
+    }
+    pub fn set_stylesheet(self: mut Self, sheet: StyleSheet) ->() {
+        self.sheet = sheet self.refresh()
+    }
+    pub fn layout(self: mut Self) -> WidgetLayout {
+        ret self.tree.layout()
+    }
+    pub fn hovered(self: Self) -> str {
+        ret self.interaction.hovered()
+    }
+    pub fn pressed(self: Self) -> str {
+        ret self.interaction.active()
+    }
+    pub fn focused(self: Self) -> str {
+        ret self.interaction.focused()
+    }
+    /// Start another logical UI document without carrying focus/capture/scroll IDs.
+    pub fn clear_state(self: mut Self) ->() {
+        self.interaction = InteractionState::new() self.editing = "" self.editor = TextEditor::new("")
+        self.tree = ReactiveUi::new(layout_widget(self.sheet.apply(self.root, "", "", ""), self.bounds))
+    }
+    pub fn cancel(self: mut Self) ->() {
+        self.interaction = InteractionState::new() self.refresh()
+    }
+    pub fn compose(self: mut Self, frame: PreparedFrame) -> PreparedFrame {
+        ret frame.with_ui_layer(self.tree.layout())
+    }
+    pub fn compose_clipped(self: mut Self, frame: PreparedFrame, clip: Rect) -> PreparedFrame {
+        ret frame.with_ui_layer_clipped(self.tree.layout(), clip)
+    }
+    pub fn focus(self: mut Self, id: str) ->() {
+        match self.root.find(id) {
+            Some(widget) => {
+                if interactive(widget) {
+                    self.interaction = self.interaction.with_focus(id) self.keyboard = true self.refresh()
+                }
+            }
+            None => {
+            }
+        }
+    }
+    pub fn focus_first(self: mut Self) ->() {
+        self.interaction = self.interaction.focus_next(self.root) self.keyboard = true self.refresh()
+    }
+    fn refresh(self: mut Self) ->() {
+        let focused = self.interaction.focused()
+        if self.editing != focused {
+            match self.root.find(focused) {
+                Some(input) => {
+                    if input.kind() == widget_input() {
+                        self.editing = focused self.editor = TextEditor::new(input.text())
+                    } else {
+                        self.editing = ""
+                    }
+                }
+                None => {
+                    self.editing = ""
+                }
+            }
+        }
+        let root = self.tree.preserve_scroll_offsets(editing_tree(self.root, self.editing, self.editor))
+        let styled = self.sheet.apply_with_focus_visibility(root, self.interaction.hovered(), self.interaction.active(), self.interaction.focused(), self.keyboard)
+        self.tree.replace_layout(layout_widget(styled, self.bounds))
+    }
+    pub fn input(self: mut Self, event: Event) -> LayerInput {
+        let mut result = LayerInput { false, "", "", 0, "" }
+        let kind = event.kind()
+        let layout = self.tree.layout()
+        let hit = layout.hit(event.x(), event.y())
+        let widget = layout.find_widget(hit).unwrap_or(Widget::panel(""))
+        let inside = event.x() >= self.bounds.x() && event.y() >= self.bounds.y() && event.x() < self.bounds.right() && event.y() < self.bounds.bottom()
+        let old = self.interaction
+        let old_keyboard = self.keyboard
+        let mut text_changed = false
+        if kind == event_focus_lost() {
+            self.cancel() ret result
+        }
+        if kind == event_scroll() && inside {
+            result.consumed = self.tree.scroll_at(event.x(), event.y(), - event.wheel_y() * 36) || self.modal
+            ret result
+        }
+        if kind == event_pointer_move() {
+            self.interaction = old.pointer_move_to(if inside {
+                    hit
+                } else {
+                    ""
+                }
+            )
+            result.consumed = old.active() != "" ||(inside &&(self.modal || interactive(widget)))
+        } elif kind == event_pointer_down() && event.key() == 1 && inside {
+            self.keyboard = false
+            if interactive(widget) {
+                self.interaction = old.pointer_down_on(hit, Option[Widget]::Some(widget))
+            } elif !self.modal {
+                self.interaction = old.pointer_cancel().with_focus("")
+            }
+            result.consumed = self.modal || interactive(widget)
+        } elif kind == event_pointer_up() && event.key() == 1 {
+            result.consumed = old.active() != "" ||(inside && self.modal)
+            let target = old.pointer_release_target(layout, event.x(), event.y())
+            if target != "" {
+                result.target = target result.action = "click"
+            }
+            self.interaction = old.pointer_up_on(if inside {
+                    hit
+                } else {
+                    ""
+                }
+            )
+        } elif kind == event_key_down() {
+            self.keyboard = true
+            if event.key() == key_tab() &&(self.modal || old.focused() != "") {
+                self.interaction = if event.shift() {
+                    old.focus_previous(self.root)
+                } else {
+                    old.focus_next(self.root)
+                }
+                result.consumed = true
+            } elif old.focused() != "" {
+                let focused = layout.find_widget(old.focused()).unwrap_or(Widget::panel(""))
+                result.consumed = self.modal || focused.kind() == widget_input() || event.key() == key_enter() || event.key() == 32 ||(focused.kind() == widget_slider() &&(event.key() == key_left() || event.key() == key_right()))
+                if focused.kind() != widget_input() &&(event.key() == key_enter() || event.key() == 32) {
+                    result.target = old.focused() result.action = "click"
+                }
+                if focused.kind() == widget_slider() &&(event.key() == key_left() || event.key() == key_right()) {
+                    result.target = old.focused() result.action = "change" result.value = focused.value() + if event.key() == key_left() {
+                        - 0.02_f32
+                    } else {
+                        0.02_f32
+                    }
+                }
+                if focused.kind() == widget_input() {
+                    if self.editing != old.focused() {
+                        self.editing = old.focused() self.editor = TextEditor::new(focused.text())
+                    }
+                    let previous = self.editor.value()
+                    if event.key() == key_backspace() {
+                        self.editor = self.editor.backspace()
+                    } elif event.key() == key_delete() {
+                        self.editor = self.editor.delete()
+                    } elif event.key() == key_left() {
+                        self.editor = self.editor.move_left(event.shift())
+                    } elif event.key() == key_right() {
+                        self.editor = self.editor.move_right(event.shift())
+                    } elif event.key() == key_home() {
+                        self.editor = self.editor.move_home(event.shift())
+                    } elif event.key() == key_end() {
+                        self.editor = self.editor.move_end(event.shift())
+                    } elif event.control() && event.key() == 97 {
+                        self.editor = self.editor.select_all()
+                    }
+                    if self.editor.value() != previous || event.key() == key_enter() {
+                        result.target = old.focused() result.action = "text" result.text = self.editor.value()
+                    }
+                    text_changed = true
+                }
+            } else {
+                result.consumed = self.modal
+            }
+        } elif kind == event_key_up() {
+            let focused = layout.find_widget(old.focused()).unwrap_or(Widget::panel(""))
+            result.consumed = self.modal || focused.kind() == widget_input() || event.key() == key_enter() || event.key() == 32
+        } elif kind == event_text_input() && old.focused() != "" {
+            let focused = layout.find_widget(old.focused()).unwrap_or(Widget::panel(""))
+            if focused.kind() == widget_input() {
+                self.editor = self.editor.insert(event.text())
+                result.consumed = true result.target = old.focused() result.action = "text" result.text = self.editor.value() text_changed = true
+            }
+        }
+        let active = self.interaction.active()
+        if (kind == event_pointer_move() || kind == event_pointer_down()) && active != "" {
+            let captured = layout.find_widget(active).unwrap_or(Widget::panel(""))
+            if captured.kind() == widget_slider() {
+                let bounds = layout.find_bounds(active).unwrap_or(self.bounds)
+                result.target = active result.action = "change" result.value =(event.x() - bounds.x()) / bounds.width()
+            }
+        }
+        if result.action == "click" {
+            let clicked = layout.find_widget(result.target).unwrap_or(Widget::panel(""))
+            if clicked.kind() == widget_checkbox() {
+                result.action = "change" result.value = if clicked.checked() {
+                    0
+                } else {
+                    1
+                }
+            }
+        }
+        if result.value < 0 {
+            result.value = 0
+        } elif result.value > 1 {
+            result.value = 1
+        }
+        if text_changed || old_keyboard != self.keyboard || old.hovered() != self.interaction.hovered() || old.active() != self.interaction.active() || old.focused() != self.interaction.focused() {
+            self.refresh()
+        }
+        ret result
+    }
+}

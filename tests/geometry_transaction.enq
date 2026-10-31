@@ -1,0 +1,135 @@
+//! Geometry-only transactions retain CSS, sibling segments and current hit paths.
+import luma::{UiBindings, UiContext, RendererKind, StyleSheet, Widget, WidgetLayout, Window, layout_widget}
+import std::io::println
+import std::time::perf_counter_ns
+
+extern fn encore_node_debug_live_count() -> usize
+
+fn same_layout(left: WidgetLayout, right: WidgetLayout) -> bool {
+    let a = left.bounds()
+    let b = right.bounds()
+    if a.x() != b.x() || a.y() != b.y() || a.width() != b.width() ||
+    a.height() != b.height() || left.widget().id() != right.widget().id() ||
+    left.children().len() != right.children().len() {
+        ret false
+    }
+    let mut index = 0_usize
+    for child in left.children() {
+        if !same_layout(child, right.children().get(index).unwrap_or(right)) {
+            ret false
+        }
+        index += 1
+    }
+    ret true
+}
+
+fn main() -> u32 {
+    let mut root = Widget::panel("root")
+    root.push(Widget::button("left", "Stable"))
+    root.push(Widget::render_surface("scene"))
+    let mut details = Widget::panel("details")
+    for index in 0..100 {
+        details.push(Widget::label(f "Field {index}").with_id(f "field-{index}"))
+    }
+    let mut grid = Widget::panel("grid")
+    let mut fixed = Widget::panel("fixed")
+    fixed.push(Widget::label("Translated overflow").with_id("overflow"))
+    grid.push(fixed)
+    grid.push(Widget::label("Grid label").with_id("grid-label"))
+    grid.push(Widget::label("Hidden source child").with_id("grid-hidden"))
+    grid.push(Widget::label("Absolute child").with_id("grid-absolute"))
+    details.push(grid)
+    let mut nested = Widget::label("Deep retained content").with_id("deep-content")
+    for depth in 0..12 {
+        nested = Widget::panel(f "deep-{depth}").with_child(nested)
+    }
+    details.push(nested)
+    root.push(details)
+    let mut context = UiContext::new()
+    let mut bindings = UiBindings::new(context)
+    let host = bindings.mount(root)
+    let tree = bindings.tree()
+    let target = tree.find(host, "details").unwrap_or(host)
+    let _mounted = tree.take_changes()
+    let sheet = StyleSheet::parse("#root { --panel: #333333; flex-direction: row; gap: 0; padding: 0; } #left { flex: 0 0 80px; min-width: 0; } #scene { flex: 1 1 0px; min-width: 0; } #details { flex: 0 0 140px; min-width: 100px; flex-direction: column; gap: 0; } label { flex: 0 0 20px; } #details:hover { background: var(--panel); } #grid { display: grid; grid-template-columns: 1fr 1fr; flex: 0 0 40px; } #fixed { width: 40px; height: 20px; overflow: hidden; order: 2; } #grid-hidden { display: none; } #grid-absolute { position: absolute; right: 0; top: 0; width: 25px; height: 15px; z-index: 4; }")
+    let window = Window::create_with_renderer("Geometry transactions", 640, 480,
+        RendererKind::Software,).with_stylesheet(sheet).with_bindings(bindings, host)
+    if !window.available() {
+        ret 1
+    }
+    let mut ui = window.reactive(root)
+    let sibling_generation = ui.segment_generation("left")
+    let misses = window.stylesheet().cache_misses()
+    let frames = window.presented_frames()
+    let mut transactions_ns = 0_u64
+    let mut retained_nodes = 0_usize
+    for step in 0..300 {
+        let basis = 140.0_f32 +(step % 100) as f32
+        let started = perf_counter_ns()
+        if !tree.set_flex_basis(target, basis) {
+            window.destroy() ret 2
+        }
+        ui = window.stage_binding_frame(ui, "", "", "", 1000 + step as u64)
+        transactions_ns += perf_counter_ns() - started
+        let panel = ui.find_layout("details").unwrap_or(ui.layout()).bounds()
+        let scene = ui.find_layout("scene").unwrap_or(ui.layout()).bounds()
+        if panel.width() != basis || scene.width() != 560.0_f32 - basis ||
+        ui.needs_full_repaint() || ui.segment_generation("left") != sibling_generation ||
+        window.stylesheet().cache_misses() != misses {
+            let generation = ui.segment_generation("left")
+            let current_misses = window.stylesheet().cache_misses()
+            println(f "step={step} panel={panel.width()} scene={scene.width()} full={ui.needs_full_repaint()} sibling={generation} previous={sibling_generation} misses={current_misses} previous-misses={misses}")
+            window.destroy() ret 3
+        }
+        if ui.hit(panel.x() + 2, panel.y() + 2) == "scene" {
+            window.destroy() ret 4
+        }
+        if step % 30 == 0 && !same_layout(ui.layout(),
+            layout_widget(ui.layout().retained_widget(), ui.layout().bounds()),) {
+            window.destroy() ret 7
+        }
+        ui.commit_rendered()
+        let live = encore_node_debug_live_count()
+        if step == 2 {
+            retained_nodes = live
+        }
+        if step > 2 && live > retained_nodes + 32 {
+            println(f "geometry retained history: step={step} live={live} baseline={retained_nodes}")
+            window.destroy() ret 10
+        }
+    }
+    println(f "Geometry: 300 transactions in {transactions_ns / 1000000} ms")
+    let last_width = ui.find_layout("details").unwrap_or(ui.layout()).bounds().width()
+    ui = window.stage_binding_frame(ui, "details", "", "", 1500)
+    if ui.find_layout("details").unwrap_or(ui.layout()).bounds().width() != last_width ||
+    window.presented_frames() != frames {
+        window.destroy() ret 5
+    }
+    let updated = tree.set_flex_basis(target, last_width)
+    let changes = tree.take_changes().len()
+    let invalid = tree.set_flex_basis(target, - 1.0_f32)
+    if !updated || changes != 0 || invalid {
+        println(f "same={updated} changes={changes} invalid={invalid} width={last_width}")
+        window.destroy() ret 6
+    }
+    let field = tree.find(host, "field-0").unwrap_or(host)
+    let _sized = tree.set_flex_basis(target, 180)
+    let _text = tree.set_text(field, "Updated during resize")
+    ui = window.stage_binding_frame(ui, "", "", "", 1600)
+    if ui.find_widget("field-0").unwrap_or(Widget::spacer(0)).text() != "Updated during resize" ||
+    ui.find_layout("details").unwrap_or(ui.layout()).bounds().width() != 180 ||
+    !same_layout(ui.layout(), layout_widget(ui.layout().retained_widget(), ui.layout().bounds())) {
+        window.destroy() ret 8
+    }
+    let grid_label = tree.find(host, "grid-label").unwrap_or(host)
+    let _grid_text = tree.set_text(grid_label, "Current retained grid content")
+    ui = window.stage_binding_frame(ui, "", "", "", 1700)
+    let _resized = tree.set_flex_basis(target, 210)
+    ui = window.stage_binding_frame(ui, "", "", "", 1800)
+    if ui.find_widget("grid-label").unwrap_or(Widget::spacer(0)).text() != "Current retained grid content" ||
+    !same_layout(ui.layout(), layout_widget(ui.layout().retained_widget(), ui.layout().bounds())) {
+        window.destroy() ret 9
+    }
+    window.destroy()
+    ret 0
+}

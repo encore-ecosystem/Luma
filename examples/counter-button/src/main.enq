@@ -11,7 +11,7 @@ struct Counter {
 }
 
 impl for Counter {
-    fn new() -> Self {
+    pub fn new() -> Self {
         ret Self {
             0_u32
         }

@@ -1,6 +1,6 @@
 import core::fmt::Debug
 import core::option::Option
-import core::os
+import std::os
 
 fn generated_css_header(source: str) -> str {
     let mut bytes = ""
@@ -31,7 +31,7 @@ fn main() -> u32 {
                 generated_css_header(css),) != 0_i32 {
                 ret 1_u32
             }
-            let payload = "{\n  \"native\": {\n    \"libraries\": [{\"name\":\"luma_native\",\"path\":\"runtime.c\"}],\n    \"search_paths\": [],\n    \"frameworks\": [],\n    \"link_args\": []\n  }\n}\n"
+            let payload = "{\n  \"native\": {\n    \"libraries\": [{\"name\":\"luma_native\",\"path\":\"runtime.c\"}, {\"name\":\"luma_color_math\",\"path\":\"workspace/ui_native/color_math.c\"}, {\"name\":\"m\",\"cfg\":\"unix\"}],\n    \"search_paths\": [],\n    \"frameworks\": [],\n    \"link_args\": []\n  }\n}\n"
             if os::write_file(path, payload) != 0_i32 {
                 ret 1_u32
             }

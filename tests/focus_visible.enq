@@ -1,0 +1,45 @@
+import luma::{StyleSheet, Widget}
+
+fn main() -> u32 {
+    let sheet = StyleSheet::parse(
+        "button:focus { border-width: 3px; } " +
+        "button:focus-visible { outline-width: 2px; } " +
+        "#shell:has(button:focus-visible) { padding: 9px; } " +
+        "#shell:focus-within { border-width: 4px; }")
+    let button = Widget::button("button", "Button")
+    let mut root = Widget::panel("shell")
+    root.push(button)
+    // The same cached stylesheet must support both modalities, in both orders.
+    for step in 0_usize..4_usize {
+        let keyboard = step % 2_usize == 1_usize
+        let styled = sheet.apply_with_focus_visibility(root, "", "", "button", keyboard)
+        let child = styled.find("button").unwrap_or(button)
+        if !child.focused() || child.style().border_width() != 3.0_f32 ||
+        styled.style().border_width() != 4.0_f32 {
+            ret 1
+        }
+        let expected_outline = if keyboard { 2.0_f32 } else { 0.0_f32 }
+        let expected_padding = if keyboard { 9.0_f32 } else { root.style().padding().top() }
+        if child.style().outline().width() != expected_outline ||
+        styled.style().padding().top() != expected_padding {
+            ret 2
+        }
+    }
+    let defaults = StyleSheet::default()
+    let clicked = defaults.apply_with_focus_visibility(button, "", "", "button", false)
+    let tabbed = defaults.apply_with_focus_visibility(button, "", "", "button", true)
+    if !clicked.focused() || clicked.style().outline().width() != 0.0_f32 ||
+    tabbed.style().outline().width() != 2.0_f32 {
+        ret 3
+    }
+    let field = Widget::input("field", "Text")
+    let editing = defaults.apply_with_focus_visibility(field, "", "", "field", false)
+    if !editing.focused() || editing.style().outline().width() != 2.0_f32 {
+        ret 4
+    }
+    let unfocused = defaults.apply_with_focus_visibility(button, "", "", "", true)
+    if unfocused.focused() || unfocused.style().outline().width() != 0.0_f32 {
+        ret 5
+    }
+    ret 0
+}

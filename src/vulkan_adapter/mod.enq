@@ -1,0 +1,65 @@
+//! Luma compositor interop. Platform/device ownership belongs to gpu.
+import gpu::native::{create, create_shared, close, available, error, handle, adapter_name}
+import vulkan::{native_instance, native_physical_device, native_device_handle, native_device_queue_family, native_device_requested_features, native_device_enabled_features}
+extern fn luma_vk_ui_create(device: usize, swapchain: usize) -> usize
+extern fn luma_vk_ui_available(handle: usize) -> bool
+extern fn luma_vk_ui_error_string(handle: usize) -> str
+extern fn luma_vk_ui_destroy(handle: usize) -> bool
+
+pub fn direct_context_create(window: usize, required: u32, optional: u32) -> usize {
+    ret create(window, 0, 0, required, optional)
+}
+pub fn direct_context_create_shared(window: usize, owner: usize) -> usize {
+    ret create_shared(window, 0, owner)
+}
+pub fn direct_context_available(context: usize) -> bool {
+    ret available(context)
+}
+pub fn direct_context_error(context: usize) -> str {
+    ret error()
+}
+pub fn direct_context_destroy(context: usize) -> bool {
+    ret close(context)
+}
+pub fn direct_context_instance(context: usize) -> usize {
+    ret native_instance(handle(context, 0))
+}
+pub fn direct_context_physical_device(context: usize, index: usize) -> usize {
+    ret native_physical_device(handle(context, 0), index)
+}
+pub fn direct_adapter_name(context: usize, index: usize) -> str {
+    ret adapter_name(context)
+}
+pub fn direct_context_surface(context: usize) -> usize {
+    ret handle(context, 1)
+}
+pub fn direct_context_device(context: usize) -> usize {
+    ret handle(context, 2)
+}
+pub fn direct_context_swapchain(context: usize) -> usize {
+    ret handle(context, 3)
+}
+pub fn direct_device_handle(device: usize) -> usize {
+    ret native_device_handle(device)
+}
+pub fn direct_device_queue_family(device: usize) -> u32 {
+    ret native_device_queue_family(device)
+}
+pub fn direct_device_requested_features(device: usize) -> u32 {
+    ret native_device_requested_features(device)
+}
+pub fn direct_device_enabled_features(device: usize) -> u32 {
+    ret native_device_enabled_features(device)
+}
+pub fn direct_ui_create(device: usize, swapchain: usize) -> usize {
+    ret luma_vk_ui_create(device, swapchain)
+}
+pub fn direct_ui_available(handle: usize) -> bool {
+    ret luma_vk_ui_available(handle)
+}
+pub fn direct_ui_error(handle: usize) -> str {
+    ret luma_vk_ui_error_string(handle)
+}
+pub fn direct_ui_destroy(handle: usize) -> bool {
+    ret luma_vk_ui_destroy(handle)
+}

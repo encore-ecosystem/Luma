@@ -1,19 +1,59 @@
+import vulkan::native_swapchain_frame_ready
 //! Native windows, events, rendering, and reactive frame presentation.
 
-import color::{Color, white}
 import core::fmt::Debug
 import core::option::Option
 import core::result::Result
 import core::vec::Vec
-import geometry::Rect
-import refrain::css::StyleSheet
+
+import std::io::eprintln
+import std::os::env
+import std::time::{perf_counter_ms, perf_counter_ns}
+
+import color::{Color, white}
+import ui_native::{native_backend_error, native_backend_name, native_backend_set_error, native_begin, native_cached_frame_begin, native_circle, native_clip, native_clipboard_set, native_clipboard_text, native_create_with_renderer, native_destroy, native_direct_composition_split, native_direct_compositor_bind, native_direct_frame_acquire, native_direct_frame_begin_composition, native_direct_frame_finish, native_direct_frame_prepare, native_direct_resources_release, native_end, native_event_buttons, native_event_dx, native_event_dy, native_event_key, native_event_modifiers, native_event_text, native_event_timestamp_ns, native_event_wheel_x, native_event_wheel_y, native_event_x, native_event_y, native_external_image_draw, native_external_image_region, native_external_vulkan_image_bind, native_external_vulkan_image_release, native_external_vulkan_images_clear, native_fill_rect, native_font_clear, native_font_load, native_font_register, native_font_select, native_font_style, native_frame_status, native_gradient_rect, native_height, native_image_rgba, native_layout_cache_begin, native_layout_cache_end, native_layout_cache_patch_begin, native_layout_cache_ready, native_line, native_open, native_overlay_cache_begin, native_overlay_cache_draw, native_overlay_cache_end, native_pixel_density, native_pixel_height, native_pixel_width, native_platform_handle, native_poll, native_prepare_geometry, native_present_count, native_read_pixel, native_renderer_device_name, native_renderer_name, native_round_rect, native_set_cursor, native_set_present_mode, native_set_relative_mouse_mode, native_set_window_minimum_size, native_stroke_rect, native_styled_text, native_terminal, native_text, native_text_height, native_text_index, native_text_width, native_text_wrapped, native_vector_cache_begin, native_vector_cache_end, native_vector_gradient_line, native_vector_line, native_vector_path_begin, native_vector_path_point, native_vector_path_stroke, native_vector_triangle, native_vulkan_device, native_vulkan_graphics_queue_family, native_vulkan_instance, native_vulkan_physical_device, native_wait, native_wait_any, native_width}
+import vulkan::native_frame_slot
+
+import refrain::canvas::{CanvasScene, CanvasView}
+import refrain::css::{RetainedCascade, StyleSheet, css_color}
 import refrain::display::{DisplayCommand, DisplayList, RetainedDisplayList}
+import refrain::dock::model::WindowId
+import refrain::geometry::Rect
+import refrain::reactive::bindings::UiBindings
+import refrain::reactive::graph::reactive_identity
+import refrain::retained::{NodeChange, NodeId, dirty_computed_style, dirty_geometry, dirty_layout, dirty_paint, dirty_structure, dirty_style}
 import refrain::style::{Style, text_center, text_end}
 import refrain::svg::{SvgDocument, SvgLine}
-import refrain::widget::{ReactiveUi, Widget, WidgetLayout, inherit_widget_styles, layout_widget, widget_button, widget_checkbox, widget_heading, widget_color_channel, widget_color_picker, widget_color_swatch, widget_icon, widget_icon_button, widget_icon_card, widget_image, widget_input, widget_label, widget_link, widget_progress, widget_radio, widget_range_slider, widget_render_surface, widget_rich_text, widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_terminal, widget_textarea}
-import std::time::{perf_counter_ms}
-import ui_native::{native_backend_error, native_backend_name, native_renderer_name, native_renderer_device_name, native_begin, native_create_with_renderer, native_circle, native_clip, native_clipboard_set, native_clipboard_text, native_destroy, native_end, native_event_buttons, native_event_dx, native_event_dy, native_event_key, native_event_modifiers, native_event_text, native_event_timestamp_ns, native_event_wheel_x, native_event_wheel_y, native_event_x, native_event_y, native_fill_rect, native_font_clear, native_font_load, native_font_register, native_font_select, native_font_style, native_line, native_open, native_poll, native_set_cursor, native_set_relative_mouse_mode, native_set_window_minimum_size, native_wait, native_round_rect, native_stroke_rect, native_terminal, native_text, native_styled_text, native_text_wrapped, native_image_rgba, native_text_height, native_text_index, native_text_width, native_vector_line, native_vector_path_begin, native_vector_path_point, native_vector_path_stroke, native_width, native_height, native_pixel_width, native_pixel_height, native_pixel_density, native_present_count, native_read_pixel, native_layout_cache_begin, native_layout_cache_patch_begin, native_layout_cache_end, native_cached_frame_begin, native_layout_cache_ready, native_overlay_cache_begin, native_overlay_cache_end, native_overlay_cache_draw, native_platform_handle, native_vulkan_instance, native_vulkan_physical_device, native_vulkan_device, native_vulkan_graphics_queue_family, native_external_vulkan_image_bind, native_external_image_draw, native_external_vulkan_images_clear, native_set_present_mode, native_backend_set_error, native_direct_compositor_bind, native_direct_resources_release, native_direct_frame_acquire, native_direct_frame_prepare, native_direct_frame_begin_composition, native_direct_frame_finish, native_direct_composition_split}
-import vulkan_native::{direct_context_create, direct_context_available, direct_context_error, direct_context_destroy, direct_context_instance, direct_context_physical_device, direct_adapter_name, direct_window_attach, direct_window_available, direct_window_error, direct_window_destroy, direct_device_create_features, direct_device_available, direct_device_error, direct_device_destroy, direct_device_handle, direct_device_queue_family, direct_device_requested_features, direct_device_enabled_features, direct_swapchain_create, direct_swapchain_available, direct_swapchain_error, direct_swapchain_destroy, native_frame_slot, direct_ui_create, direct_ui_available, direct_ui_error, direct_ui_destroy}
+import refrain::vulkan_adapter::{direct_adapter_name, direct_context_available, direct_context_create, direct_context_create_shared, direct_context_destroy, direct_context_device, direct_context_error, direct_context_instance, direct_context_physical_device, direct_context_surface, direct_context_swapchain, direct_device_enabled_features, direct_device_handle, direct_device_queue_family, direct_device_requested_features, direct_ui_available, direct_ui_create, direct_ui_destroy, direct_ui_error}
+import refrain::widget::{ReactiveUi, Widget, WidgetLayout, layout_widget, slider_thumb_radius, slider_track_bounds, widget_button, widget_checkbox, widget_color_channel, widget_color_picker, widget_color_swatch, widget_heading, widget_icon, widget_icon_button, widget_icon_card, widget_image, widget_input, widget_label, widget_link, widget_progress, widget_radio, widget_range_slider, widget_render_surface, widget_rich_text, widget_select, widget_separator, widget_slider, widget_spacer, widget_switch, widget_terminal, widget_textarea}
+
+extern fn luma_vk_ui_presentation_ns(handle: usize) -> u64
+extern fn luma_vk_ui_upload_bytes(handle: usize) -> u64
+extern fn luma_vk_ui_timing_value(handle: usize, field: u32) -> u64
+
+/// Cumulative host-side UI counters. Difference successive snapshots for one
+/// frame. These are CPU durations; GPU timestamps are a separate facility.
+pub struct UiTimings {
+    acquire_ns: u64
+    present_ns: u64
+    gpu_preparation_ns: u64
+    geometry_upload_bytes: u64
+}
+
+impl for UiTimings {
+    pub fn acquire_ns(self: Self) -> u64 {
+        ret self.acquire_ns
+    }
+    pub fn present_ns(self: Self) -> u64 {
+        ret self.present_ns
+    }
+    pub fn gpu_preparation_ns(self: Self) -> u64 {
+        ret self.gpu_preparation_ns
+    }
+    pub fn geometry_upload_bytes(self: Self) -> u64 {
+        ret self.geometry_upload_bytes
+    }
+}
 
 pub fn event_none() -> u32 {
     ret 0_u32
@@ -53,6 +93,14 @@ pub fn cursor_default() -> u32 {
 }
 pub fn cursor_text() -> u32 {
     ret 1_u32
+}
+/// Generic move/drag cursor (SDL3 system cursor ABI).
+pub fn cursor_move() -> u32 {
+    ret 9_u32
+}
+/// Link/select cursor (SDL3 system cursor ABI).
+pub fn cursor_pointer() -> u32 {
+    ret 11_u32
 }
 pub fn cursor_resize_horizontal() -> u32 {
     ret 7_u32
@@ -94,6 +142,41 @@ pub fn key_up() -> u32 {
     ret 1073741906_u32
 }
 
+extern fn luma_window_waker(handle: usize) -> usize
+extern fn luma_waker_wake(handle: usize) -> bool
+extern fn luma_waker_destroy(handle: usize) ->()
+extern fn luma_window_capture_frame(handle: usize) -> u64
+extern fn luma_window_capture_request(handle: usize) -> bool
+extern fn luma_window_capture_png(handle: usize, x: u32, y: u32, width: u32, height: u32, maximum: u32) -> str
+/// Native wake capability. Share its integer handle with workers; destroy only
+/// after all workers have joined and before closing the window.
+pub struct WindowWaker {
+    handle: usize
+}
+
+impl for WindowWaker {
+    pub fn wake(self: Self) -> bool {
+        unsafe {
+            ret luma_waker_wake(self.handle)
+        }
+    }
+    pub fn destroy(self: Self) ->() {
+        unsafe {
+            luma_waker_destroy(self.handle)
+        }
+    }
+}
+/// PNG and frame provenance from an explicit diagnostic readback.
+pub struct CapturedFrame {
+    png: str
+    frame: u64
+    width: u32
+    height: u32
+}
+fn png_word(bytes: str, offset: usize) -> u32 {
+    ret((bytes.get_byte(offset).unwrap_or(0) as u32) << 24) |((bytes.get_byte(offset + 1).unwrap_or(0) as u32) << 16) |((bytes.get_byte(offset + 2).unwrap_or(0) as u32) << 8) |(bytes.get_byte(offset + 3).unwrap_or(0) as u32)
+}
+
 pub struct Event {
     kind: u32
     x: f32
@@ -113,6 +196,12 @@ impl for Event {
     pub fn none() -> Event {
         ret Event {
             event_none(), 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_u32, 0_u32, 0_u32, 0.0_f32, 0.0_f32, "", 0_u64
+        }
+    }
+    /// Committed text after keyboard layout and input-method processing.
+    pub fn text_input(text: str) -> Event {
+        ret Event {
+            event_text_input(), 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 0.0, 0.0, text, 0
         }
     }
     pub fn key_down(key: u32, modifiers: u32) -> Event {
@@ -180,6 +269,34 @@ impl for Event {
     }
 }
 
+struct WindowBindings {
+    bindings: UiBindings<H>
+    root: NodeId
+}
+
+struct BindingBranch {
+    node: NodeId
+    path: Vec[usize]
+}
+
+struct StyledBindingBranch {
+    path: Vec[usize]
+    authored: Widget
+    styled: Widget
+}
+
+fn binding_path_contains(parent: Vec[usize], child: Vec[usize]) -> bool {
+    if parent.len() > child.len() {
+        ret false
+    }
+    for position in 0..parent.len() {
+        if parent.get(position).unwrap_or(parent.len()) != child.get(position).unwrap_or(child.len()) {
+            ret false
+        }
+    }
+    ret true
+}
+
 pub struct Window {
     handle: usize
     width: u32
@@ -191,6 +308,43 @@ pub struct Window {
     direct_swapchain: usize
     direct_compositor: usize
     stylesheet: StyleSheet
+    cascade: RetainedCascade<H>
+    bindings: Option[WindowBindings]
+    text_cache: WindowTextCache<H>
+}
+
+/// One authoritative configure/DPI snapshot, captured before layout.
+pub struct WindowGeometry {
+    width: u32
+    height: u32
+    pixel_width: u32
+    pixel_height: u32
+    density: f32
+    generation: u64
+}
+
+impl for WindowGeometry {
+    pub fn width(self: Self) -> u32 {
+        ret self.width
+    }
+    pub fn height(self: Self) -> u32 {
+        ret self.height
+    }
+    pub fn pixel_width(self: Self) -> u32 {
+        ret self.pixel_width
+    }
+    pub fn pixel_height(self: Self) -> u32 {
+        ret self.pixel_height
+    }
+    pub fn density(self: Self) -> f32 {
+        ret self.density
+    }
+    pub fn generation(self: Self) -> u64 {
+        ret self.generation
+    }
+    pub fn valid(self: Self) -> bool {
+        ret self.generation != 0 && self.width != 0 && self.height != 0
+    }
 }
 
 pub enum RendererKind {
@@ -261,6 +415,10 @@ pub struct ExternalVulkanImage {
     width: u32
     height: u32
     layout: u32
+    source_x: u32
+    source_y: u32
+    source_width: u32
+    source_height: u32
 }
 
 /// Immutable geometry assigned to one render-surface widget for a prepared
@@ -284,8 +442,19 @@ struct SurfaceSubmission {
     image: ExternalVulkanImage
 }
 
+struct DisplayOverlay {
+    list: DisplayList
+    clip: Rect
+    foreground: bool
+}
+
 /// One immutable layout/DPI transaction. A frame containing render surfaces
 /// can only be presented after every visible slot has a matching submission.
+struct UiLayerSubmission {
+    layout: WidgetLayout
+    clip: Rect
+}
+
 pub struct PreparedFrame {
     layout: WidgetLayout
     cached: bool
@@ -294,6 +463,9 @@ pub struct PreparedFrame {
     overlays: Vec[str]
     overlay_layouts: Vec[WidgetLayout]
     cached_overlays: bool
+    geometry: WindowGeometry
+    display_overlays: Vec[DisplayOverlay]
+    ui_layers: Vec[UiLayerSubmission]
 }
 
 /// Backend-neutral description of one composed window frame.
@@ -369,7 +541,7 @@ impl for CompositeFrame {
 }
 
 impl for RendererKind {
-    fn native_value(self: Self) -> u32 {
+    pub fn native_value(self: Self) -> u32 {
         match self {
             RendererKind::Auto => {
                 ret 0_u32
@@ -388,7 +560,7 @@ impl for RendererKind {
 }
 
 impl for PresentMode {
-    fn native_value(self: Self) -> u32 {
+    pub fn native_value(self: Self) -> u32 {
         match self {
             PresentMode::VSync => {
                 ret 0_u32
@@ -404,7 +576,7 @@ impl for RendererInfo {
     pub fn new(backend: str) -> Self {
         ret RendererInfo::with_device(backend, backend)
     }
-    fn with_device(backend: str, device: str) -> Self {
+    pub fn with_device(backend: str, device: str) -> Self {
         let software = backend == "software" || backend == "unavailable"
         let emulated = software || device.contains("llvmpipe") || device.contains("lavapipe") ||
         device.contains("SwiftShader") || device.contains("swiftshader")
@@ -427,7 +599,7 @@ impl for RendererInfo {
 }
 
 impl for VulkanFeatures {
-    fn from_mask(mask: u32) -> Self {
+    pub fn from_mask(mask: u32) -> Self {
         ret Self {
             mask
         }
@@ -531,7 +703,7 @@ impl for VulkanFeatureRequest {
 }
 
 impl for VulkanInterop {
-    fn new(instance: usize, physical_device: usize, device: usize,
+    pub fn new(instance: usize, physical_device: usize, device: usize,
         graphics_queue_family: u32, swapchain: usize, render_device: usize,
         requested_features: VulkanFeatures, enabled_features: VulkanFeatures,) -> Self {
         ret Self {
@@ -571,7 +743,7 @@ impl for VulkanInterop {
 }
 
 impl for VulkanFrameInterop {
-    fn new(frame: usize, swapchain: usize, pixel_width: u32, pixel_height: u32) -> Self {
+    pub fn new(frame: usize, swapchain: usize, pixel_width: u32, pixel_height: u32) -> Self {
         ret Self {
             frame, swapchain,
             if frame == 0_usize {
@@ -607,11 +779,25 @@ impl for VulkanFrameInterop {
 impl for ExternalVulkanImage {
     pub fn new(image: u64, width: u32, height: u32, layout: u32) -> Self {
         ret Self {
-            image, width, height, layout
+            image, width, height, layout, 0, 0, width, height
         }
     }
+    /// A pixel-exact useful region inside a reusable, larger allocation.
+    pub fn with_region(self: Self, x: u32, y: u32, width: u32, height: u32) -> Self {
+        ret Self { self.image, self.width, self.height, self.layout, x, y, width, height }
+    }
+    pub fn content_width(self: Self) -> u32 {
+        ret self.source_width
+    }
+    pub fn content_height(self: Self) -> u32 {
+        ret self.source_height
+    }
     pub fn valid(self: Self) -> bool {
-        ret self.image != 0_u64 && self.width > 0_u32 && self.height > 0_u32
+        ret self.image != 0 && self.width > 0 && self.height > 0 &&
+        self.source_width > 0 && self.source_height > 0 &&
+        self.source_x <= self.width && self.source_y <= self.height &&
+        self.source_width <= self.width - self.source_x &&
+        self.source_height <= self.height - self.source_y
     }
     pub fn image(self: Self) -> u64 {
         ret self.image
@@ -658,6 +844,45 @@ impl for SurfaceSlot {
 }
 
 impl for PreparedFrame {
+    /// Composes an isolated widget tree above producer images and cached editor UI.
+    /// The same layer is replayed on external-image updates and generated frames.
+    pub fn with_ui_layer(self: Self, layout: WidgetLayout) -> Self {
+        ret self.with_ui_layer_clipped(layout, layout.bounds())
+    }
+    pub fn with_ui_layer_clipped(self: Self, layout: WidgetLayout, clip: Rect) -> Self {
+        if clip.width() <= 0 || clip.height() <= 0 {
+            ret self
+        }
+        let mut layers = Vec[UiLayerSubmission]::new()
+        for layer in self.ui_layers {
+            layers.push(layer)
+        }
+        layers.push(UiLayerSubmission { layout, clip })
+        ret Self {
+            self.layout, self.cached, self.surfaces, self.submissions,
+            self.overlays, self.overlay_layouts, self.cached_overlays, self.geometry, self.display_overlays, layers
+        }
+    }
+    pub fn ui_layer_count(self: Self) -> usize {
+        ret self.ui_layers.len()
+    }
+
+    /// Canvas commands participate in this frame's single presentation and
+    /// remain below the interactive overlay layer, clipped to their layout slot.
+    pub fn with_canvas(self: Self, id: str, scene: CanvasScene, view: CanvasView) -> Self {
+        match self.layout.find_bounds(id) {
+            Some(bounds) => {
+                ret self.with_display_overlay(scene.display(view, bounds), bounds)
+            }
+            None => {
+                ret self
+            }
+        }
+    }
+    /// Adds a canvas using bounds from a retained lookup, without walking the layout tree.
+    pub fn with_canvas_at(self: Self, scene: CanvasScene, view: CanvasView, bounds: Rect) -> Self {
+        ret self.with_display_overlay(scene.display(view, bounds), bounds)
+    }
     pub fn surface(self: Self, id: str) -> Option[SurfaceSlot] {
         for slot in self.surfaces {
             if slot.id == id {
@@ -676,8 +901,8 @@ impl for PreparedFrame {
         match self.surface(id) {
             Option::Some(slot) => {
                 if slot.generation != generation || !image.valid() ||
-                image.width() != slot.pixel_width ||
-                image.height() != slot.pixel_height {
+                image.content_width() != slot.pixel_width ||
+                image.content_height() != slot.pixel_height {
                     ret false
                 }
             }
@@ -712,12 +937,52 @@ impl for PreparedFrame {
         layouts: Vec[WidgetLayout], cached: bool,) -> Self {
         ret Self {
             self.layout, self.cached, self.surfaces, self.submissions,
-            overlays, layouts, cached
+            overlays, layouts, cached, self.geometry, self.display_overlays, self.ui_layers
         }
+    }
+    /// Paint-only commands above embedded surfaces and below interactive UI.
+    /// No widget layout, hit targets, retained-cache changes or extra present.
+    pub fn with_display_overlay(self: Self, list: DisplayList, clip: Rect) -> Self {
+        let mut overlays = Vec[DisplayOverlay]::new()
+        for overlay in self.display_overlays {
+            overlays.push(overlay)
+        }
+        if !list.is_empty() && clip.width() > 0 && clip.height() > 0 {
+            overlays.push(DisplayOverlay { list, clip, false })
+        }
+        ret Self {
+            self.layout, self.cached, self.surfaces, self.submissions,
+            self.overlays, self.overlay_layouts, self.cached_overlays, self.geometry, overlays, self.ui_layers
+        }
+    }
+    /// Paint within a popup above its retained UI, using this frame's logical clipping.
+    pub fn with_foreground_overlay(self: Self, list: DisplayList, clip: Rect) -> Self {
+        let mut overlays = Vec[DisplayOverlay]::new()
+        for overlay in self.display_overlays {
+            overlays.push(overlay)
+        }
+        if !list.is_empty() && clip.width() > 0 && clip.height() > 0 {
+            overlays.push(DisplayOverlay { list, clip, true })
+        }
+        ret Self {
+            self.layout, self.cached, self.surfaces, self.submissions,
+            self.overlays, self.overlay_layouts, self.cached_overlays, self.geometry, overlays, self.ui_layers
+        }
+    }
+    pub fn display_overlay_count(self: Self) -> usize {
+        ret self.display_overlays.len()
     }
 }
 
 impl for Window {
+    /// Completes native configure before evaluating a view or computing layout.
+    pub fn prepare_geometry(self: Self) -> WindowGeometry {
+        let generation = native_prepare_geometry(self.handle)
+        ret WindowGeometry {
+            self.width(), self.height(), self.pixel_width(), self.pixel_height(),
+            self.pixel_density(), generation
+        }
+    }
     /// Creates a window and preserves the native failure at the call site.
     pub fn try_create(title: str, width: u32, height: u32) ->
     Result[Window, str] {
@@ -768,11 +1033,57 @@ impl for Window {
         ret Window {
             native_create_with_renderer(title, width, height, renderer.native_value()),
             width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
-            StyleSheet::default()
+            StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
         }
+    }
+    /// A satellite has its own surface/compositor but shares this window's GPU.
+    pub fn create_shared(self: Self, title: str, width: u32, height: u32) -> Result[Window, str] {
+        if !self.available() || self.direct_context == 0 {
+            ret Result[Window, str]::Err("A shared window requires a live Direct Vulkan owner")
+        }
+        let handle = native_create_with_renderer(title, width, height, 3)
+        if handle == 0 {
+            ret Result[Window, str]::Err(backend_error())
+        }
+        let context = direct_context_create_shared(native_platform_handle(handle), self.direct_context)
+        if !direct_context_available(context) {
+            let message = direct_context_error(context)
+            let _closed = failed_direct_window(handle, context, 0, message, width, height)
+            ret Result[Window, str]::Err(message)
+        }
+        let surface = direct_context_surface(context)
+        let device = direct_context_device(context)
+        let swapchain = direct_context_swapchain(context)
+        let compositor = direct_ui_create(device, swapchain)
+        if !direct_ui_available(compositor) || !native_direct_compositor_bind(handle, compositor) {
+            let message = direct_ui_error(compositor)
+            let _closed = failed_direct_window(handle, context, compositor, message, width, height)
+            ret Result[Window, str]::Err(message)
+        }
+        ret Result[Window, str]::Ok(Window {
+                handle, width, height, self.background, context, surface, device, swapchain, compositor,
+                self.stylesheet, RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
+            }
+            ,)
     }
     pub fn available(self: Self) -> bool {
         ret self.handle != 0_usize
+    }
+    /// Cumulative host time inside direct Vulkan acquire/present calls. This
+    /// is presentation overhead/wait, not a GPU timestamp measurement.
+    pub fn ui_timings(self: Self) -> UiTimings {
+        ret UiTimings {
+            luma_vk_ui_timing_value(self.direct_compositor, 0_u32),
+            luma_vk_ui_timing_value(self.direct_compositor, 1_u32),
+            luma_vk_ui_timing_value(self.direct_compositor, 2_u32),
+            luma_vk_ui_timing_value(self.direct_compositor, 3_u32)
+        }
+    }
+    pub fn presentation_ns(self: Self) -> u64 {
+        ret luma_vk_ui_presentation_ns(self.direct_compositor)
+    }
+    pub fn geometry_upload_bytes(self: Self) -> u64 {
+        ret luma_vk_ui_upload_bytes(self.direct_compositor)
     }
     /// Changes presentation pacing without recreating the window. Normal Luma
     /// applications use VSync; simulation and profiling tools may opt into
@@ -858,6 +1169,31 @@ impl for Window {
     /// Reads one logical pixel from the active frame. This is a synchronous
     /// diagnostic operation intended for screenshots and visual regression
     /// tests, never for an interactive frame loop.
+    /// Creates an owned cross-thread wake capability for this window.
+    pub fn waker(self: Self) -> WindowWaker {
+        unsafe {
+            ret WindowWaker { luma_window_waker(self.handle) }
+        }
+    }
+    /// Request a readback of the next fully composed application frame.
+    pub fn request_capture(self: Self) -> bool {
+        unsafe {
+            ret luma_window_capture_request(self.handle)
+        }
+    }
+    /// Encodes a requested completed frame. Crop is in physical pixels; an empty
+    /// rectangle captures the whole client area. Empty PNG means not ready.
+    pub fn capture_png(self: Self, crop: Rect, maximum: u32) -> CapturedFrame {
+        let png = unsafe {
+            luma_window_capture_png(self.handle, crop.x() as u32, crop.y() as u32, crop.width() as u32, crop.height() as u32, maximum)
+        }
+        ret CapturedFrame {
+            png, unsafe {
+                luma_window_capture_frame(self.handle)
+            }
+            , png_word(png, 16), png_word(png, 20)
+        }
+    }
     pub fn read_pixel(self: Self, x: u32, y: u32) -> Color {
         let packed = if self.handle == 0_usize {
             0_u32
@@ -921,7 +1257,13 @@ impl for Window {
             ret false
         }
         ret native_external_vulkan_image_bind(self.handle, image.image(),
-            image.width(), image.height(), image.layout(),)
+            image.width(), image.height(), image.layout(),) &&
+        native_external_image_region(self.handle, image.source_x, image.source_y,
+            image.source_width, image.source_height,)
+    }
+    /// Retires just one producer image after its consumer fence is complete.
+    pub fn release_external_vulkan_image(self: Self, image: u64) -> bool {
+        ret self.handle != 0 && native_external_vulkan_image_release(self.handle, image)
     }
     /// Releases renderer-side wrappers before a producer destroys or replaces
     /// its Vulkan images. Luma never destroys the producer-owned VkImage.
@@ -940,7 +1282,7 @@ impl for Window {
         ret Window {
             self.handle, self.width, self.height, color, self.direct_context,
             self.direct_window, self.direct_device, self.direct_swapchain,
-            self.direct_compositor, self.stylesheet
+            self.direct_compositor, self.stylesheet, self.cascade, self.bindings, self.text_cache
         }
     }
     /// Replaces the application layer while retaining Luma's default.css as
@@ -949,11 +1291,17 @@ impl for Window {
         ret Window {
             self.handle, self.width, self.height, self.background, self.direct_context,
             self.direct_window, self.direct_device, self.direct_swapchain,
-            self.direct_compositor, StyleSheet::default().merge(sheet)
+            self.direct_compositor, StyleSheet::default().merge(sheet), RetainedCascade::new(), self.bindings, self.text_cache
         }
     }
     pub fn stylesheet(self: Self) -> StyleSheet {
         ret self.stylesheet
+    }
+    /// Keeps exact cascade inputs local to this window, independently of the
+    /// declaration cache shared by copies of a stylesheet.
+    pub fn resolve_styles(self: Self, sheet: StyleSheet, root: Widget,
+        hovered: str, active: str, focused: str, keyboard_focus: bool,) -> Widget {
+        ret sheet.apply_retained(root, hovered, active, focused, keyboard_focus, self.cascade)
     }
     /// Resolves the window stylesheet for a declarative tree and explicit
     /// interaction state. Custom retained event loops use this before
@@ -961,14 +1309,13 @@ impl for Window {
     /// does for a complete application view.
     pub fn style_view(self: Self, root: Widget, hovered: str, active: str,
         focused: str,) -> Widget {
-        ret inherit_widget_styles(
-            self.stylesheet.apply(root, hovered, active, focused),)
+        ret self.resolve_styles(self.stylesheet, root, hovered, active, focused, true)
     }
     pub fn reload_stylesheet(self: Self) -> Window {
         ret Window {
             self.handle, self.width, self.height, self.background, self.direct_context,
             self.direct_window, self.direct_device, self.direct_swapchain,
-            self.direct_compositor, self.stylesheet.reload()
+            self.direct_compositor, self.stylesheet.reload(), RetainedCascade::new(), self.bindings, self.text_cache
         }
     }
     pub fn poll(self: Self) -> Event {
@@ -1070,12 +1417,14 @@ impl for Window {
         if self.handle == 0_usize || size <= 0.0_f32 {
             ret false
         }
+        self.text_cache.clear()
         ret native_font_load(self.handle, path, size, weight)
     }
     pub fn register_font(self: Self, family: str, path: str) -> bool {
         if self.handle == 0_usize || family == "" || path == "" {
             ret false
         }
+        self.text_cache.clear()
         ret native_font_register(self.handle, family, path)
     }
     pub fn select_font(self: Self, family: str, size: f32, weight: u32) -> bool {
@@ -1088,6 +1437,7 @@ impl for Window {
         if self.handle == 0_usize {
             ret false
         }
+        self.text_cache.clear()
         ret native_font_clear(self.handle)
     }
     pub fn text_width(self: Self, value: str) -> f32 {
@@ -1101,6 +1451,73 @@ impl for Window {
             ret 0_usize
         }
         ret native_text_index(self.handle, value, width)
+    }
+    /// Hit-tests the exact single-line input origin used by the renderer.
+    pub fn input_text_index(self: Self, widget: Widget, bounds: Rect, value: str, cursor: usize, x: f32) -> usize {
+        if self.handle == 0 {
+            ret 0_usize
+        }
+        let style = widget.style()
+        if style.font_family() == "" || !native_font_select(self.handle, style.font_family(), style.font_size(), style.font_weight()) {
+            native_font_style(self.handle, style.font_size(), style.font_weight())
+        }
+        let aligned = aligned_text_x(self.handle, bounds, value, style.text_align(), 10_f32, 10_f32)
+        let origin = focused_input_text_x(self.handle, bounds, value, cursor, aligned)
+        ret native_text_index(self.handle, value, x - origin)
+    }
+    /// Hit-tests a textarea with the same font, text origin and scroll as painting.
+    pub fn textarea_text_index(self: Self, widget: Widget, bounds: Rect, x: f32, y: f32) -> usize {
+        if self.handle == 0_usize {
+            ret 0_usize
+        }
+        let style = widget.style()
+        if style.font_family() == "" || !native_font_select(self.handle, style.font_family(), style.font_size(), style.font_weight()) {
+            native_font_style(self.handle, style.font_size(), style.font_weight())
+        }
+        let gutter = if widget.attribute("line-numbers").is_some() {
+            52_f32
+        } else {
+            0_f32
+        }
+        let width = if widget.attribute("wrap").is_some() {
+            1000000_f32
+        } else {
+            bounds.width() - 20_f32 - gutter
+        }
+        let lines = self.text_cache.lines(self.handle, widget, width)
+        let height = native_text_height(self.handle, "Mg") + 2_f32
+        let local_y = y - bounds.y() - 10_f32 + style.layout().scroll().y()
+        let row = if local_y > 0_f32 {
+            (local_y / height) as usize
+        } else {
+            0_usize
+        }
+        match lines.get(row) {
+            Some(line) => {
+                let local_x = x - bounds.x() - 10_f32 - gutter + style.layout().scroll().x()
+                let count = if local_x < 16000_f32 && line.end - line.start > 8192_usize {
+                    8192_usize
+                } else {
+                    line.end - line.start
+                }
+                let text = widget.text().slice(line.start, count)
+                let at = line.start + native_text_index(self.handle, text, if local_x > 0_f32 {
+                        local_x
+                    } else {
+                        0_f32
+                    }
+                    ,
+                )
+                ret if at > line.end {
+                    line.end
+                } else {
+                    at
+                }
+            }
+            None => {
+                ret widget.text().char_len()
+            }
+        }
     }
     pub fn wrapped_text_index(self: Self, value: str, width: f32, x: f32, y: f32) -> usize {
         if self.handle == 0_usize {
@@ -1119,6 +1536,15 @@ impl for Window {
             ret false
         }
         ret native_end(self.handle)
+    }
+    /// Presentation availability: failed=0, ready=1, pending=2, suspended=3.
+    /// Whether the next backend slot can accept a new producer frame.
+    /// Event handling and layout remain available while the GPU is busy.
+    pub fn render_frame_ready(self: Self) -> bool {
+        ret native_frame_status(self.handle) != 3_u32 &&(self.direct_swapchain == 0_usize || native_swapchain_frame_ready(self.direct_swapchain))
+    }
+    pub fn frame_status(self: Self) -> u32 {
+        ret native_frame_status(self.handle)
     }
     /// Replays a backend-independent display list through the renderer owned
     /// by this window. Vulkan and software backends share this entrypoint.
@@ -1186,63 +1612,516 @@ impl for Window {
         ret native_end(self.handle)
     }
     pub fn draw(self: Self, root: Widget) -> WidgetLayout {
-        let layout = self.layout(root)
-        self.draw_layout(layout)
+        let mut geometry = self.prepare_geometry()
+        let mut layout = self.layout(root)
+        while self.is_open() {
+            if !self.draw_layout(layout) {
+                ret layout
+            }
+            let current = self.prepare_geometry()
+            if current.generation() == geometry.generation() &&
+            current.pixel_width() == geometry.pixel_width() &&
+            current.pixel_height() == geometry.pixel_height() {
+                ret layout
+            }
+            // Mapping/configure is one authored-layout transaction, not a
+            // stretched old image or a hidden/transparent pre-map buffer.
+            geometry = current
+            layout = self.layout(root)
+        }
         ret layout
     }
     /// Creates a retained reactive tree, uploads its stable base frame to the
     /// renderer cache, and presents it. Subsequent paint-only updates should
     /// use `draw_reactive` instead of rebuilding the whole widget tree.
     pub fn reactive(self: Self, root: Widget) -> ReactiveUi {
-        let layout = self.layout(root)
+        let layout = self.reactive_layout(root)
+        let mut reactive = ReactiveUi::new(layout)
+        reactive.set_widget_event_dispatch(self.widget_event_dispatch())
         if self.cache_layout(layout) {
-            let _presented = self.draw_cached_layout()
+            reactive.commit_prepared()
+            if self.draw_cached_layout() {
+                reactive.commit_rendered()
+            }
         } else {
             // A backend without render-target support still gets one complete
             // first frame; it never exposes a technical or partial frame.
-            let _presented = self.draw_layout(layout)
+            if !self.draw_layout(layout) {
+                reactive.replace_layout(layout)
+            }
         }
-        ret ReactiveUi::new(layout)
+        reactive.set_declarative_root(root)
+        ret reactive
     }
+    /// Binds one window root. Several roots can share subscriptions and storage.
+    pub fn with_bindings(self: Self, bindings: UiBindings<H>, root: NodeId) -> Window {
+        ret Window {
+            self.handle, self.width, self.height, self.background,
+            self.direct_context, self.direct_window, self.direct_device, self.direct_swapchain,
+            self.direct_compositor, self.stylesheet, RetainedCascade::new(),
+            Option[WindowBindings]::Some(WindowBindings { bindings, root }), self.text_cache
+        }
+    }
+    pub fn has_bindings(self: Self) -> bool {
+        ret self.bindings.is_some()
+    }
+    /// Whether this window's registry requests per-widget callback dispatch.
+    #attr(borrowed_self)
+    pub fn widget_event_dispatch(self: Self) -> bool {
+        ret match self.bindings {
+            Some(owner) => owner.bindings.widget_event_dispatch() None => true
+        }
+    }
+    /// A model-supplied authored focus target for this window's mounted root.
+    #attr(borrowed_self)
+    pub fn bound_declared_focus(self: Self) -> Option[str] {
+        ret match self.bindings {
+            Some(owner) => owner.bindings.declared_focus(owner.root) None => Option[str]::None
+        }
+    }
+    pub fn has_pending_bindings(self: Self) -> bool {
+        ret match self.bindings {
+            Some(owner) => owner.bindings.has_pending_for(owner.root)
+            None => false
+        }
+    }
+
+    /// Custom event loops submit component descriptors to the same transaction
+    /// as signal writes. The normal unbound compatibility path remains valid.
+    pub fn stage_component(self: Self, reactive: mut ReactiveUi, id: str, widget: Widget) -> bool {
+        match self.bindings {
+            Some(owner) => {
+                let tree = owner.bindings.tree()
+                match tree.find(owner.root, id) {
+                    Some(node) => {
+                        ret owner.bindings.reconcile(node, widget)
+                    }
+                    None => {
+                        ret false
+                    }
+                }
+            }
+            None => {
+                ret reactive.stage_subtree(id, widget)
+            }
+        }
+    }
+
+    pub fn authored_widget(self: Self, reactive: mut ReactiveUi, id: str) -> Option[Widget] {
+        match self.bindings {
+            Some(owner) => {
+                let tree = owner.bindings.tree()
+                match tree.find(owner.root, id) {
+                    Some(node) => {
+                        ret tree.widget(node)
+                    }
+                    None => {
+                        ret Option[Widget]::None
+                    }
+                }
+            }
+            None => {
+                ret reactive.find_widget(id)
+            }
+        }
+    }
+
+    pub fn stage_text(self: Self, reactive: mut ReactiveUi, id: str, text: str) -> bool {
+        match self.bindings {
+            Some(owner) => {
+                let tree = owner.bindings.tree()
+                match tree.find(owner.root, id) {
+                    Some(node) => {
+                        ret tree.set_text(node, text)
+                    }
+                    None => {
+                        ret false
+                    }
+                }
+            }
+            None => {
+                ret reactive.patch_text(id, text)
+            }
+        }
+    }
+
+    /// One custom-loop frame boundary, shared by properties and interaction.
+    pub fn stage_binding_frame(self: Self, reactive: mut ReactiveUi,
+        hovered: str, active: str, focused: str, now_ms: u64,) -> ReactiveUi {
+        reactive.set_interaction_ids(hovered, active, focused)
+        reactive = self.stage_bindings(reactive)
+        let cascade_valid = self.cascade.matches_root(reactive.declarative_root())
+        if self.has_bindings() && cascade_valid && self.cascade.matches_interaction(self.stylesheet.revision(), hovered, active,
+            focused, reactive.keyboard_focus(),) {
+            ret reactive
+        }
+        if self.has_bindings() && cascade_valid && self.stylesheet.stage_interaction(hovered, active, focused,
+            reactive.keyboard_focus(), self.cascade,) {
+            if self.patch_cascade_styles(reactive, now_ms) {
+                ret reactive
+            }
+            // A displayed geometric transition can require the ordinary
+            // animation transaction even if the computed destinations are local.
+            let styled = self.resolve_styles(self.stylesheet(), reactive.declarative_root(),
+                hovered, active, focused, reactive.keyboard_focus(),)
+            ret self.stage_animated_reactive(reactive, styled, now_ms)
+        }
+        let styled = self.resolve_styles(self.stylesheet(), reactive.declarative_root(),
+            hovered, active, focused, reactive.keyboard_focus(),)
+        if self.patch_cascade_styles(reactive, now_ms) {
+            ret reactive
+        }
+        ret self.stage_animated_reactive(reactive, styled, now_ms)
+    }
+
+    // This path is only used after authored data has been committed. A pure
+    // interaction change must not reconcile content, closures, geometry or the
+    // complete hit-test index again. Complex selectors still use the same cascade.
+    fn patch_cascade_styles(self: Self, reactive: mut ReactiveUi, now_ms: u64) -> bool {
+        let patches = match self.cascade.style_patches() {
+            Some(values) => values
+            None => {
+                ret false
+            }
+        }
+        // Validate the complete batch before mutating any displayed state.
+        for patch in patches {
+            match reactive.find_widget(patch.id()) {
+                Some(current) => {
+                    if !current.style().layout_equivalent(patch.style()) {
+                        ret false
+                    }
+                }
+                None => {
+                    ret false
+                }
+            }
+        }
+        for patch in patches {
+            match reactive.find_widget(patch.id()) {
+                Some(current) => {
+                    let _updated = reactive.transition_widget(patch.id(),
+                        current.with_computed_style(patch.style()).with_focus(patch.focused()), now_ms,)
+                }
+                None => {
+                }
+            }
+        }
+        ret true
+    }
+
+    /// Commits one complete property transaction without presentation. Simple
+    /// data writes bypass CSS and reconciliation; selector/structure changes
+    /// retain the complete CSS context, including :has and sibling selectors.
+    pub fn stage_bindings(self: Self, reactive: mut ReactiveUi) -> ReactiveUi {
+        let owner = match self.bindings {
+            Some(value) => value
+            None => {
+                ret reactive
+            }
+        }
+        let bindings = owner.bindings
+        reactive.set_widget_event_dispatch(bindings.widget_event_dispatch())
+        let root = owner.root
+        let _evaluated = bindings.flush()
+        let tree = bindings.tree()
+        let changes = tree.take_changes_for(root)
+        if changes.len() == 0 {
+            ret reactive
+        }
+        let mut structural = !tree.contains(root)
+        let mut selectors = false
+        for change in changes {
+            selectors = selectors ||(change.flags() & dirty_style()) != 0
+            if (change.flags() & dirty_structure()) != 0 {
+                structural = true
+            }
+        }
+        if (structural || selectors) && tree.contains(root) && self.stage_binding_subtrees(reactive, owner, changes) {
+            let _committed = bindings.commit_authored_view_for(root, reactive.declarative_root())
+            ret reactive
+        }
+        if structural {
+            let authored = tree.snapshot(root).unwrap_or(Widget::panel(reactive.declarative_root().id()))
+            let _committed = bindings.commit_authored_view_for(root, authored)
+            ret self.stage_reactive_view(reactive, authored, self.stylesheet(),
+                reactive.hovered_id(), reactive.active_id(), reactive.focused_id(), perf_counter_ms(),)
+        }
+        let mut style_changed = false
+        let mut layout_changed = false
+        let mut geometry_only = true
+        let mut geometry_paths = Vec[Vec[usize]]::new()
+        for change in changes {
+            geometry_only = geometry_only &&(change.flags() & dirty_geometry()) != 0 &&
+            (change.flags() &(dirty_style() | dirty_structure() | dirty_computed_style())) == 0
+            match tree.path(root, change.node()) {
+                Some(indices) => {
+                    match tree.widget(change.node()) {
+                        Some(local) => {
+                            if (change.flags() & dirty_geometry()) != 0 &&
+                            (change.flags() &(dirty_style() | dirty_computed_style())) == 0 {
+                                let _patched = reactive.patch_bound_geometry(indices, local)
+                                if !self.cascade.adopt_geometry(indices, local) {
+                                    style_changed = true
+                                    geometry_only = false
+                                }
+                                geometry_paths.push(indices)
+                                layout_changed = true
+                                continue
+                            }
+                            let computed = if (change.flags() & dirty_computed_style()) != 0 {
+                                tree.computed_style(change.node())
+                            } else {
+                                Option[Style]::None
+                            }
+                            let needs_layout =(change.flags() & dirty_layout()) != 0 &&
+                            ((change.flags() & dirty_geometry()) != 0 ||
+                                computed.is_some() || reactive.bound_content_needs_layout(indices, local))
+                            if (change.flags() & dirty_geometry()) != 0 {
+                                let _adopted = self.cascade.adopt_geometry(indices, local)
+                            }
+                            let _patched = reactive.patch_bound_node(indices, local, computed,(change.flags() & dirty_paint()) != 0)
+                            style_changed = style_changed ||(change.flags() & dirty_style()) != 0
+                            layout_changed = layout_changed || needs_layout
+                        }
+                        None => {
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        if style_changed {
+            let now = perf_counter_ms()
+            let styled = self.resolve_styles(self.stylesheet(), reactive.declarative_root(),
+                reactive.hovered_id(), reactive.active_id(), reactive.focused_id(), reactive.keyboard_focus(),)
+            if !self.patch_cascade_styles(reactive, now) {
+                reactive = self.stage_animated_reactive(reactive, styled, now)
+            }
+        }
+        if layout_changed {
+            if !geometry_only || !reactive.reflow_bound_geometry(geometry_paths) {
+                reactive = self.stage_relayout_reactive(reactive)
+            }
+        }
+        let _committed = bindings.commit_authored_view_for(root, reactive.declarative_root())
+        ret reactive
+    }
+
+    // Coalesce dirty descendants under the highest changed source node. Do
+    // not snapshot unrelated siblings merely to discover they are unchanged.
+    fn stage_binding_subtrees(self: Self, reactive: mut ReactiveUi, owner: WindowBindings,
+        changes: Vec[NodeChange],) -> bool {
+        if !self.cascade.matches_root(reactive.declarative_root()) {
+            ret false
+        }
+        let tree = owner.bindings.tree()
+        let mut roots = Vec[BindingBranch]::new()
+        for change in changes {
+            if (change.flags() & dirty_computed_style()) != 0 {
+                ret false
+            }
+            // Content-only siblings do not belong to the CSS/layout island.
+            // Including them here turns a local popup update plus a fixed-box
+            // label write into a full-window cascade.
+            if (change.flags() &(dirty_structure() | dirty_style())) == 0 {
+                continue
+            }
+            let mut cursor = change.node()
+            let mut island = Option[NodeId]::None
+            let mut named = Option[NodeId]::None
+            loop {
+                if cursor.same(owner.root) {
+                    break
+                }
+                let id = tree.identifier(cursor)
+                if named.is_none() && id != "" && reactive.contains_widget(id) {
+                    named = Option[NodeId]::Some(cursor)
+                }
+                if reactive.independent_component(id) {
+                    island = Option[NodeId]::Some(cursor)
+                }
+                match tree.parent(cursor) {
+                    Some(parent) => {
+                        cursor = parent
+                    }
+                    None => {
+                        break
+                    }
+                }
+            }
+            // Nested absolute boxes can resize when their content changes.
+            // Their outer island owns that positioning/layout dependency.
+            let selected = match island {
+                Some(node) => node
+                None => match named {
+                    Some(node) => node
+                    None => {
+                        ret false
+                    }
+                }
+            }
+            let path = match tree.path(owner.root, selected) {
+                Some(value) => value
+                None => {
+                    ret false
+                }
+            }
+            let mut covered = false
+            for branch in roots {
+                covered = covered || binding_path_contains(branch.path, path)
+            }
+            if covered {
+                continue
+            }
+            let mut next = Vec[BindingBranch]::new()
+            for branch in roots {
+                if !binding_path_contains(path, branch.path) {
+                    next.push(branch)
+                }
+            }
+            next.push(BindingBranch { selected, path })
+            roots = next
+        }
+        let trace = env("LUMA_TRACE_UI").unwrap_or("") == "1"
+        let started = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        let mut patches = Vec[StyledBindingBranch]::new()
+        let mut evaluated = 0_usize
+        let cache_hits = if trace {
+            self.stylesheet.cache_hits()
+        } else {
+            0_u64
+        }
+        let cache_misses = if trace {
+            self.stylesheet.cache_misses()
+        } else {
+            0_u64
+        }
+        for branch in roots {
+            let authored = match tree.snapshot(branch.node) {
+                Some(value) => value
+                None => {
+                    ret false
+                }
+            }
+            let styled = match self.stylesheet.apply_retained_subtree(branch.path, authored, self.cascade) {
+                Some(value) => value
+                None => {
+                    ret false
+                }
+            }
+            evaluated += self.cascade.interaction_evaluations()
+            if !reactive.can_commit_styled_subtree(styled) {
+                ret false
+            }
+            patches.push(StyledBindingBranch { branch.path, authored, styled })
+        }
+        let css_at = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        for patch in patches {
+            if !reactive.commit_styled_subtree(patch.path, patch.authored, patch.styled) {
+                ret false
+            }
+        }
+        // Island snapshots already include their changed descendants. Apply
+        // independent property writes outside them in the same transaction;
+        // never lose these writes when the local structural batch succeeds.
+        let mut layout_changed = false
+        for change in changes {
+            match tree.path(owner.root, change.node()) {
+                Some(indices) => {
+                    let mut covered = false
+                    for branch in roots {
+                        covered = covered || binding_path_contains(branch.path, indices)
+                    }
+                    if covered {
+                        continue
+                    }
+                    match tree.widget(change.node()) {
+                        Some(local) => {
+                            if (change.flags() & dirty_geometry()) != 0 &&
+                            (change.flags() &(dirty_style() | dirty_computed_style())) == 0 {
+                                let _geometry = reactive.patch_bound_geometry(indices, local)
+                                let _adopted = self.cascade.adopt_geometry(indices, local)
+                                layout_changed = true
+                                continue
+                            }
+                            let needs_layout =(change.flags() & dirty_layout()) != 0 && reactive.bound_content_needs_layout(indices, local)
+                            if trace && needs_layout {
+                                eprintln(f"LUMA_UI_LAYOUT id={local.id()} flags={change.flags()}")
+                            }
+                            layout_changed = layout_changed || needs_layout
+                            let _patched = reactive.patch_bound_node(indices, local,
+                                Option[Style]::None,(change.flags() & dirty_paint()) != 0,)
+                        }
+                        None => {
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        if layout_changed {
+            reactive.replace_layout(self.relayout(reactive.layout()))
+        }
+        if trace {
+            eprintln(f"LUMA_UI_SUBTREE css_us={(css_at-started)/1000} layout_us={(perf_counter_ns()-css_at)/1000} roots={patches.len()} evaluated={evaluated} hits={self.stylesheet.cache_hits()-cache_hits} misses={self.stylesheet.cache_misses()-cache_misses}")
+        }
+        ret true
+    }
+
     /// Flushes pending subtree layout work, commits only dirty widgets into
     /// the cached frame, and presents the result.
     pub fn draw_reactive(self: Self, reactive: mut ReactiveUi) -> ReactiveUi {
+        reactive = self.stage_bindings(reactive)
         if reactive.needs_structure() {
-            let _presented = if native_layout_cache_ready(self.handle) {
-                self.draw_cached_layout()
-            } else {
-                self.draw_layout(reactive.layout())
-            }
+            // A pending structural replacement is not a complete frame.
             ret reactive
         }
         if reactive.needs_layout() && !reactive.flush_layout() {
             ret reactive
         }
-        if !native_layout_cache_ready(self.handle) {
+        if reactive.needs_full_repaint() || !native_layout_cache_ready(self.handle) {
             if self.cache_layout(reactive.layout()) {
-                let _presented = self.draw_cached_layout()
-                reactive.clear_paint()
+                reactive.commit_prepared()
+                if self.draw_cached_layout() {
+                    reactive.clear_paint()
+                }
             } else {
-                let _presented = self.draw_layout(reactive.layout())
+                if self.draw_layout(reactive.layout()) {
+                    reactive.clear_paint()
+                }
             }
             ret reactive
         }
         let targets = reactive.paint_targets()
         let mut cache_valid = true
         if targets.len() > 0_usize {
-            let committed = self.commit_cached_layout_targets(reactive.layout(), targets, Vec[str]::new())
-            if committed {
-                reactive.clear_paint()
-            } else {
+            let committed = self.commit_cached_layout_regions(reactive.layout(), reactive.paint_regions())
+            if !committed {
                 cache_valid = false
             }
         }
         if cache_valid {
-            let _presented = self.draw_cached_layout()
-        } else {
-            let _presented = self.draw_layout(reactive.layout())
-            if self.cache_layout(reactive.layout()) {
+            reactive.commit_prepared()
+            if self.draw_cached_layout() {
                 reactive.clear_paint()
+            }
+        } else {
+            if self.cache_layout(reactive.layout()) {
+                reactive.commit_prepared()
+                if self.draw_cached_layout() {
+                    reactive.clear_paint()
+                }
             }
         }
         ret reactive
@@ -1252,143 +2131,226 @@ impl for Window {
     pub fn advance_transitions(self: Self, reactive: mut ReactiveUi,
         now_ms: u64,) -> ReactiveUi {
         if reactive.advance_transitions(now_ms) {
-            if !reactive.needs_layout() && !reactive.needs_structure() {
-                ret self.draw_reactive(reactive)
-            }
-            // Layout-cache subregion patching is optimized for committed
-            // state changes. During a transition the same region changes on
-            // consecutive frames; rebuilding the retained cache keeps both
-            // SDL and direct Vulkan backends from presenting a cache while it
-            // is still the active render target.
-            if self.cache_layout(reactive.layout()) {
-                let _presented = self.draw_cached_layout()
-                reactive.clear_paint()
-                ret reactive
-            }
-            let _presented = self.draw_layout(reactive.layout())
-            ret reactive
+            ret self.draw_reactive(reactive)
         }
         ret reactive
     }
-    /// Applies one transient CSS state directly to the retained widget index.
-    /// The original declarative widget is captured once and restored when the
-    /// state clears, so pseudo-only declarations cannot leak into the base
-    /// style or require rebuilding the complete tree.
+    /// Stages pseudo-class changes through the same cascade and animation
+    /// transaction as model updates, including ancestor and sibling selectors.
     pub fn patch_interaction_style(self: Self, reactive: mut ReactiveUi,
-        sheet: StyleSheet, id: str, hovered: bool, active: bool,
-        focused: bool,) -> bool {
-        if id == "" {
+        sheet: StyleSheet, id: str, hovered: bool, active: bool, focused: bool,) -> bool {
+        if id == "" || reactive.find_widget(id).is_none() {
             ret false
         }
-        match reactive.interaction_base(id) {
-            Option::Some(base) => {
-                if !hovered && !active && !focused {
-                    let replacement = base.with_focus(false)
-                    let layout_changed = match reactive.find_widget(id) {
-                        Some(previous) => {
-                            !previous.style().layout_equivalent(replacement.style())
-                        }
-                        None => false
-                    }
-                    let restored = reactive.transition_widget(id, replacement,
-                        perf_counter_ms(),)
-                    if restored && layout_changed {
-                        reactive.invalidate_layout(id)
-                    }
-                    reactive.release_interaction_base(id)
-                    ret restored
-                }
-                let styled = base.with_style(sheet.style(base, hovered, active,
-                        focused,)).with_focus(focused)
-                let layout_changed = match reactive.find_widget(id) {
-                    Some(previous) => {
-                        !previous.style().layout_equivalent(styled.style())
-                    }
-                    None => false
-                }
-                let patched = reactive.transition_widget(id, styled,
-                    perf_counter_ms(),)
-                if patched && layout_changed {
-                    reactive.invalidate_layout(id)
-                }
-                ret patched
-            }
-            Option::None => {
-                ret false
-            }
+        reactive.set_interaction_state(id, hovered, active, focused)
+        let styled = self.resolve_styles(sheet, reactive.declarative_root(), reactive.hovered_id(),
+            reactive.active_id(), reactive.focused_id(), reactive.keyboard_focus(),)
+        reactive = self.stage_animated_reactive(reactive, styled, perf_counter_ms())
+        ret true
+    }
+    /// Stages a new authored tree and resolves its complete CSS context before
+    /// reconciling retained nodes. Custom loops and managed applications use
+    /// the same model/interaction/animation transaction.
+    pub fn stage_reactive_view(self: Self, reactive: mut ReactiveUi, root: Widget,
+        sheet: StyleSheet, hovered: str, active: str, focused: str,
+        now_ms: u64,) -> ReactiveUi {
+        reactive.set_interaction_ids(hovered, active, focused)
+        reactive.set_declarative_root(root)
+        let trace = env("LUMA_TRACE_UI").unwrap_or("") == "1"
+        let started = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
         }
+        let styled = self.resolve_styles(sheet, root, hovered, active, focused, reactive.keyboard_focus())
+        let styled_at = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        reactive = self.stage_animated_reactive(reactive, styled, now_ms)
+        if trace {
+            eprintln(f"LUMA_UI css_us={(styled_at-started)/1000} reconcile_us={(perf_counter_ns()-styled_at)/1000}")
+        }
+        ret reactive
     }
     /// Reflows a retained reactive tree after a window resize, rebuilds the
     /// cached frame, and presents it.
     pub fn relayout_reactive(self: Self, reactive: mut ReactiveUi) -> ReactiveUi {
-        let layout = self.relayout(reactive.layout())
-        reactive.replace_layout(layout)
-        if self.cache_layout(layout) {
-            let _presented = self.draw_cached_layout()
+        reactive = self.stage_relayout_reactive(reactive)
+        ret self.draw_reactive(reactive)
+    }
+    /// Stages resize/scroll geometry without submitting an intermediate frame.
+    pub fn stage_relayout_reactive(self: Self, reactive: mut ReactiveUi) -> ReactiveUi {
+        reactive.replace_layout(self.relayout(reactive.layout()))
+        ret reactive
+    }
+    /// Stages a resize as one layout transaction. Reconciliation at the old
+    /// extent would rebuild hit paths and paint damage only to discard them.
+    /// Keep authored updates, scroll offsets and running transitions, but lay
+    /// out their displayed state directly at the current window dimensions.
+    pub fn stage_resized_reactive(self: Self, reactive: mut ReactiveUi,
+        root: Widget, sheet: StyleSheet, hovered: str, active: str,
+        focused: str, now_ms: u64,) -> ReactiveUi {
+        reactive = self.stage_bindings(reactive)
+        let authored = if self.has_bindings() {
+            reactive.declarative_root()
         } else {
-            let _presented = self.draw_layout(layout)
+            root
         }
+        let trace = env("LUMA_TRACE_RESIZE").unwrap_or("") == "1"
+        let t0 = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        reactive.set_interaction_ids(hovered, active, focused)
+        reactive.set_declarative_root(authored)
+        let styled = self.resolve_styles(sheet, authored, hovered, active, focused,
+            reactive.keyboard_focus(),)
+        let t1 = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        let target = reactive.preserve_scroll_offsets(styled)
+        if reactive.style_targets_unchanged(target) {
+            let t2 = if trace {
+                perf_counter_ns()
+            } else {
+                0_u64
+            }
+            let layout = layout_widget(target,
+                Rect::new(0.0, 0.0, self.width() as f32, self.height() as f32),)
+            let t3 = if trace {
+                perf_counter_ns()
+            } else {
+                0_u64
+            }
+            reactive.replace_layout(layout)
+            if trace {
+                eprintln(f"LUMA_RESIZE css_us={(t1-t0)/1000} compare_us={(t2-t1)/1000} layout_us={(t3-t2)/1000} paths_us={(perf_counter_ns()-t3)/1000}")
+            }
+            ret reactive
+        }
+        reactive.prune_transitions(target, now_ms)
+        let displayed = reactive.prepare_style_targets(target)
+        let t2 = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        reactive.replace_layout(layout_widget(displayed,
+                Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),))
+        let t3 = if trace {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+        reactive.apply_style_targets(target, now_ms)
+        if trace {
+            eprintln(f"LUMA_RESIZE css_us={(t1-t0)/1000} targets_us={(t2-t1)/1000} layout_us={(t3-t2)/1000} apply_us={(perf_counter_ns()-t3)/1000}")
+        }
+        ret reactive
+    }
+    /// Reconciles a computed-style tree without presenting. Managed input,
+    /// animation and model updates share this transaction before one commit.
+    pub fn stage_styled_reactive(self: Self, reactive: mut ReactiveUi,
+        root: Widget,) -> ReactiveUi {
+        if reactive.reconcile_styled(root) >= 2_u32 {
+            reactive.replace_layout(layout_widget(root,
+                    Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),))
+        }
+        ret reactive
+    }
+    /// Stages model data and CSS targets without resetting displayed animations.
+    pub fn stage_animated_reactive(self: Self, reactive: mut ReactiveUi,
+        root: Widget, now_ms: u64,) -> ReactiveUi {
+        let target = reactive.preserve_scroll_offsets(root)
+        if !reactive.needs_animation_transaction(target) {
+            ret self.stage_styled_reactive(reactive, target)
+        }
+        if !reactive.has_active_transitions() && reactive.refresh_unchanged(target) {
+            ret reactive
+        }
+        reactive.prune_transitions(target, now_ms)
+        let displayed = reactive.prepare_style_targets(target)
+        reactive = self.stage_styled_reactive(reactive, displayed)
+        reactive.apply_style_targets(target, now_ms)
         ret reactive
     }
     /// Replaces the complete root after a structural state change and rebuilds
     /// the retained cache while preserving the caller's `ReactiveUi` value.
     pub fn rebuild_reactive(self: Self, reactive: mut ReactiveUi, root: Widget) -> ReactiveUi {
-        let layout = self.layout(root)
-        reactive.replace_layout(layout)
-        if self.cache_layout(layout) {
-            let _presented = self.draw_cached_layout()
-        } else {
-            let _presented = self.draw_layout(layout)
-        }
-        ret reactive
+        let hovered = reactive.hovered_id()
+        let active = reactive.active_id()
+        let focused = reactive.focused_id()
+        reactive = self.stage_reactive_view(reactive, root, self.stylesheet(),
+            hovered, active, focused,
+            perf_counter_ms(),)
+        reactive.replace_layout(self.relayout(reactive.layout()))
+        ret self.draw_reactive(reactive)
     }
     /// Reconciles a new declarative tree and automatically chooses paint,
     /// layout, or structural work.
     pub fn update_reactive(self: Self, reactive: mut ReactiveUi,
         root: Widget,) -> ReactiveUi {
-        let change = reactive.reconcile(root)
-        if change == 0_u32 {
-            ret reactive
+        let hovered = reactive.hovered_id()
+        let active = reactive.active_id()
+        let focused = reactive.focused_id()
+        reactive = self.stage_reactive_view(reactive, root, self.stylesheet(),
+            hovered, active, focused,
+            perf_counter_ms(),)
+        if reactive.is_dirty() {
+            ret self.draw_reactive(reactive)
         }
-        if change >= 2_u32 {
-            ret self.rebuild_reactive(reactive, root)
-        }
-        ret self.draw_reactive(reactive)
+        ret reactive
     }
     /// Applies a new styled tree while preserving geometry, invalidates the
     /// requested stable widget IDs, and commits only their screen regions.
     pub fn restyle_reactive(self: Self, reactive: mut ReactiveUi, root: Widget,
         targets: Vec[str],) -> ReactiveUi {
-        let mut replaced = false
-        let replacements = root.find_many(targets)
-        for raw in replacements {
-            let target = raw.id()
-            if target != "" {
-                // The retained widget already contains the effective parent
-                // text style. Seed only this replacement from it, then inherit
-                // within the replacement subtree. No unrelated layout branch
-                // is traversed or reconstructed.
-                match reactive.find_widget(target) {
-                    Option::Some(previous) => {
-                        let replacement = inherit_widget_styles(
-                            raw.with_style(raw.style().inherit_text(
-                                    previous.style(),)),)
-                        replaced = reactive.replace_subtree(target,
-                            replacement,) || replaced
-                    }
-                    Option::None => {
-                    }
+        if targets.len() == 0_usize {
+            ret reactive
+        }
+        let mut authored = reactive.declarative_root()
+        let mut found = false
+        for id in targets {
+            match root.find(id) {
+                Option[Widget]::Some(replacement) => {
+                    authored = authored.replace_by_id(id, replacement)
+                    found = true
+                }
+                Option[Widget]::None => {
                 }
             }
         }
-        if !replaced {
+        if !found {
+            ret reactive
+        }
+        let hovered = reactive.hovered_id()
+        let active = reactive.active_id()
+        let focused = reactive.focused_id()
+        reactive = self.stage_reactive_view(reactive, authored, self.stylesheet(),
+            hovered, active, focused,
+            perf_counter_ms(),)
+        if !reactive.is_dirty() {
             ret reactive
         }
         ret self.draw_reactive(reactive)
     }
+    /// One-shot layout never replaces the reactive tree's retained CSS state.
+    /// Loading screens, previews and temporary frames use this path.
     pub fn layout(self: Self, root: Widget) -> WidgetLayout {
-        ret layout_widget(self.style_view(root, "", "", ""),
-            Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),)
+        let geometry = self.prepare_geometry()
+        ret layout_widget(self.stylesheet.apply_with_focus_visibility(root, "", "", "", true),
+            Rect::new(0.0_f32, 0.0_f32, geometry.width() as f32, geometry.height() as f32),)
+    }
+    /// Prepares a retained UI without presenting, for custom window/render loops.
+    pub fn reactive_layout(self: Self, root: Widget) -> WidgetLayout {
+        let geometry = self.prepare_geometry()
+        ret layout_widget(self.resolve_styles(self.stylesheet(), root, "", "", "", true),
+            Rect::new(0.0_f32, 0.0_f32, geometry.width() as f32, geometry.height() as f32),)
     }
     /// Reflows the current retained tree for new window bounds without asking
     /// application code to construct the widget tree again.
@@ -1403,25 +2365,59 @@ impl for Window {
     /// transaction. Producers must render against the returned slot rather
     /// than querying layout and window metrics independently.
     pub fn prepare_frame(self: Self, layout: WidgetLayout, cached: bool) -> PreparedFrame {
-        let density = self.pixel_density()
-        let logical_width = self.width()
-        let logical_height = self.height()
+        let geometry = self.prepare_geometry()
+        let density = geometry.density()
+        let logical_width = geometry.width()
+        let logical_height = geometry.height()
         let scale_x = if logical_width == 0_u32 {
             density
         } else {
-            (self.pixel_width() as f32) /(logical_width as f32)
+            (geometry.pixel_width() as f32) /(logical_width as f32)
         }
         let scale_y = if logical_height == 0_u32 {
             density
         } else {
-            (self.pixel_height() as f32) /(logical_height as f32)
+            (geometry.pixel_height() as f32) /(logical_height as f32)
         }
         let mut surfaces = Vec[SurfaceSlot]::new()
         collect_surface_slots(layout, scale_x, scale_y, density, surfaces)
         ret PreparedFrame {
             layout, cached, surfaces, Vec[SurfaceSubmission]::new(),
-            Vec[str]::new(), Vec[WidgetLayout]::new(), false
+            Vec[str]::new(), Vec[WidgetLayout]::new(), false, geometry, Vec[DisplayOverlay]::new(), Vec[UiLayerSubmission]::new()
         }
+    }
+    /// Captures one named surface through the retained index. Geometry and
+    /// clipping follow the current transaction without walking unrelated UI.
+    pub fn surface_slot(self: Self, reactive: mut ReactiveUi, id: str) -> Option[SurfaceSlot] {
+        let layout = match reactive.find_layout(id) {
+            Some(value) => value None => {
+                ret Option[SurfaceSlot]::None
+            }
+        }
+        if layout.widget().kind() != widget_render_surface() {
+            ret Option[SurfaceSlot]::None
+        }
+        let geometry = self.prepare_geometry()
+        let density = geometry.density()
+        let scale_x = if geometry.width() == 0 {
+            density
+        } else {
+            geometry.pixel_width() as f32 / geometry.width() as f32
+        }
+        let scale_y = if geometry.height() == 0 {
+            density
+        } else {
+            geometry.pixel_height() as f32 / geometry.height() as f32
+        }
+        let mut slots = Vec[SurfaceSlot]::new()
+        collect_surface_slots_clipped(layout, scale_x, scale_y, density,
+            reactive.clip_for(id), slots,)
+        for slot in slots {
+            if slot.id() == id {
+                ret Option[SurfaceSlot]::Some(slot)
+            }
+        }
+        ret Option[SurfaceSlot]::None
     }
     /// Prepares a frame from geometry captured by an earlier layout
     /// transaction. Interactive producers should retain their slot and use
@@ -1432,8 +2428,24 @@ impl for Window {
         surfaces.push(surface)
         ret PreparedFrame {
             layout, cached, surfaces, Vec[SurfaceSubmission]::new(),
-            Vec[str]::new(), Vec[WidgetLayout]::new(), false
+            Vec[str]::new(), Vec[WidgetLayout]::new(), false, self.prepare_geometry(), Vec[DisplayOverlay]::new(), Vec[UiLayerSubmission]::new()
         }
+    }
+    /// Captures explicitly indexed surfaces from the same retained layout transaction.
+    pub fn prepare_frame_with_surfaces(self: Self, layout: WidgetLayout,
+        cached: bool, surfaces: Vec[SurfaceSlot],) -> PreparedFrame {
+        ret PreparedFrame {
+            layout, cached, surfaces, Vec[SurfaceSubmission]::new(),
+            Vec[str]::new(), Vec[WidgetLayout]::new(), false, self.prepare_geometry(), Vec[DisplayOverlay]::new(), Vec[UiLayerSubmission]::new()
+        }
+    }
+    /// Lightweight packet for an already retained GPU base. Named layout lookups
+    /// are intentionally absent: attach canvases by bounds and overlays by layout
+    /// or display list. The large retained widget graph stays UI-owned.
+    pub fn prepare_cached_surface_frame(self: Self, bounds: Rect,
+        surfaces: Vec[SurfaceSlot],) -> PreparedFrame {
+        let packet_root = layout_widget(Widget::panel("cached-surface-packet"), bounds)
+        ret self.prepare_frame_with_surfaces(packet_root, true, surfaces)
     }
     /// Scalar form of `prepare_frame_with_surface`, useful for language
     /// frontends that cannot safely retain an owned layout-node aggregate.
@@ -1472,8 +2484,28 @@ impl for Window {
     /// Presents only a complete prepared transaction. A missing, stale or
     /// incorrectly sized producer image leaves the previous complete frame on
     /// screen instead of exposing mixed resize generations.
+    /// Reuses one prepared UI transaction while an external producer advances
+    /// independently. Geometry and surface generations are validated normally;
+    /// this does not run bindings, layout, or simulation for intermediate images.
+    pub fn present_external_update(self: Self, frame: PreparedFrame, id: str,
+        generation: u64, image: ExternalVulkanImage,) -> bool {
+        let mut next = frame
+        if !next.submit_external(id, generation, image) {
+            ret false
+        }
+        ret self.present_prepared(next)
+    }
     pub fn present_prepared(self: Self, frame: PreparedFrame) -> bool {
         if self.handle == 0_usize {
+            ret false
+        }
+        let current = self.prepare_geometry()
+        let bounds = frame.layout.bounds()
+        if !current.valid() || current.generation() != frame.geometry.generation() ||
+        current.pixel_width() != frame.geometry.pixel_width() ||
+        current.pixel_height() != frame.geometry.pixel_height() ||
+        bounds.width() != current.width() as f32 || bounds.height() != current.height() as f32 {
+            native_backend_set_error("Prepared frame rejected: stale window geometry or layout bounds")
             ret false
         }
         for slot in frame.surfaces {
@@ -1481,12 +2513,13 @@ impl for Window {
             for submission in frame.submissions {
                 if submission.id == slot.id &&
                 submission.generation == slot.generation &&
-                submission.image.width() == slot.pixel_width &&
-                submission.image.height() == slot.pixel_height {
+                submission.image.content_width() == slot.pixel_width &&
+                submission.image.content_height() == slot.pixel_height {
                     matched = true
                 }
             }
             if !matched {
+                native_backend_set_error("Prepared frame rejected: missing or stale surface " + slot.id)
                 ret false
             }
         }
@@ -1503,7 +2536,7 @@ impl for Window {
             for slot in frame.surfaces {
                 excluded.push(slot.id)
             }
-            render_layout_filtered(self.handle, frame.layout,
+            render_layout_filtered(self.handle, self.text_cache, frame.layout,
                 Option[Rect]::None, excluded,)
         }
         for slot in frame.surfaces {
@@ -1526,18 +2559,23 @@ impl for Window {
                 }
             }
         }
+        replay_display_overlays(self.handle, frame.display_overlays, false)
         if frame.cached_overlays {
             let _overlay = native_overlay_cache_draw(self.handle)
         } elif frame.overlay_layouts.len() > 0_usize {
             for overlay in frame.overlay_layouts {
-                render_layout(self.handle, overlay, Option[Rect]::None)
+                render_layout(self.handle, self.text_cache, overlay, Option[Rect]::None)
             }
         } else {
             for overlay in frame.overlays {
-                let _drawn = render_layout_target(self.handle, frame.layout,
+                let _drawn = render_layout_target(self.handle, self.text_cache, frame.layout,
                     overlay, Option[Rect]::None,)
             }
         }
+        for layer in frame.ui_layers {
+            render_layout(self.handle, self.text_cache, layer.layout, Option[Rect]::Some(layer.clip))
+        }
+        replay_display_overlays(self.handle, frame.display_overlays, true)
         ret native_end(self.handle)
     }
     /// Records the retained UI transaction and lends Graphene the active
@@ -1562,24 +2600,29 @@ impl for Window {
             for slot in frame.surfaces {
                 excluded.push(slot.id)
             }
-            render_layout_filtered(self.handle, frame.layout,
+            render_layout_filtered(self.handle, self.text_cache, frame.layout,
                 Option[Rect]::None, excluded,)
         }
         if !native_direct_composition_split(self.handle) {
             ret VulkanFrameInterop::new(0_usize, 0_usize, 0_u32, 0_u32)
         }
+        replay_display_overlays(self.handle, frame.display_overlays, false)
         if frame.cached_overlays {
             let _overlay = native_overlay_cache_draw(self.handle)
         } elif frame.overlay_layouts.len() > 0_usize {
             for overlay in frame.overlay_layouts {
-                render_layout(self.handle, overlay, Option[Rect]::None)
+                render_layout(self.handle, self.text_cache, overlay, Option[Rect]::None)
             }
         } else {
             for overlay in frame.overlays {
-                let _drawn = render_layout_target(self.handle, frame.layout,
+                let _drawn = render_layout_target(self.handle, self.text_cache, frame.layout,
                     overlay, Option[Rect]::None,)
             }
         }
+        for layer in frame.ui_layers {
+            render_layout(self.handle, self.text_cache, layer.layout, Option[Rect]::Some(layer.clip))
+        }
+        replay_display_overlays(self.handle, frame.display_overlays, true)
         let borrowed = native_direct_frame_acquire(self.handle)
         ret VulkanFrameInterop::new(borrowed, self.direct_swapchain,
             self.pixel_width(), self.pixel_height(),)
@@ -1613,7 +2656,7 @@ impl for Window {
             let _overlay = native_overlay_cache_draw(self.handle)
         } else {
             for overlay in overlay_layouts {
-                render_layout(self.handle, overlay, Option[Rect]::None)
+                render_layout(self.handle, self.text_cache, overlay, Option[Rect]::None)
             }
         }
         let borrowed = native_direct_frame_prepare(self.handle)
@@ -1660,7 +2703,7 @@ impl for Window {
             if frame.external_target != "" {
                 excluded.push(frame.external_target)
             }
-            render_layout_filtered(self.handle, frame.layout, Option[Rect]::None, excluded)
+            render_layout_filtered(self.handle, self.text_cache, frame.layout, Option[Rect]::None, excluded)
         }
         match frame.external_image {
             Option::Some(_) => {
@@ -1692,12 +2735,12 @@ impl for Window {
             let _overlay = native_overlay_cache_draw(self.handle)
         } elif frame.overlay_layouts.len() > 0_usize {
             for overlay_layout in frame.overlay_layouts {
-                render_layout(self.handle, overlay_layout, Option[Rect]::None)
+                render_layout(self.handle, self.text_cache, overlay_layout, Option[Rect]::None)
             }
         } else {
             for overlay in frame.overlays {
                 if overlay != "" && overlay != frame.external_target {
-                    let _drawn = render_layout_target(self.handle, frame.layout,
+                    let _drawn = render_layout_target(self.handle, self.text_cache, frame.layout,
                         overlay, Option[Rect]::None,)
                 }
             }
@@ -1725,7 +2768,7 @@ impl for Window {
         {
             ret false
         }
-        render_layout_filtered(self.handle, layout, Option[Rect]::None, excluded)
+        render_layout_filtered(self.handle, self.text_cache, layout, Option[Rect]::None, excluded)
         ret native_layout_cache_end(self.handle)
     }
     /// Rebuilds the transparent layer composited above an embedded renderer.
@@ -1736,7 +2779,7 @@ impl for Window {
             ret false
         }
         for layout in layouts {
-            render_layout(self.handle, layout, Option[Rect]::None)
+            render_layout(self.handle, self.text_cache, layout, Option[Rect]::None)
         }
         ret native_overlay_cache_end(self.handle)
     }
@@ -1790,61 +2833,59 @@ impl for Window {
     /// them never destroys the cached content underneath.
     pub fn commit_cached_layout_targets(self: Self, layout: WidgetLayout,
         targets: Vec[str], transient_targets: Vec[str],) -> bool {
+        let mut indexed = ReactiveUi::new(layout)
+        for target in targets {
+            indexed.invalidate_paint(target)
+        }
+        ret self.commit_cached_reactive_targets(indexed, transient_targets)
+    }
+    /// Uses the caller's retained index and old/new damage without constructing
+    /// another widget tree. Transient descendants never enter the stable cache.
+    pub fn commit_cached_reactive_targets(self: Self, reactive: mut ReactiveUi, transient_targets: Vec[str]) -> bool {
+        ret self.commit_filtered_layout_regions(reactive.layout(), reactive.stable_paint_regions(transient_targets), transient_targets)
+    }
+    /// Replays the current scene through each visual damage region.
+    pub fn commit_cached_layout_regions(self: Self, layout: WidgetLayout,
+        regions: Vec[Rect],) -> bool {
+        ret self.commit_filtered_layout_regions(layout, regions, Vec[str]::new())
+    }
+    fn commit_filtered_layout_regions(self: Self, layout: WidgetLayout,
+        regions: Vec[Rect], excluded: Vec[str],) -> bool {
         if self.handle == 0_usize {
             ret false
         }
         let mut committed = true
         let mut committed_bounds = Vec[Rect]::new()
-        for target in targets {
-            let mut transient = false
-            for transient_target in transient_targets {
-                if target == transient_target {
-                    transient = true
+        for bounds in regions {
+            let mut covered = false
+            for previous in committed_bounds {
+                if bounds.x() >= previous.x() && bounds.y() >= previous.y() &&
+                bounds.right() <= previous.right() && bounds.bottom() <= previous.bottom() {
+                    covered = true
                 }
             }
-            if target != "" && !transient {
-                match layout.find_bounds(target) {
-                    Option[Rect]::Some(bounds) => {
-                        let mut covered = false
-                        for previous in committed_bounds {
-                            if bounds.x() >= previous.x() && bounds.y() >= previous.y() &&
-                            bounds.right() <= previous.right() &&
-                            bounds.bottom() <= previous.bottom() {
-                                covered = true
-                            }
-                        }
-                        if !covered {
-                            if native_layout_cache_patch_begin(self.handle,
-                                self.background.packed(), bounds.x(), bounds.y(),
-                                bounds.width(), bounds.height(),) {
-                                // Repaint the complete scene through the dirty
-                                // rectangle. Rendering only the target loses
-                                // translucent parent backgrounds and
-                                // overlapping siblings after the cache region
-                                // is cleared.
-                                render_layout(self.handle, layout, Option[Rect]::Some(bounds))
-                                let rendered = true
-                                committed = native_layout_cache_end(self.handle) &&
-                                rendered && committed
-                                if rendered {
-                                    committed_bounds.push(bounds)
-                                }
-                            } else {
-                                committed = false
-                            }
-                        }
-                    }
-                    // The target may have been removed by a later parent
-                    // replacement in the same transaction. The parent patch
-                    // already clears its former pixels.
-                    Option[Rect]::None => {
-                    }
+            if !covered {
+                if native_layout_cache_patch_begin(self.handle, self.background.packed(),
+                    bounds.x(), bounds.y(), bounds.width(), bounds.height(),) {
+                    render_layout_filtered(self.handle, self.text_cache, layout, Option[Rect]::Some(bounds), excluded)
+                    committed = native_layout_cache_end(self.handle) && committed
+                    committed_bounds.push(bounds)
+                } else {
+                    committed = false
                 }
             }
         }
         ret committed
     }
     pub fn destroy(self: Self) -> bool {
+        self.text_cache.clear()
+        match self.bindings {
+            Some(owner) => {
+                let _unmounted = owner.bindings.unmount(owner.root)
+            }
+            None => {
+            }
+        }
         if self.handle == 0_usize {
             ret false
         }
@@ -1855,37 +2896,142 @@ impl for Window {
         if self.direct_compositor != 0_usize {
             destroyed = direct_ui_destroy(self.direct_compositor) && destroyed
         }
-        if self.direct_swapchain != 0_usize {
-            destroyed = direct_swapchain_destroy(self.direct_swapchain) && destroyed
-        }
-        if self.direct_device != 0_usize {
-            destroyed = direct_device_destroy(self.direct_device) && destroyed
-        }
-        if self.direct_window != 0_usize {
-            destroyed = direct_window_destroy(self.direct_window) && destroyed
-        }
         if self.direct_context != 0_usize {
-            destroyed = direct_context_destroy(self.direct_context) && destroyed
+            if !direct_context_destroy(self.direct_context) {
+                ret false
+            }
         }
         ret native_destroy(self.handle) && destroyed
     }
 }
 
-fn failed_direct_window(handle: usize, context: usize, window: usize,
-    device: usize, swapchain: usize, compositor: usize, message: str,
+pub struct WindowEvent {
+    window: WindowId
+    event: Event
+}
+
+impl for WindowEvent {
+    pub fn window(self: Self) -> WindowId {
+        ret self.window
+    }
+    pub fn event(self: Self) -> Event {
+        ret self.event
+    }
+}
+struct WindowMember {
+    id: WindowId
+    window: Window
+}
+
+/// Main-thread event routing for several independently rendered windows.
+/// Removing a window does not destroy it; the host first moves its panels out.
+pub struct WindowSet {
+    members: Vec[WindowMember]
+    cursor: usize
+}
+
+impl for WindowSet {
+    pub fn new() -> WindowSet<H> {
+        ret WindowSet<H>{ Vec[WindowMember]::new(), 0 }
+    }
+    pub fn add(self: mut Self&, window: Window) -> WindowId {
+        for member in self.members {
+            if member.window.handle == window.handle {
+                ret member.id
+            }
+        }
+        if !window.is_open() {
+            ret WindowId::new(0)
+        }
+        let id = WindowId::new(reactive_identity())
+        self.members.push(WindowMember { id, window })
+        ret id
+    }
+    pub fn get(self: Self&, id: WindowId) -> Option[Window] {
+        for member in self.members {
+            if member.id.same(id) {
+                ret Option[Window]::Some(member.window)
+            }
+        }
+        ret Option[Window]::None
+    }
+    pub fn update(self: mut Self&, id: WindowId, window: Window) -> bool {
+        let mut index = 0_usize
+        for member in self.members {
+            if member.id.same(id) {
+                if member.window.handle != window.handle {
+                    ret false
+                }
+                self.members.set(index, WindowMember { id, window })
+                ret true
+            }
+            index += 1
+        }
+        ret false
+    }
+    pub fn remove(self: mut Self&, id: WindowId) -> bool {
+        let mut remaining = Vec[WindowMember]::new()
+        let mut found = false
+        for member in self.members {
+            if member.id.same(id) {
+                found = true
+            } else {
+                remaining.push(member)
+            }
+        }
+        self.members = remaining
+        if self.cursor >= self.members.len() {
+            self.cursor = 0
+        }
+        ret found
+    }
+    pub fn ids(self: Self&) -> Vec[WindowId] {
+        let mut ids = Vec[WindowId]::new()
+        for member in self.members {
+            ids.push(member.id)
+        }
+        ret ids
+    }
+    /// Round-robin delivery prevents a busy viewport from starving a text panel.
+    pub fn poll(self: mut Self&) -> Option[WindowEvent] {
+        let count = self.members.len()
+        for offset in 0..count {
+            let index =(self.cursor + offset) % count
+            match self.members.get(index) {
+                Some(member) => {
+                    let event = member.window.poll()
+                    if event.kind() != event_none() {
+                        self.cursor =(index + 1) % count
+                        ret Option[WindowEvent]::Some(WindowEvent { member.id, event })
+                    }
+                }
+                None => {
+                }
+            }
+        }
+        ret Option[WindowEvent]::None
+    }
+    /// One OS wait wakes for any window; no sequential per-window timeouts.
+    pub fn wait(self: mut Self&, timeout_ms: u32) -> Option[WindowEvent] {
+        let queued = self.poll()
+        if queued.is_some() || self.members.len() == 0 {
+            ret queued
+        }
+        let timeout = if timeout_ms > 2147483647_u32 {
+            2147483647_i32
+        } else {
+            timeout_ms as i32
+        }
+        let _ready = native_wait_any(timeout)
+        ret self.poll()
+    }
+}
+
+fn failed_direct_window(handle: usize, context: usize, compositor: usize, message: str,
     width: u32, height: u32,) -> Window {
     native_backend_set_error(message)
     if compositor != 0_usize {
         let _compositor = direct_ui_destroy(compositor)
-    }
-    if swapchain != 0_usize {
-        let _swapchain = direct_swapchain_destroy(swapchain)
-    }
-    if device != 0_usize {
-        let _device = direct_device_destroy(device)
-    }
-    if window != 0_usize {
-        let _window = direct_window_destroy(window)
     }
     if context != 0_usize {
         let _context = direct_context_destroy(context)
@@ -1895,7 +3041,7 @@ fn failed_direct_window(handle: usize, context: usize, window: usize,
     }
     ret Window {
         0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
-        StyleSheet::default()
+        StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
     }
 }
 
@@ -1905,39 +3051,27 @@ fn create_direct_vulkan_window(title: str, width: u32, height: u32,
     if handle == 0_usize {
         ret Window {
             0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
-            StyleSheet::default()
+            StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
         }
     }
-    let context = direct_context_create()
+    let context = direct_context_create(native_platform_handle(handle),
+        features.required().mask(), features.optional().mask(),)
     if !direct_context_available(context) {
-        ret failed_direct_window(handle, context, 0_usize, 0_usize, 0_usize, 0_usize,
+        ret failed_direct_window(handle, context, 0_usize,
             direct_context_error(context), width, height,)
     }
-    let window = direct_window_attach(context, native_platform_handle(handle), width, height)
-    if !direct_window_available(window) {
-        ret failed_direct_window(handle, context, window, 0_usize, 0_usize, 0_usize,
-            direct_window_error(window), width, height,)
-    }
-    let device = direct_device_create_features(context, window,
-        features.required().mask(), features.optional().mask(),)
-    if !direct_device_available(device) {
-        ret failed_direct_window(handle, context, window, device, 0_usize, 0_usize,
-            direct_device_error(device), width, height,)
-    }
-    let swapchain = direct_swapchain_create(device, window)
-    if !direct_swapchain_available(swapchain) {
-        ret failed_direct_window(handle, context, window, device, swapchain, 0_usize,
-            direct_swapchain_error(swapchain), width, height,)
-    }
+    let window = direct_context_surface(context)
+    let device = direct_context_device(context)
+    let swapchain = direct_context_swapchain(context)
     let compositor = direct_ui_create(device, swapchain)
     if !direct_ui_available(compositor) ||
     !native_direct_compositor_bind(handle, compositor) {
-        ret failed_direct_window(handle, context, window, device, swapchain, compositor,
+        ret failed_direct_window(handle, context, compositor,
             direct_ui_error(compositor), width, height,)
     }
     ret Window {
         handle, width, height, white(), context, window, device, swapchain, compositor,
-        StyleSheet::default()
+        StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
     }
 }
 
@@ -2021,6 +3155,14 @@ fn collect_surface_slots_clipped(layout: WidgetLayout, scale_x: f32,
     ret()
 }
 
+fn replay_display_overlays(handle: usize, overlays: Vec[DisplayOverlay], foreground: bool) ->() {
+    for overlay in overlays {
+        if overlay.foreground == foreground {
+            replay_display_commands(handle, overlay.list.commands(), Option[Rect]::Some(overlay.clip))
+        }
+    }
+}
+
 fn replay_display_commands(handle: usize, commands: Vec[DisplayCommand],
     damage: Option[Rect],) ->() {
     apply_clip(handle, damage)
@@ -2045,6 +3187,13 @@ fn replay_display_commands(handle: usize, commands: Vec[DisplayCommand],
                 native_vector_line(handle, value.x0(), value.y0(), value.x1(), value.y1(),
                     value.width(), value.color().packed(),)
             }
+            DisplayCommand::GradientLine(value) => {
+                native_vector_gradient_line(handle, value.x0(), value.y0(), value.x1(), value.y1(),
+                    value.width(), value.start_color().packed(), value.end_color().packed(),)
+            }
+            DisplayCommand::Svg(value) => {
+                render_svg(handle, value.bounds(), value.document(), value.color(), value.stroke_width())
+            }
             DisplayCommand::Text(value) => {
                 native_text(handle, value.x(), value.y(), value.value(), value.color().packed())
             }
@@ -2055,16 +3204,41 @@ fn replay_display_commands(handle: usize, commands: Vec[DisplayCommand],
                     apply_clip(handle, damage)
                 }
             }
+            DisplayCommand::Path(value) => {
+                let mut first = true
+                for point in value.points() {
+                    if first {
+                        native_vector_path_begin(handle, point.x(), point.y())
+                        first = false
+                    } else {
+                        native_vector_path_point(handle, point.x(), point.y())
+                    }
+                }
+                if !first {
+                    native_vector_path_stroke(handle, value.width(), value.color().packed(), value.closed())
+                }
+            }
+            DisplayCommand::Triangle(value) => {
+                native_vector_triangle(handle, value.a().x(), value.a().y(), value.b().x(), value.b().y(),
+                    value.c().x(), value.c().y(), value.color().packed(),)
+            }
+            DisplayCommand::StyledText(value) => {
+                let style = value.style()
+                if style.font_family() == "" || !native_font_select(handle, style.font_family(), style.font_size(), style.font_weight()) {
+                    native_font_style(handle, style.font_size(), style.font_weight())
+                }
+                native_text(handle, value.x(), value.y(), value.value(), apply_opacity(style.foreground(), style.opacity()).packed())
+            }
         }
     }
     apply_clip(handle, Option[Rect]::None)
     ret()
 }
 
-fn render_layout_target(handle: usize, layout: WidgetLayout, target: str, inherited_clip: Option[Rect])
+fn render_layout_target(handle: usize, cache: mut WindowTextCache&, layout: WidgetLayout, target: str, inherited_clip: Option[Rect])
 -> bool {
     if layout.widget().id() == target {
-        render_layout(handle, layout, inherited_clip)
+        render_layout(handle, cache, layout, inherited_clip)
         ret true
     }
     let bounds = layout.bounds()
@@ -2078,7 +3252,7 @@ fn render_layout_target(handle: usize, layout: WidgetLayout, target: str, inheri
     while index < children.len() {
         match children.get(index) {
             Option[WidgetLayout]::Some(child) => {
-                if render_layout_target(handle, child, target, clip) {
+                if render_layout_target(handle, cache, child, target, clip) {
                     ret true
                 }
             }
@@ -2090,12 +3264,12 @@ fn render_layout_target(handle: usize, layout: WidgetLayout, target: str, inheri
     ret false
 }
 
-fn render_layout(handle: usize, layout: WidgetLayout, inherited_clip: Option[Rect]) ->() {
-    render_layout_filtered(handle, layout, inherited_clip, Vec[str]::new())
+fn render_layout(handle: usize, cache: mut WindowTextCache&, layout: WidgetLayout, inherited_clip: Option[Rect]) ->() {
+    render_layout_filtered(handle, cache, layout, inherited_clip, Vec[str]::new())
     ret()
 }
 
-fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: Option[Rect],
+fn render_layout_filtered(handle: usize, cache: mut WindowTextCache&, layout: WidgetLayout, inherited_clip: Option[Rect],
     excluded: Vec[str],) ->() {
     let widget = layout.widget()
     if contains_target(excluded, widget.id()) {
@@ -2103,6 +3277,11 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
     }
     let bounds = layout.bounds()
     let style = widget.style()
+    // Opacity applies to the whole group, including explicitly styled children.
+    // Retained hidden overlays must neither paint descendants nor shape text.
+    if style.opacity() <= 0_f32 {
+        ret()
+    }
     // Dirty-region commits pass the damage rectangle as the inherited clip.
     // A clipping container whose bounds do not touch that damage cannot
     // contribute any pixels, including through its descendants.
@@ -2125,12 +3304,14 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
     } else {
         inherited_clip
     }
-    apply_clip(handle, clip)
+    // Overflow clips content/descendants, not this box's own outline or
+    // outer shadow. Decorations are still clipped by ancestors and damage.
+    apply_clip(handle, inherited_clip)
     let background = apply_opacity(style.background(), opacity)
     let foreground = apply_opacity(style.foreground(), opacity)
     let border_color = apply_opacity(style.border_color(), opacity)
     if !style.visible() {
-        render_children_filtered(handle, layout, clip, excluded)
+        render_children_filtered(handle, cache, layout, clip, excluded)
         apply_clip(handle, inherited_clip)
         ret()
     }
@@ -2153,7 +3334,7 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
     }
     if style.shadow().inset() {
         render_inset_shadow(handle, bounds, style, opacity)
-        apply_clip(handle, clip)
+        apply_clip(handle, inherited_clip)
     }
     if style.border_width() > 0.0_f32 {
         let mut inset = 0.0_f32
@@ -2209,6 +3390,7 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
             layer = layer + 1.0_f32
         }
     }
+    apply_clip(handle, clip)
     let kind = widget.kind()
     if kind == widget_label() || kind == widget_button() || kind == widget_heading() {
         if widget.text_wrap() {
@@ -2216,9 +3398,24 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
                 widget.text(), foreground.packed(), bounds.width() - 16.0_f32,)
         } else {
             let text_y = centered_text_y(handle, bounds, widget.text())
-            let text_x = aligned_text_x(handle, bounds, widget.text(), style.text_align(), 8.0_f32, 8.0_f32)
-            native_text(handle, text_x, text_y, widget.text(), foreground.packed())
-            render_text_decoration(handle, text_x, text_y, widget.text(), style, foreground, opacity)
+            let left = if kind == widget_label() {
+                style.padding().left() + style.border_width()
+            } else {
+                8.0_f32
+            }
+            let right = if kind == widget_label() {
+                style.padding().right() + style.border_width()
+            } else {
+                8.0_f32
+            }
+            let value = if widget.attribute("data-luma-text-overflow").unwrap_or("") == "ellipsis" {
+                ellipsized_text(handle, widget.text(), bounds.width() - left - right)
+            } else {
+                widget.text()
+            }
+            let text_x = aligned_text_x(handle, bounds, value, style.text_align(), left, right)
+            native_text(handle, text_x, text_y, value, foreground.packed())
+            render_text_decoration(handle, text_x, text_y, value, style, foreground, opacity)
         }
     } elif kind == widget_rich_text() {
         let text_y = centered_text_y(handle, bounds, widget.text())
@@ -2245,21 +3442,48 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
         render_svg(handle, icon_bounds, widget.svg(), foreground, 2.0_f32)
         let text_x = icon_bounds.right() + 9.0_f32
         let text_y = centered_text_y(handle, bounds, widget.text())
-        native_text(handle, text_x, text_y, widget.text(), foreground.packed())
-        render_text_decoration(handle, text_x, text_y, widget.text(), style, foreground, opacity)
-    } elif kind == widget_icon_card() {
-        let available = bounds.height() - 34.0_f32
-        let icon_size = if available < 46.0_f32 {
-            available
+        let value = if widget.attribute("data-luma-text-overflow").unwrap_or("") == "ellipsis" {
+            ellipsized_text(handle, widget.text(), bounds.right() - text_x - 6_f32)
         } else {
-            46.0_f32
+            widget.text()
         }
-        let icon_bounds = Rect::new(bounds.x() +(bounds.width() - icon_size) / 2.0_f32,
-            bounds.y() + 10.0_f32, icon_size, icon_size,)
+        native_text(handle, text_x, text_y, value, foreground.packed())
+        render_text_decoration(handle, text_x, text_y, value, style, foreground, opacity)
+    } elif kind == widget_icon_card() {
+        let caption = Rect::new(bounds.x() + 8.0, bounds.y() + 8.0,
+            if bounds.width() > 16.0 {
+                bounds.width() - 16.0
+            } else {
+                0.0_f32
+            }
+            ,
+            if bounds.height() > 18.0 {
+                bounds.height() - 18.0
+            } else {
+                0.0_f32
+            }
+            ,)
+        let lines = caption_lines(handle, widget.text(), caption.width())
+        let line_height = native_text_height(handle, "Mg")
+        let wanted_y = bounds.bottom() -(lines.len() as f32) * line_height - 10.0
+        let text_y = if wanted_y > caption.y() {
+            wanted_y
+        } else {
+            caption.y()
+        }
+        let icon_bounds = icon_card_bounds(bounds, text_y)
         render_svg(handle, icon_bounds, widget.svg(), foreground, 2.0_f32)
-        let text_x = aligned_text_x(handle, bounds, widget.text(), text_center(), 8.0_f32, 8.0_f32)
-        let text_y = bounds.bottom() - native_text_height(handle, widget.text()) - 10.0_f32
-        native_text(handle, text_x, text_y, widget.text(), foreground.packed())
+        apply_clip(handle, clipped_bounds(clip, caption))
+        let mut y = text_y
+        for line in lines {
+            let x = caption.x() +(caption.width() - native_text_width(handle, line)) / 2.0
+            if y + line_height > caption.bottom() + 0.01 {
+                break
+            }
+            native_text(handle, x, y, line, foreground.packed())
+            y += line_height
+        }
+        apply_clip(handle, clip)
     } elif kind == widget_input() || kind == widget_select() {
         let text_y = centered_text_y(handle, bounds, widget.text())
         let aligned_x = aligned_text_x(handle, bounds, widget.text(), style.text_align(), 10.0_f32,
@@ -2298,7 +3522,7 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
                 style.accent_color().packed(),)
         }
     } elif kind == widget_textarea() {
-        render_textarea(handle, bounds, widget, style, foreground, opacity)
+        render_textarea(handle, cache, bounds, widget, style, foreground, opacity)
     } elif kind == widget_terminal() {
         native_terminal(handle, bounds.x() + 8.0_f32, bounds.y() + 6.0_f32,
             bounds.width() - 16.0_f32, bounds.height() - 12.0_f32,
@@ -2329,8 +3553,11 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
         native_line(handle, text_x, bounds.bottom() - 4.0_f32,
             text_x + native_text_width(handle, widget.text()), bounds.bottom() - 4.0_f32, link.packed(),)
     } elif kind == widget_color_picker() {
+        let sample = match widget.attribute("data-luma-picker-color") {
+            Some(value) => css_color(value) None => border_color
+        }
         native_fill_rect(handle, bounds.x() + 8.0_f32, bounds.y() + 8.0_f32, 22.0_f32, bounds.height()
-            - 16.0_f32, border_color.packed(),)
+            - 16.0_f32, sample.packed(),)
         native_stroke_rect(handle, bounds.x() + 8.0_f32, bounds.y() + 8.0_f32, 22.0_f32, bounds.height()
             - 16.0_f32, Color::rgb(92_u8, 103_u8, 116_u8).packed(),)
         let text_x = bounds.x() + 40.0_f32
@@ -2344,7 +3571,13 @@ fn render_layout_filtered(handle: usize, layout: WidgetLayout, inherited_clip: O
     } elif kind == widget_color_swatch() {
     }
     if kind != widget_rich_text() {
-        render_children_filtered(handle, layout, clip, excluded)
+        render_children_filtered(handle, cache, layout, clip, excluded)
+    }
+    let thumb = layout.scrollbar_thumb()
+    if thumb.height() > 0.0_f32 {
+        apply_clip(handle, clip)
+        native_round_rect(handle, thumb.x(), thumb.y(), thumb.width(), thumb.height(),
+            4.0_f32, apply_opacity(style.foreground(), opacity * 0.5_f32).packed(), true,)
     }
     apply_clip(handle, inherited_clip)
     ret()
@@ -2385,55 +3618,18 @@ fn widget_renders_intrinsic_box(kind: usize) -> bool {
 
 fn render_linear_gradient(handle: usize, bounds: Rect, style: Style, opacity: f32) ->() {
     let gradient = style.linear_gradient()
-    let extent = if gradient.is_vertical() {
-        bounds.height()
-    } else {
-        bounds.width()
-    }
-    let mut steps = extent as usize
-    if steps < 1_usize {
-        steps = 1_usize
-    }
-    if steps > 64_usize {
-        steps = 64_usize
-    }
-    let mut index = 0_usize
-    while index < steps {
-        let progress = if steps > 1_usize {
-            index as f32 /(steps - 1_usize) as f32
-        } else {
-            0.0_f32
-        }
-        let color = apply_opacity(mix_gradient_color(gradient.start(), gradient.end(), progress), opacity)
-        let offset = extent * index as f32 / steps as f32
-        let size = extent / steps as f32 + 1.0_f32
-        if gradient.is_vertical() {
-            native_fill_rect(handle, bounds.x(), bounds.y() + offset, bounds.width(), size, color.packed())
-        } else {
-            native_fill_rect(handle, bounds.x() + offset, bounds.y(), size, bounds.height(), color.packed())
-        }
-        index = index + 1_usize
-    }
-    ret()
+    native_gradient_rect(handle, bounds.x(), bounds.y(), bounds.width(), bounds.height(),
+        apply_opacity(gradient.start(), opacity).packed(), apply_opacity(gradient.end(), opacity).packed(), gradient.is_vertical(),)
 }
 
-fn mix_gradient_color(start: Color, end: Color, progress: f32) -> Color {
-    ret Color::rgba(
-        ((start.red() as f32) +((end.red() as f32) -(start.red() as f32)) * progress) as u8,
-        ((start.green() as f32) +((end.green() as f32) -(start.green() as f32)) * progress) as u8,
-        ((start.blue() as f32) +((end.blue() as f32) -(start.blue() as f32)) * progress) as u8,
-        ((start.alpha() as f32) +((end.alpha() as f32) -(start.alpha() as f32)) * progress) as u8,
-    )
-}
-
-fn render_children_filtered(handle: usize, layout: WidgetLayout, clip: Option[Rect],
+fn render_children_filtered(handle: usize, cache: mut WindowTextCache&, layout: WidgetLayout, clip: Option[Rect],
     excluded: Vec[str],) ->() {
     let children = layout.children()
     let mut index = 0_usize
     while index < children.len() {
         match children.get(index) {
             Option[WidgetLayout]::Some(child) => {
-                render_layout_filtered(handle, child, clip, excluded)
+                render_layout_filtered(handle, cache, child, clip, excluded)
             }
             Option[WidgetLayout]::None => {
             }
@@ -2470,8 +3666,22 @@ fn render_svg(handle: usize, bounds: Rect, document: SvgDocument, color: Color, 
     } else {
         scale_y
     }
-    let offset_x = bounds.x() +(bounds.width() - document.width() * scale) / 2.0_f32
-    let offset_y = bounds.y() +(bounds.height() - document.height() * scale) / 2.0_f32
+    let mut offset_x = bounds.x() +(bounds.width() - document.width() * scale) / 2.0_f32
+    let mut offset_y = bounds.y() +(bounds.height() - document.height() * scale) / 2.0_f32
+    let capture = native_vector_cache_begin(handle, document.source(), scale,
+        stroke_width, offset_x, offset_y, color.packed(),)
+    if capture == 1 {
+        ret()
+    }
+    if capture == 2 {
+        offset_x = 0.0
+        offset_y = 0.0
+    }
+    let packed_color = if capture == 2 {
+        4294967295_u32
+    } else {
+        color.packed()
+    }
     let lines = document.lines()
     let thickness = stroke_width * scale
     let mut previous_x = 0.0_f32
@@ -2491,7 +3701,7 @@ fn render_svg(handle: usize, bounds: Rect, document: SvgDocument, color: Color, 
                 let y1 = offset_y +(finish.y() - document.min_y()) * scale
                 if !has_previous || previous_x != x0 || previous_y != y0 {
                     if has_previous {
-                        native_vector_path_stroke(handle, thickness, color.packed(), false)
+                        native_vector_path_stroke(handle, thickness, packed_color, false)
                     }
                     native_vector_path_begin(handle, x0, y0)
                     path_start_x = x0
@@ -2508,8 +3718,11 @@ fn render_svg(handle: usize, bounds: Rect, document: SvgDocument, color: Color, 
         index = index + 1_usize
     }
     if has_previous {
-        native_vector_path_stroke(handle, thickness, color.packed(),
+        native_vector_path_stroke(handle, thickness, packed_color,
             previous_x == path_start_x && previous_y == path_start_y,)
+    }
+    if capture == 2 {
+        native_vector_cache_end(handle)
     }
     ret()
 }
@@ -2552,12 +3765,205 @@ struct WrappedLine {
     hard_break: bool
 }
 
+struct TextareaLines {
+    id: str
+    value: str
+    width: f32
+    family: str
+    size: f32
+    weight: u32
+    density: f32
+    lines: Vec[WrappedLine]
+}
+struct SyntaxToken {
+    text: str
+    x: f32
+    color: u32
+    styled: bool
+}
+struct SyntaxTokens {
+    value: str
+    language: str
+    family: str
+    size: f32
+    weight: u32
+    density: f32
+    color: u32
+    tokens: Vec[SyntaxToken]
+    bytes: usize
+}
+/// Per-window caches hold descriptors only; native textures keep their own budget.
+struct WindowTextCache {
+    layouts: Vec[TextareaLines]
+    syntax: Vec[SyntaxTokens]
+    next_layout: usize
+    next_syntax: usize
+    syntax_bytes: usize
+}
+
+impl for WindowTextCache {
+    pub fn clear(self: mut Self&) ->() {
+        self.layouts = Vec[TextareaLines]::new() self.syntax = Vec[SyntaxTokens]::new()
+        self.next_layout = 0_usize self.next_syntax = 0_usize self.syntax_bytes = 0_usize
+        ret()
+    }
+    pub fn new() -> WindowTextCache<H> {
+        ret WindowTextCache<H> {
+            Vec[TextareaLines]::new(), Vec[SyntaxTokens]::new(), 0_usize, 0_usize, 0_usize
+        }
+    }
+    pub fn lines(self: mut Self&, handle: usize, widget: Widget, width: f32) -> Vec[WrappedLine] {
+        let value = widget.text() let style = widget.style() let density = native_pixel_density(handle)
+        for entry in self.layouts {
+            if entry.id == widget.id() && entry.value == value && entry.width == width && entry.family == style.font_family() &&
+            entry.size == style.font_size() && entry.weight == style.font_weight() && entry.density == density {
+                ret entry.lines
+            }
+        }
+        let mut result = Vec[WrappedLine]::new()
+        let mut byte = 0_usize let mut chars = 0_usize
+        while byte < value.byte_len() {
+            let end = value.find_byte_from(10_u8, byte)
+            let text = value.slice_bytes(byte, end - byte)
+            let length = text.char_len()
+            let hard = end < value.byte_len()
+            if widget.attribute("wrap").is_some() || length == 0_usize {
+                result.push(WrappedLine {
+                        chars, chars + length, chars + length + if hard {
+                            1_usize
+                        } else {
+                            0_usize
+                        }
+                        , hard
+                    }
+                )
+            } else {
+                let mut local = 0_usize
+                while local < length {
+                    let wrapped = wrapped_line(handle, text, local, width)
+                    let last = wrapped.next >= length
+                    result.push(WrappedLine {
+                            chars + wrapped.start, chars + wrapped.end,
+                            chars + wrapped.next + if last && hard {
+                                1_usize
+                            } else {
+                                0_usize
+                            }
+                            , last && hard
+                        }
+                    )
+                    local = wrapped.next
+                }
+            }
+            chars += length + if hard {
+                1_usize
+            } else {
+                0_usize
+            }
+            byte = end + if hard {
+                1_usize
+            } else {
+                0_usize
+            }
+        }
+        if result.len() == 0_usize {
+            result.push(WrappedLine { 0_usize, 0_usize, 0_usize, false })
+        }
+        if value.byte_len() <= 262144_usize {
+            let entry = TextareaLines {
+                widget.id(), value, width, style.font_family(), style.font_size(), style.font_weight(), density, result
+            }
+            let mut found = false let mut index = 0_usize
+            for previous in self.layouts {
+                if previous.id == widget.id() {
+                    self.layouts.set(index, entry) found = true break
+                }
+                index += 1_usize
+            }
+            if !found {
+                if self.layouts.len() < 8_usize {
+                    self.layouts.push(entry)
+                } else {
+                    self.layouts.set(self.next_layout % 8_usize, entry) self.next_layout += 1_usize
+                }
+            }
+        }
+        ret result
+    }
+    pub fn tokens(self: mut Self&, handle: usize, value: str, color: Color, language: str, style: Style) -> Vec[SyntaxToken] {
+        let density = native_pixel_density(handle)
+        for entry in self.syntax {
+            if entry.value == value && entry.language == language && entry.family == style.font_family() && entry.size == style.font_size() &&
+            entry.weight == style.font_weight() && entry.density == density && entry.color == color.packed() {
+                ret entry.tokens
+            }
+        }
+        let tokens = syntax_tokens(handle, value, color, language)
+        let mut bytes = value.byte_len() + tokens.len() * 64_usize
+        for token in tokens {
+            bytes += token.text.byte_len()
+        }
+        if bytes <= 1048576_usize {
+            while self.syntax_bytes + bytes > 1048576_usize && self.syntax.len() > 0_usize {
+                let old = self.syntax.pop().unwrap_or(SyntaxTokens {
+                        "", "", "", 0_f32, 0_u32, 0_f32, 0_u32, Vec[SyntaxToken]::new(), 0_usize
+                    }
+                )
+                self.syntax_bytes -= old.bytes
+            }
+            let entry = SyntaxTokens {
+                value, language, style.font_family(), style.font_size(), style.font_weight(), density, color.packed(), tokens, bytes
+            }
+            if self.syntax.len() < 256_usize {
+                self.syntax.push(entry)
+            } else {
+                let index = self.next_syntax % 256_usize
+                self.syntax_bytes -= self.syntax.get(index).unwrap_or(entry).bytes
+                self.syntax.set(index, entry) self.next_syntax += 1_usize
+            }
+            self.syntax_bytes += bytes
+        }
+        ret tokens
+    }
+}
+
+#attr(test)
+fn textarea_cache_preserves_wrapping_metrics_and_font_invalidation() -> bool {
+    let window = Window::create_with_renderer("Textarea cache", 360, 240, RendererKind::Software)
+    if !window.available() {
+        ret false
+    }
+    let font = "assets/fonts/RobotoMono/RobotoMono-VariableFont_wght.ttf"
+    if !window.register_font("Cache Mono", font) {
+        window.destroy() ret false
+    }
+    let text = "abc Ж😀 def ghi jkl\n\nsecond visual line\n"
+    let mut valid = true
+    for size in vec![14_f32, 22_f32] {
+        let _selected = window.select_font("Cache Mono", size, 400_u32)
+        for width in vec![80_f32, 140_f32] {
+            let style = Style::default().with_font_family("Cache Mono").with_font_size(size).with_scroll(0_f32, 18_f32)
+            let field = Widget::textarea("cached", text).with_style(style)
+            let bounds = Rect::new(30_f32, 20_f32, width + 20_f32, 180_f32)
+            let expected = wrapped_text_index(window.handle, text, width, 24_f32, 53_f32)
+            valid = valid && window.textarea_text_index(field, bounds, 64_f32, 65_f32) == expected
+        }
+    }
+    let style = Style::default().with_font_family("Cache Mono").with_font_size(22_f32)
+    let first = window.text_cache.tokens(window.handle, "let α = 123 // 😀", Color::rgb(200_u8, 200_u8, 200_u8), "encore", style)
+    let second = window.text_cache.tokens(window.handle, "let α = 123 // 😀", Color::rgb(200_u8, 200_u8, 200_u8), "encore", style)
+    valid = valid && first.len() == 1_usize && second.len() == 1_usize && window.text_cache.syntax.len() == 1_usize
+    let _registered = window.register_font("Cache Mono", font)
+    valid = valid && window.text_cache.layouts.len() == 0_usize && window.text_cache.syntax.len() == 0_usize
+    window.destroy()
+    ret valid
+}
+
 fn wrapped_line(handle: usize, value: str, start: usize, width: f32) -> WrappedLine {
     let length = value.char_len()
-    let mut newline = start
-    while newline < length && value.slice(newline, 1_usize) != "\n" {
-        newline = newline + 1_usize
-    }
+    let tail = value.slice(start, length - start)
+    let newline_byte = tail.find_byte_from(10_u8, 0_usize)
+    let newline = start + tail.slice_bytes(0_usize, newline_byte).char_len()
     if newline == start {
         ret WrappedLine {
             start, start, start + 1_usize, true
@@ -2646,7 +4052,7 @@ fn textarea_line_number(value: str, index: usize) -> usize {
     ret line
 }
 
-fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
+fn render_textarea(handle: usize, cache: mut WindowTextCache&, bounds: Rect, widget: Widget, style: Style,
     foreground: Color, opacity: f32,) ->() {
     let value = widget.text()
     let value_length = value.char_len()
@@ -2668,17 +4074,21 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
     } else {
         16.0_f32
     }
+    let visual_lines = cache.lines(handle, widget, width)
     let selection = widget.selection()
     let mut start = 0_usize
     let mut row = 0_usize
     let mut finished = false
     let scroll_y = style.layout().scroll().y()
-    while value_length > 0_usize && start < value_length &&
-    ((row + 1_usize) as f32) * line_height <= scroll_y {
-        let skipped = wrapped_line(handle, value, start, width)
-        start = skipped.next
-        row = row + 1_usize
+    row = if scroll_y > 0_f32 {
+        (scroll_y / line_height) as usize
+    } else {
+        0_usize
     }
+    start = visual_lines.get(row).unwrap_or(WrappedLine {
+            value_length, value_length, value_length, false
+        }
+    ).start
     if gutter > 0.0_f32 {
         native_fill_rect(handle, bounds.x(), bounds.y(), gutter, bounds.height(),
             Color::rgba(12_u8, 16_u8, 24_u8, 150_u8).packed(),)
@@ -2689,7 +4099,10 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
                 start, start, start, false
             }
         } else {
-            wrapped_line(handle, value, start, width)
+            visual_lines.get(row).unwrap_or(WrappedLine {
+                    value_length, value_length, value_length, false
+                }
+            )
         }
         let y = bounds.y() + 10.0_f32 +(row as f32) * line_height - scroll_y
         if y > bounds.bottom() {
@@ -2701,17 +4114,29 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
             native_text(handle, bounds.x() + gutter - number_width - 8.0_f32, y,
                 number, Color::rgb(86_u8, 96_u8, 112_u8).packed(),)
         }
-        let text = value.slice(line.start, line.end - line.start)
+        let count = if widget.attribute("wrap").is_some() && scroll_x < 16000_f32 && line.end - line.start > 8192_usize {
+            8192_usize
+        } else {
+            line.end - line.start
+        }
+        let mut text = value.slice(line.start, count)
+        if text.byte_len() > 4096_usize && scroll_x < 16000_f32 {
+            let visible = native_text_index(handle, text, scroll_x + bounds.width() + 32_f32)
+            if visible + 4_usize < text.char_len() {
+                text = text.slice(0_usize, visible + 4_usize)
+            }
+        }
+        let painted_end = line.start + text.char_len()
         if widget.focused() && selection.end() > selection.start() {
             let selected_start = if selection.start() > line.start {
                 selection.start()
             } else {
                 line.start
             }
-            let selected_end = if selection.end() < line.end {
+            let selected_end = if selection.end() < painted_end {
                 selection.end()
             } else {
-                line.end
+                painted_end
             }
             if selected_end > selected_start {
                 let before = value.slice(line.start, selected_start - line.start)
@@ -2722,7 +4147,7 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
         }
         match widget.attribute("syntax") {
             Option::Some(language) => {
-                render_syntax_line(handle, x, y, text, foreground, language)
+                render_syntax_line(handle, cache, x, y, text, foreground, language, style)
             }
             Option::None => {
                 native_text(handle, x, y, text, foreground.packed())
@@ -2732,7 +4157,7 @@ fn render_textarea(handle: usize, bounds: Rect, widget: Widget, style: Style,
         let cursor_on_line = widget.cursor() >= line.start &&
         (widget.cursor() < line.end || line.end == value_length ||(line.hard_break && widget.cursor()
                 == line.end))
-        if widget.focused() && cursor_on_line {
+        if widget.focused() && cursor_on_line && widget.cursor() <= painted_end {
             let prefix = value.slice(line.start, widget.cursor() - line.start)
             let caret_x = x + native_text_width(handle, prefix) + 1.0_f32
             native_line(handle, caret_x, y, caret_x, y + height, Color::rgb(18_u8, 153_u8, 126_u8).packed())
@@ -2803,126 +4228,157 @@ fn toml_key_limit(value: str) -> usize {
     ret 0_usize
 }
 
-fn render_syntax_line(handle: usize, x: f32, y: f32, value: str,
-    foreground: Color, language: str,) ->() {
-    let length = value.char_len()
-    let key_limit = if language == "toml" {
-        toml_key_limit(value)
-    } else {
-        0_usize
-    }
-    let mut index = if key_limit > 0_usize {
-        key_limit
-    } else {
-        0_usize
-    }
-    if key_limit > 0_usize {
-        let key = value.slice(0_usize, key_limit)
-        let _painted = native_text(handle, x, y, key,
-            Color::rgb(97_u8, 175_u8, 239_u8).packed(),)
-    } else {
+struct SyntaxSpan {
+    start: usize
+    end: usize
+    color: u32
+}
+fn syntax_identifier_byte(value: u8) -> bool {
+    ret value >= 65_u8 && value <= 90_u8 || value >= 97_u8 && value <= 122_u8 || value >= 48_u8 && value <= 57_u8 || value == 95_u8
+}
+fn syntax_tokens(handle: usize, value: str, foreground: Color, language: str) -> Vec[SyntaxToken] {
+    let length = value.byte_len()
+    let mut spans = Vec[SyntaxSpan]::new()
+    let mut index = 0_usize
+    if language == "toml" {
+        let count = toml_key_limit(value)
+        let key = value.slice(0_usize, count).byte_len()
+        if key > 0_usize {
+            spans.push(SyntaxSpan {
+                    0_usize, key, Color::rgb(97_u8, 175_u8, 239_u8).packed()
+                }
+            ) index = key
+        }
     }
     while index < length {
-        let current = value.slice(index, 1_usize)
+        let current = value.byte_at(index)
         let previous = if index > 0_usize {
-            value.slice(index - 1_usize, 1_usize)
+            value.byte_at(index - 1_usize)
         } else {
-            ""
+            0_u8
         }
         let mut end = index + 1_usize
-        let color = if language == "markdown" && current == "#" {
-            end = length
-            Color::rgb(97_u8, 175_u8, 239_u8)
-        } elif language == "markdown" &&(current == "*" || current == "_") {
+        let color = if language == "markdown" && current == 35_u8 {
+            end = length Color::rgb(97_u8, 175_u8, 239_u8)
+        } elif language == "markdown" &&(current == 42_u8 || current == 95_u8) {
             Color::rgb(198_u8, 120_u8, 221_u8)
-        } elif language == "markdown" && current == "`" {
-            while end < length && value.slice(end, 1_usize) != "`" {
-                end = end + 1_usize
+        } elif language == "markdown" && current == 96_u8 {
+            while end < length && value.byte_at(end) != 96_u8 {
+                end += 1_usize
             }
-            end = if end < length {
-                end + 1_usize
-            } else {
-                end
+            if end < length {
+                end += 1_usize
             }
             Color::rgb(152_u8, 195_u8, 121_u8)
-        } elif language == "toml" && current == "#" {
-            end = length
-            Color::rgb(103_u8, 112_u8, 126_u8)
-        } elif language == "toml" && current == "[" {
-            while end < length && value.slice(end, 1_usize) != "]" {
-                end = end + 1_usize
+        } elif language == "toml" && current == 35_u8 {
+            end = length Color::rgb(103_u8, 112_u8, 126_u8)
+        } elif language == "toml" && current == 91_u8 {
+            while end < length && value.byte_at(end) != 93_u8 {
+                end += 1_usize
             }
-            end = if end < length {
-                end + 1_usize
-            } else {
-                end
+            if end < length {
+                end += 1_usize
             }
             Color::rgb(198_u8, 120_u8, 221_u8)
-        } elif language == "encore" && current == "#" {
-            while end < length && syntax_identifier_char(
-                value.slice(end, 1_usize),) {
-                end = end + 1_usize
+        } elif language == "encore" && current == 35_u8 {
+            while end < length && syntax_identifier_byte(value.byte_at(end)) {
+                end += 1_usize
             }
             Color::rgb(86_u8, 182_u8, 194_u8)
-        } elif language == "encore" && current == "/" && end < length &&
-        value.slice(end, 1_usize) == "/" {
-            end = length
-            Color::rgb(103_u8, 112_u8, 126_u8)
-        } elif (language == "encore" || language == "toml") &&
-        current == "\"" {
-            while end < length && value.slice(end, 1_usize) != "\"" {
-                end = end + 1_usize
+        } elif language == "encore" && current == 47_u8 && end < length && value.byte_at(end) == 47_u8 {
+            end = length Color::rgb(103_u8, 112_u8, 126_u8)
+        } elif (language == "encore" || language == "toml") && current == 34_u8 {
+            while end < length && value.byte_at(end) != 34_u8 {
+                end += 1_usize
             }
-            end = if end < length {
-                end + 1_usize
-            } else {
-                end
+            if end < length {
+                end += 1_usize
             }
             Color::rgb(152_u8, 195_u8, 121_u8)
-        } elif (language == "encore" || language == "toml") &&
-        syntax_digit(current) {
-            while end < length {
-                let digit = value.slice(end, 1_usize)
-                if !(syntax_digit(digit) || digit == ".") {
-                    break
-                } else {
-                    end = end + 1_usize
-                }
+        } elif (language == "encore" || language == "toml") && current >= 48_u8 && current <= 57_u8 {
+            while end < length &&(value.byte_at(end) >= 48_u8 && value.byte_at(end) <= 57_u8 || value.byte_at(end) == 46_u8) {
+                end += 1_usize
             }
             Color::rgb(209_u8, 154_u8, 102_u8)
-        } elif syntax_identifier_char(current) {
-            while end < length && syntax_identifier_char(
-                value.slice(end, 1_usize),) {
-                end = end + 1_usize
+        } elif syntax_identifier_byte(current) {
+            while end < length && syntax_identifier_byte(value.byte_at(end)) {
+                end += 1_usize
             }
-            let word = value.slice(index, end - index)
+            let word = value.slice_bytes(index, end - index)
             if language == "encore" && syntax_keyword(word) {
                 Color::rgb(198_u8, 120_u8, 221_u8)
-            } elif language == "encore" &&(word == "H" || word == "S") {
+            } elif language == "encore" &&(word == "H" || word == "S" || previous == 46_u8 || end + 1_usize < length && value.byte_at(end) == 58_u8 && value.byte_at(end + 1_usize) == 58_u8) {
                 Color::rgb(86_u8, 182_u8, 194_u8)
-            } elif language == "encore" && end < length &&
-            value.slice(end, 1_usize) == "(" {
+            } elif language == "encore" && end < length && value.byte_at(end) == 40_u8 {
                 Color::rgb(97_u8, 175_u8, 239_u8)
-            } elif language == "encore" && end + 1_usize < length &&
-            value.slice(end, 2_usize) == "::" {
-                Color::rgb(86_u8, 182_u8, 194_u8)
-            } elif language == "encore" && previous == "." {
-                Color::rgb(86_u8, 182_u8, 194_u8)
-            } elif language == "encore" && syntax_uppercase(current) {
+            } elif language == "encore" && current >= 65_u8 && current <= 90_u8 {
                 Color::rgb(229_u8, 192_u8, 123_u8)
             } else {
                 foreground
             }
-        } elif language == "encore" && syntax_operator(current) {
+        } elif language == "encore" && current < 128_u8 && syntax_operator(value.slice_bytes(index, 1_usize)) {
             Color::rgb(198_u8, 120_u8, 221_u8)
         } else {
+            if current >= 128_u8 {
+                end = index + if current < 224_u8 {
+                    2_usize
+                } elif current < 240_u8 {
+                    3_usize
+                } else {
+                    4_usize
+                }
+            }
             foreground
         }
-        let token = value.slice(index, end - index)
-        let prefix = value.slice(0_usize, index)
-        native_text(handle, x + native_text_width(handle, prefix),
-            y, token, color.packed(),)
+        let last = spans.len()
+        if last > 0_usize && spans.get(last - 1_usize).unwrap_or(SyntaxSpan {
+                0_usize, 0_usize, 0_u32
+            }
+        ).color == color.packed() {
+            let prior = spans.get(last - 1_usize).unwrap_or(SyntaxSpan {
+                    index, end, color.packed()
+                }
+            )
+            spans.set(last - 1_usize, SyntaxSpan { prior.start, end, prior.color })
+        } else {
+            spans.push(SyntaxSpan { index, end, color.packed() })
+        }
         index = end
+    }
+    if spans.len() <= 1_usize {
+        ret vec![SyntaxToken {
+                value, 0_f32, spans.get(0_usize).unwrap_or(SyntaxSpan {
+                        0_usize, length, foreground.packed()
+                    }
+                ).color, false
+            }
+        ]
+    }
+    if spans.len() <= 64_usize {
+        let mut payload = ""
+        for span in spans {
+            payload = payload + Debug::fmt(span.start) + ":" + Debug::fmt(span.end - span.start) + ":" + Debug::fmt(span.color) + ":0;"
+        }
+        ret vec![SyntaxToken { payload, 0_f32, 0_u32, true }]
+    }
+    let mut tokens = Vec[SyntaxToken]::new()
+    for span in spans {
+        tokens.push(SyntaxToken {
+                value.slice_bytes(span.start, span.end - span.start), native_text_width(handle, value.slice_bytes(0_usize, span.start)), span.color, false
+            }
+        )
+    }
+    ret tokens
+}
+
+fn render_syntax_line(handle: usize, cache: mut WindowTextCache&, x: f32, y: f32,
+    value: str, foreground: Color, language: str, style: Style,) ->() {
+    for token in cache.tokens(handle, value, foreground, language, style) {
+        if token.styled {
+            native_styled_text(handle, x, y, value, token.text)
+        } else {
+            native_text(handle, x + token.x, y, token.text, token.color)
+        }
     }
     ret()
 }
@@ -3176,9 +4632,14 @@ fn render_switch(handle: usize, bounds: Rect, text: str, checked: bool,
 }
 
 fn render_slider(handle: usize, bounds: Rect, value: f32, style: Style, opacity: f32) ->() {
-    let x = bounds.x() + 6.0_f32
-    let width = bounds.width() - 12.0_f32
-    let y = bounds.y() + bounds.height() / 2.0_f32
+    let geometry = slider_track_bounds(bounds, style)
+    let radius = slider_thumb_radius(bounds, style)
+    if radius <= 0.0_f32 {
+        ret()
+    }
+    let x = geometry.x()
+    let width = geometry.width()
+    let y = geometry.y()
     let track = apply_opacity(style.background(), opacity)
     let accent = apply_opacity(style.accent_color(), opacity)
     native_round_rect(handle, x, y - 2.0_f32, width, 4.0_f32, 2.0_f32,
@@ -3186,9 +4647,9 @@ fn render_slider(handle: usize, bounds: Rect, value: f32, style: Style, opacity:
     native_round_rect(handle, x, y - 2.0_f32, width * value, 4.0_f32, 2.0_f32,
         accent.packed(), true,)
     let thumb_x = x + width * value
-    native_circle(handle, thumb_x, y, 7.0_f32,
+    native_circle(handle, thumb_x, y, radius,
         contrast_color(style.accent_color(), opacity).packed(), true,)
-    native_circle(handle, thumb_x, y, 7.0_f32, accent.packed(), false)
+    native_circle(handle, thumb_x, y, radius, accent.packed(), false)
     ret()
 }
 
@@ -3314,6 +4775,111 @@ fn contrast_color(background: Color, opacity: f32) -> Color {
         , opacity,)
 }
 
+// Prefer word/hyphen boundaries, but also wrap identifiers without separators.
+// text_index is a caret hit test (nearest boundary), so verify actual width.
+fn caption_lines(handle: usize, value: str, width: f32) -> Vec[str] {
+    let mut lines = Vec[str]::new()
+    if width <= 0.0 {
+        ret lines
+    }
+    let mut start = 0_usize
+    while start < value.char_len() {
+        let wrapped = wrapped_line(handle, value, start, width)
+        let mut end = wrapped.end
+        while end > start + 1 && native_text_width(handle, value.slice(start, end - start)) > width {
+            end -= 1
+        }
+        let mut next = if end == wrapped.end {
+            wrapped.next
+        } else {
+            end
+        }
+        if end < value.char_len() &&(end != wrapped.end || !wrapped.hard_break) {
+            let mut boundary = end
+            while boundary > start {
+                let character = value.slice(boundary - 1, 1)
+                if character == "-" || character == "_" || character == " " || character == "\t" {
+                    end = boundary
+                    next = boundary
+                    break
+                }
+                boundary -= 1
+            }
+        }
+        lines.push(value.slice(start, end - start))
+        start = next
+        while start < value.char_len() &&(value.slice(start, 1) == " " || value.slice(start, 1) == "\t") {
+            start += 1
+        }
+    }
+    ret lines
+}
+
+fn icon_card_bounds(bounds: Rect, caption_y: f32) -> Rect {
+    // Center within the tile's image area; reserve the caption and its gap.
+    let top = bounds.y() + 8.0_f32
+    let available_height = caption_y - 8.0_f32 - top
+    let available_width = bounds.width() - 16.0_f32
+    let mut size = 46.0_f32
+    if available_height < size {
+        size = available_height
+    }
+    if available_width < size {
+        size = available_width
+    }
+    if size < 0.0_f32 {
+        size = 0.0_f32
+    }
+    ret Rect::new(bounds.x() +(bounds.width() - size) / 2.0_f32,
+        top +(if available_height > 0.0_f32 {
+                available_height
+            } else {
+                0.0_f32
+            }
+            - size) / 2.0_f32,
+        size, size,)
+}
+
+#attr(test)
+fn icon_card_caption_wraps_without_losing_characters() -> bool {
+    let window = Window::create_with_renderer("Caption wrapping", 240, 160, RendererKind::Software)
+    if !window.available() {
+        ret false
+    }
+    let name = "rectangle-ellipsis-unbrokenlongidentifier-Привет"
+    let mut valid = true
+    for width in 48_usize..121_usize {
+        let lines = caption_lines(window.handle, name, width as f32)
+        let mut joined = ""
+        for line in lines {
+            joined += line
+            if native_text_width(window.handle, line) > width as f32 + 0.01 {
+                valid = false
+            }
+        }
+        if joined != name || lines.len() < 2 {
+            valid = false
+        }
+    }
+    if caption_lines(window.handle, "", 100.0).len() != 0 ||
+    caption_lines(window.handle, "A\nB", 100.0).len() != 2 {
+        valid = false
+    }
+    window.destroy()
+    ret valid
+}
+
+#attr(test)
+fn icon_card_centers_image_above_caption() -> bool {
+    let tile = Rect::new(20.0, 30.0, 160.0, 112.0)
+    let icon = icon_card_bounds(tile, 118.0)
+    let small = icon_card_bounds(Rect::new(0.0, 0.0, 20.0, 20.0), 12.0)
+    ret icon.width() == 46.0 && icon.height() == 46.0 &&
+    icon.x() + icon.width() / 2.0 == 100.0 &&
+    icon.y() + icon.height() / 2.0 == 74.0 &&
+    icon.bottom() <= 110.0 && small.width() == 0.0 && small.height() == 0.0
+}
+
 fn centered_text_y(handle: usize, bounds: Rect, text: str) -> f32 {
     ret bounds.y() +(bounds.height() - native_text_height(handle, text)) / 2.0_f32
 }
@@ -3327,4 +4893,19 @@ pub fn backend_name() -> str {
 }
 pub fn backend_error() -> str {
     ret native_backend_error()
+}
+
+fn ellipsized_text(handle: usize, value: str, width: f32) -> str {
+    if native_text_width(handle, value) <= width {
+        ret value
+    }
+    let available = width - native_text_width(handle, "…")
+    if available < 0 {
+        ret ""
+    }
+    let mut length = native_text_index(handle, value, available)
+    while length > 0 && native_text_width(handle, value.slice(0, length)) > available {
+        length -= 1
+    }
+    ret value.slice(0, length) + "…"
 }

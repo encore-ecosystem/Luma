@@ -2,50 +2,56 @@ version = 2
 
 [[packages]]
 name = "std"
-ref = "index@std@^1.0.1"
-version = "1.0.1"
-archive = "https://github.com/encore-ecosystem/encore-index/releases/download/std-v1.0.1/std-1.0.1.tar.gz"
-checksum = "fd9ff75770e3472d889b07661681011e64a88092181b55656546314b073a786c"
+ref = "index@std@>=0.0.8"
+version = "0.0.8"
+archive = "http://127.0.0.1:8137/archives/aebaf85350327d57a665d1ca95760783ff14803c160a78ab45f532df08c7458f.tar.gz"
+checksum = "aebaf85350327d57a665d1ca95760783ff14803c160a78ab45f532df08c7458f"
+registry = "http://127.0.0.1:8137/index"
 
 [[packages]]
 name = "color"
-ref = "index@color@^0.1.0"
-version = "0.1.0"
-archive = "https://github.com/encore-ecosystem/encore-index/releases/download/packages-v0.1.4/color-0.1.0.tar.gz"
-checksum = "9f99713dda0a02c08afb8b6e3688be8ad77e426719e8f749a0d798cb1b5f2abb"
-
-[[packages]]
-name = "geometry"
-ref = "index@geometry@^0.1.0"
-version = "0.1.0"
-archive = "https://github.com/encore-ecosystem/encore-index/releases/download/packages-v0.1.4/geometry-0.1.0.tar.gz"
-checksum = "38a1f3430cdf4552e8713a8ace35851465c1683d7040f1dbecf53fa3b8223ebb"
+ref = "workspace@color"
+version = "0.0.0"
+source = "embedded@luma"
+path = "workspace/color"
 
 [[packages]]
 name = "ui_native"
 ref = "workspace@ui_native"
-version = "0.1.0"
+version = "0.0.0"
 source = "embedded@luma"
 path = "workspace/ui_native"
 
 [[packages]]
-name = "vulkan_native"
-ref = "index@vulkan_native@^0.1.0"
+name = "vulkan"
+ref = "index@vulkan@>=0.1.1"
+version = "0.1.1"
+archive = "http://127.0.0.1:8137/archives/db116f49be56e729ae425168790e5b9ff02d04ac446048b01448a7d6ac84f175.tar.gz"
+checksum = "db116f49be56e729ae425168790e5b9ff02d04ac446048b01448a7d6ac84f175"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "sdl"
+ref = "index@sdl@>=0.1.0"
 version = "0.1.0"
-archive = "https://github.com/encore-ecosystem/Luma/releases/download/vulkan_native-v0.1.0/vulkan_native-0.1.0.tar.gz"
-checksum = "f7afc3e810c43d899a6b69c032c3df3b88413186fb59d9ff4af56aa5d663ae53"
+archive = "http://127.0.0.1:8137/archives/e885102779a6a4ceb961966b31a1aea661c74cbe7063bc1503daf0ab8f1174ed.tar.gz"
+checksum = "e885102779a6a4ceb961966b31a1aea661c74cbe7063bc1503daf0ab8f1174ed"
+registry = "http://127.0.0.1:8137/index"
+
+[[packages]]
+name = "gpu"
+ref = "index@gpu@>=0.1.1"
+version = "0.1.1"
+archive = "http://127.0.0.1:8137/archives/667c967b6a42b359f808a16f0b4958798f6f48e7931facc770224231f9d02bce.tar.gz"
+checksum = "667c967b6a42b359f808a16f0b4958798f6f48e7931facc770224231f9d02bce"
+registry = "http://127.0.0.1:8137/index"
 
 [[packages]]
 name = "core"
 ref = "sys@core"
-version = "0.1.0"
+version = "0.0.0"
 
 [[packages]]
 name = "platform"
 ref = "sys@platform"
-version = "0.1.0"
-
-[[packages]]
-name = "core"
-ref = "path@../core"
-version = "0.1.0"
+version = "0.0.0"

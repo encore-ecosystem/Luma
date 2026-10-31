@@ -1,0 +1,63 @@
+//! Human-readable numeric labels. This formatter never participates in persistence.
+import core::fmt::Debug
+
+/// Up to `places` decimals, trailing zeroes removed; scientific notation preserves
+/// nonzero tiny values and bounds the width of very large values.
+pub fn format_decimal(value: f32, places: u32) -> str {
+    if !(value >= - 340282346638528859811704183484516925440_f32 && value <= 340282346638528859811704183484516925440_f32) {
+        ret Debug::fmt(value)
+    }
+    let mut factor = 1_u64
+    let digits = if places < 10 {
+        places
+    } else {
+        9_u32
+    }
+    for _ in 0_usize..digits as usize {
+        factor *= 10
+    }
+    let mut number = if value < 0 {
+        -(value as f64)
+    } else {
+        value as f64
+    }
+    let mut exponent = 0_i32
+    let scientific = number != 0 &&(number < 1_f64 /(factor as f64) || number >= 1000000000_f64)
+    if scientific {
+        while number >= 10_f64 {
+            number /= 10_f64 exponent += 1
+        }
+        while number < 1_f64 {
+            number *= 10_f64 exponent -= 1
+        }
+    }
+    let mut scaled =(number *(factor as f64) + 0.5_f64) as u64
+    if scientific && scaled >= factor * 10 {
+        scaled /= 10 exponent += 1
+    }
+    let mut text = Debug::fmt(scaled / factor)
+    let fraction = scaled % factor
+    if fraction != 0 {
+        let padded = Debug::fmt(factor + fraction)
+        let mut decimal = padded.slice_bytes(1, padded.byte_len() - 1)
+        while decimal.byte_len() > 0 && decimal.byte_at(decimal.byte_len() - 1) == 48 {
+            decimal = decimal.slice_bytes(0, decimal.byte_len() - 1)
+        }
+        text = text + "." + decimal
+    }
+    if value < 0 && scaled != 0 {
+        text = "-" + text
+    }
+    ret text + if scientific {
+        "e" + Debug::fmt(exponent)
+    } else {
+        ""
+    }
+}
+
+#attr(test)
+fn numeric_labels_preserve_nonzero_and_trim_binary_noise() -> bool {
+    ret format_decimal(0.2_f32, 4) == "0.2" && format_decimal( - 0.000001_f32, 4) == "-1e-6" &&
+    format_decimal(0_f32, 4) == "0" && format_decimal(1.234567_f32, 4) == "1.2346" &&
+    format_decimal(1000000000_f32, 4) == "1e9" && format_decimal(9.99996_f32, 4) == "10"
+}

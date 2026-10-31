@@ -1,0 +1,13 @@
+[project]
+name = "quiet_day"
+version = "0.1.0"
+description = "Quiet Day - a standalone native Luma interface demo"
+encore = ">=0.1.6"
+dependencies = [
+    "path@../..",
+    "index@std@>=0.0.8",
+    "index@json@>=0.0.3",
+]
+
+[lint]
+dependencies = "allow"

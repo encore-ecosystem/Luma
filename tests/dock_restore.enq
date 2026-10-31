@@ -1,0 +1,100 @@
+//! Layout round-trips and rejected corrupt snapshots are atomic and ID-safe.
+import luma::{DockLayout, DockLayoutNode, DockLayoutWindow, DockNodeId, DockPanel, DockPlacement, DockWorkspace, PanelId, Size, WindowId}
+
+fn registered() -> DockWorkspace<H> {
+    let mut workspace = DockWorkspace::new(WindowId::new(1))
+    for key in vec!["viewport", "details", "outliner", "content"] {
+        let _registered = workspace.register(DockPanel::new(key, key, Size::new(100, 100)))
+    }
+    ret workspace
+}
+fn rejected(workspace: mut DockWorkspace&, layout: DockLayout) -> bool {
+    let revision = workspace.revision()
+    let root = match workspace.window(WindowId::new(1)) {
+        Some(value) => value.root() None => DockNodeId::empty()
+    }
+    ret !workspace.restore(layout) && workspace.revision() == revision && workspace.node(root).is_some()
+}
+fn main() -> u32 {
+    let main = WindowId::new(1) let floating = WindowId::new(2)
+    let view = PanelId::new("viewport") let details = PanelId::new("details")
+    let outliner = PanelId::new("outliner") let content = PanelId::new("content")
+    let mut source = registered()
+    for panel in vec![view, details, outliner, content] {
+        let _shown = source.show(panel, main)
+    }
+    let group = source.location(view).unwrap_or(DockNodeId::empty())
+    if !source.dock(details, group, DockPlacement::Right, 0) ||
+    !source.dock(outliner, source.location(details).unwrap_or(group), DockPlacement::Center, 1) ||
+    !source.hide(content) || !source.detach(details, floating) {
+        ret 1
+    }
+    let mut target = registered()
+    let _shown = target.show(view, main)
+    let stale = target.location(view).unwrap_or(DockNodeId::empty())
+    let snapshot = source.snapshot()
+    if !target.restore(snapshot) || target.node(stale).is_some() || target.location(content).is_some() ||
+    target.panels_in(main).len() != 2 || target.panels_in(floating).len() != 1 {
+        ret 2
+    }
+    if !target.close_window(floating) || !target.location(details).unwrap_or(stale).same(target.location(outliner).unwrap_or(group)) {
+        ret 3
+    }
+    // Editing the exported tab array must not mutate either workspace.
+    for node in snapshot.nodes {
+        if node.tabs.len() > 0 {
+            let mut tabs = node.tabs tabs.push(content)
+        }
+    }
+    if target.location(content).is_some() || source.location(content).is_some() {
+        ret 4
+    }
+    let valid = target.snapshot()
+    let root_index = valid.windows.get(0).unwrap_or(DockLayoutWindow { main, Option[usize]::None }).root.unwrap_or(0)
+    let mut cyclic = target.snapshot()
+    let mut root = cyclic.nodes.get(root_index).unwrap_or(DockLayoutNode {
+            Vec[PanelId]::new(), PanelId::new(""), Option[usize]::None, Option[usize]::None, false, 0.5
+        }
+        ,)
+    root.first = Option[usize]::Some(root_index)
+    cyclic.nodes.set(root_index, root)
+    if !rejected(target, cyclic) {
+        ret 5
+    }
+    let mut duplicate = target.snapshot()
+    duplicate.windows.push(DockLayoutWindow { main, Option[usize]::Some(root_index) })
+    if !rejected(target, duplicate) {
+        ret 6
+    }
+    let mut unknown = target.snapshot()
+    for index in 0..unknown.nodes.len() {
+        let mut node = unknown.nodes.get(index).unwrap_or(root)
+        if node.tabs.len() > 0 {
+            node.tabs.set(0, PanelId::new("unknown")) unknown.nodes.set(index, node) break
+        }
+    }
+    if !rejected(target, unknown) {
+        ret 7
+    }
+    let mut orphan = target.snapshot()
+    orphan.nodes.push(DockLayoutNode {
+            vec![content], content, Option[usize]::None, Option[usize]::None, false, 0.5
+        }
+        ,
+    )
+    if !rejected(target, orphan) {
+        ret 8
+    }
+    let mut invalid = target.snapshot()
+    let mut node = invalid.nodes.get(root_index).unwrap_or(root)
+    node.fraction = 2
+    invalid.nodes.set(root_index, node)
+    if !rejected(target, invalid) {
+        ret 9
+    }
+    let previous = target.location(view).unwrap_or(stale)
+    if !target.restore(valid) || target.node(previous).is_some() || target.location(content).is_some() {
+        ret 10
+    }
+    ret 0
+}

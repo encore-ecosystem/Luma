@@ -1,0 +1,94 @@
+//! Curve input remains independent of renderer resources and application constraints.
+import luma::{CurveEditor, CurveAxes, Event, Point, Rect, Style, Color, event_pointer_down, event_pointer_up, event_scroll, event_focus_lost}
+fn pointer(kind: u32, x: f32, y: f32, buttons: u32, stamp: u64) -> Event {
+    ret Event { kind, x, y, 0, 0, buttons, 0, 0, 0, 0, "", stamp }
+}
+fn main() -> u32 {
+    let mut editor = CurveEditor::new() editor.fit(300)
+    let bounds = Rect::new(100, 50, 500, 300)
+    let points = vec![Point::new(10, 1), Point::new(30, 0.5_f32), Point::new(100, 0.1_f32), Point::new(300, 0.02_f32)]
+    let p = editor.project(points.get_unchecked_borrowed(1), bounds)
+    let back = editor.world(p, bounds)
+    if back.x() < 29.999_f32 || back.x() > 30.001_f32 || back.y() != 0.5_f32 {
+        ret 1
+    }
+    match editor.input(pointer(event_pointer_down(), p.x(), p.y(), 1, 1000000000), points, bounds) {
+        Begin(index) => {
+            if index != 1 {
+                ret 2
+            }
+        }
+        _ => {
+            ret 3
+        }
+    }
+    if !editor.active() || !editor.focused() {
+        ret 4
+    }
+    match editor.input(Event::pointer_move(900, 900, 0, 0, 1), points, bounds) {
+        Move(change) => {
+            if change.index != 1 {
+                ret 5
+            }
+        }
+        _ => {
+            ret 6
+        }
+    }
+    match editor.input(pointer(event_pointer_up(), 900, 900, 0, 0), points, bounds) {
+        Commit => {
+        }
+        _ => {
+            ret 7
+        }
+    }
+    if editor.active() {
+        ret 8
+    }
+    let _begin = editor.input(pointer(event_pointer_down(), p.x(), p.y(), 1, 1200000000), points, bounds)
+    match editor.input(Event::key_down(27, 0), points, bounds) {
+        Cancel => {
+        }
+        _ => {
+            ret 9
+        }
+    }
+    let _first = editor.input(pointer(event_pointer_down(), 350, 180, 1, 2000000000), points, bounds)
+    match editor.input(pointer(event_pointer_down(), 350, 180, 1, 2200000000), points, bounds) {
+        Insert(at) => {
+            if at.x() <= 0 {
+                ret 10
+            }
+        }
+        _ => {
+            ret 11
+        }
+    }
+    let anchor = editor.world(Point::new(350, 180), bounds)
+    let wheel = Event { event_scroll(), 350, 180, 0, 0, 0, 0, 0, 0, 1, "", 0 }
+    let _zoom = editor.input(wheel, points, bounds)
+    let after = editor.world(Point::new(350, 180), bounds)
+    if after.x() - anchor.x() > 0.001_f32 || anchor.x() - after.x() > 0.001_f32 || editor.right() >= 330 {
+        ret 12
+    }
+    let _pan = editor.input(pointer(event_pointer_down(), 350, 180, 2, 0), points, bounds)
+    let _move = editor.input(Event::pointer_move(300, 180, 0, 0, 2), points, bounds)
+    let _release = editor.input(pointer(event_pointer_up(), 300, 180, 0, 0), points, bounds)
+    if editor.left() <= 0 || editor.active() {
+        ret 13
+    }
+    let _lost = editor.input(Event { event_focus_lost(), 0, 0, 0, 0, 0, 0, 0, 0, 0, "", 0 }, points, bounds)
+    if editor.focused() {
+        ret 14
+    }
+    let surface = Style::default().with_background(Color::rgb(20, 20, 20)).with_foreground(Color::rgb(150, 150, 150))
+    let accent = Style::default().with_foreground(Color::rgb(40, 150, 230))
+    if editor.display(points, points, bounds, surface, accent, accent, CurveAxes {
+            "X", "Y", "", "", 1.0_f32
+        }
+        ,
+    ).len() < 20 {
+        ret 15
+    }
+    ret 0
+}

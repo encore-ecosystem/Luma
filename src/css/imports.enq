@@ -1,0 +1,392 @@
+//! Local stylesheet imports. File IO happens only while loading or reloading.
+
+import core::result::Result
+import core::vec::Vec
+import std::io::eprintln
+import std::path::Path
+
+// The same core UTF-8 encoder used by the JSON library's Unicode escapes.
+extern fn encore_str_from_codepoint(value: usize) -> str
+extern fn luma_css_read_file(path: str, success: u8*) -> str
+
+struct ImportRule {
+    end: usize
+    path: str
+    error: str
+}
+
+fn whitespace(value: u8) -> bool {
+    ret value == 32 || value == 9 || value == 10 || value == 13 || value == 12
+}
+
+fn ascii_lower(value: u8) -> u8 {
+    if value >= 65 && value <= 90 {
+        ret value + 32
+    }
+    ret value
+}
+
+fn hex_digit(value: u8) -> i32 {
+    if value >= 48 && value <= 57 {
+        ret(value - 48) as i32
+    }
+    let lower = ascii_lower(value)
+    if lower >= 97 && lower <= 102 {
+        ret(lower - 97 + 10) as i32
+    }
+    ret - 1
+}
+
+fn word_at(source: str, start: usize, word: str) -> bool {
+    if start + word.byte_len() > source.byte_len() {
+        ret false
+    }
+    let mut index = 0_usize
+    while index < word.byte_len() {
+        if ascii_lower(source.byte_at(start + index)) != word.byte_at(index) {
+            ret false
+        }
+        index += 1
+    }
+    ret true
+}
+
+fn comment_end(source: str, start: usize) -> usize {
+    let mut index = start + 2
+    while index + 1 < source.byte_len() {
+        if source.byte_at(index) == 42 && source.byte_at(index + 1) == 47 {
+            ret index + 2
+        }
+        index += 1
+    }
+    ret source.byte_len() + 1
+}
+
+fn trivia_end(source: str, start: usize) -> usize {
+    let mut index = start
+    while index < source.byte_len() {
+        if whitespace(source.byte_at(index)) {
+            index += 1
+        } elif index + 1 < source.byte_len() && source.byte_at(index) == 47 && source.byte_at(index + 1) == 42 {
+            index = comment_end(source, index)
+            if index > source.byte_len() {
+                ret source.byte_len()
+            }
+        } else {
+            break
+        }
+    }
+    ret index
+}
+
+fn quoted_end(source: str, start: usize) -> usize {
+    let quote = source.byte_at(start)
+    let mut index = start + 1
+    while index < source.byte_len() {
+        if source.byte_at(index) == 92 {
+            index += 2
+        } elif source.byte_at(index) == quote {
+            ret index + 1
+        } else {
+            index += 1
+        }
+    }
+    ret source.byte_len() + 1
+}
+
+fn import_at(source: str, start: usize) -> bool {
+    if !word_at(source, start, "@import") {
+        ret false
+    }
+    let end = start + 7
+    if end == source.byte_len() {
+        ret true
+    }
+    let next = source.byte_at(end)
+    let lower = ascii_lower(next)
+    ret !((lower >= 97 && lower <= 122) ||(next >= 48 && next <= 57) ||
+        next == 45 || next == 95 || next == 92 || next >= 128)
+}
+
+// Recovery must not consume the first following rule when a semicolon is missing.
+fn statement_end(source: str, start: usize) -> usize {
+    let mut index = start
+    while index < source.byte_len() {
+        let value = source.byte_at(index)
+        if value == 34 || value == 39 {
+            index = quoted_end(source, index)
+        } elif value == 47 && index + 1 < source.byte_len() && source.byte_at(index + 1) == 42 {
+            index = comment_end(source, index)
+        } elif value == 59 {
+            ret index + 1
+        } elif value == 123 || value == 125 {
+            ret index
+        } else {
+            index += 1
+        }
+    }
+    ret index
+}
+
+fn decode_path(source: str) -> Result[str, str] {
+    let mut parts = Vec[str]::new()
+    let mut start = 0_usize
+    let mut index = 0_usize
+    while index < source.byte_len() {
+        let value = source.byte_at(index)
+        if value == 0 || value == 10 || value == 13 || value == 12 {
+            ret Result::Err("invalid character in import path")
+        }
+        if value == 92 {
+            parts.push(source.slice_bytes(start, index - start))
+            index += 1
+            if index == source.byte_len() {
+                ret Result::Err("unfinished escape in import path")
+            }
+            let escaped = source.byte_at(index)
+            if escaped == 10 || escaped == 12 {
+                index += 1
+            } elif escaped == 13 {
+                index += 1
+                if index < source.byte_len() && source.byte_at(index) == 10 {
+                    index += 1
+                }
+            } else {
+                if hex_digit(escaped) >= 0 {
+                    let mut code = 0_usize
+                    let mut digits = 0_usize
+                    while index < source.byte_len() && digits < 6 && hex_digit(source.byte_at(index)) >= 0 {
+                        code = code * 16 + hex_digit(source.byte_at(index)) as usize
+                        index += 1 digits += 1
+                    }
+                    if index < source.byte_len() && whitespace(source.byte_at(index)) {
+                        let last = source.byte_at(index)
+                        index += 1
+                        if last == 13 && index < source.byte_len() && source.byte_at(index) == 10 {
+                            index += 1
+                        }
+                    }
+                    if code == 0 || code > 1114111 ||(code >= 55296 && code <= 57343) {
+                        code = 65533
+                    }
+                    parts.push(encore_str_from_codepoint(code))
+                } else {
+                    let first = index
+                    index += 1
+                    while index < source.byte_len() && source.byte_at(index) >= 128 && source.byte_at(index) < 192 {
+                        index += 1
+                    }
+                    parts.push(source.slice_bytes(first, index - first))
+                }
+            }
+            start = index
+        } else {
+            index += 1
+        }
+    }
+    parts.push(source.slice_bytes(start, source.byte_len() - start))
+    let mut result = ""
+    for part in parts {
+        result += part
+    }
+    if result == "" {
+        ret Result::Err("empty import path")
+    }
+    // This loader resolves filesystem paths, not URLs or URL fragments.
+    let drive = result.byte_len() >= 3 && result.byte_at(1) == 58 &&
+    ((ascii_lower(result.byte_at(0)) >= 97 && ascii_lower(result.byte_at(0)) <= 122)) &&
+    (result.byte_at(2) == 47 || result.byte_at(2) == 92)
+    if (result.contains(":") && !drive) ||(result.byte_len() >= 2 && result.slice_bytes(0, 2) == "//") || result.contains("?") || result.contains("#") {
+        ret Result::Err("only local filesystem imports are supported")
+    }
+    ret Result::Ok(result)
+}
+
+fn import_rule(source: str, start: usize) -> ImportRule {
+    let end = statement_end(source, start)
+    let mut index = trivia_end(source, start + 7)
+    let mut wrapped = false
+    if word_at(source, index, "url") {
+        index = trivia_end(source, index + 3)
+        if index >= source.byte_len() || source.byte_at(index) != 40 {
+            ret ImportRule { end, "", "expected url(...) in @import" }
+        }
+        wrapped = true
+        index = trivia_end(source, index + 1)
+    }
+    if index >= source.byte_len() {
+        ret ImportRule { end, "", "missing import path" }
+    }
+    let first = index
+    let mut raw = ""
+    if source.byte_at(index) == 34 || source.byte_at(index) == 39 {
+        let quote = source.byte_at(index)
+        index = quoted_end(source, index)
+        if index > source.byte_len() || index <= first + 1 || source.byte_at(index - 1) != quote {
+            ret ImportRule { end, "", "unclosed import path" }
+        }
+        raw = source.slice_bytes(first + 1, index - first - 2)
+    } elif wrapped {
+        while index < source.byte_len() && !whitespace(source.byte_at(index)) && source.byte_at(index) != 41 {
+            let value = source.byte_at(index)
+            if value == 34 || value == 39 || value == 40 || value == 59 || value < 32 {
+                ret ImportRule { end, "", "invalid unquoted url() import path" }
+            }
+            if value == 92 && index + 1 < source.byte_len() {
+                index += 1
+            }
+            index += 1
+        }
+        raw = source.slice_bytes(first, index - first)
+    } else {
+        ret ImportRule { end, "", "expected a quoted path or url(...) in @import" }
+    }
+    index = trivia_end(source, index)
+    if wrapped {
+        if index >= source.byte_len() || source.byte_at(index) != 41 {
+            ret ImportRule { end, "", "expected closing ')' in @import" }
+        }
+        index = trivia_end(source, index + 1)
+    }
+    if index >= source.byte_len() || source.byte_at(index) != 59 {
+        ret ImportRule {
+            end, "", "expected ';'; media, supports and layer imports are not supported"
+        }
+    }
+    match decode_path(raw) {
+        Result::Ok(path) => {
+            ret ImportRule { index + 1, path, "" }
+        }
+        Result::Err(message) => {
+            ret ImportRule { end, "", message }
+        }
+    }
+}
+
+fn load_file(path: str, active: mut Vec[str], chain: str) -> Result[str, str] {
+    let chain = if chain == "" {
+        path
+    } else {
+        chain + " -> " + path
+    }
+    for ancestor in active {
+        if ancestor == path {
+            ret Result::Err("cyclic CSS import: " + chain)
+        }
+    }
+    if active.len() >= 64 {
+        ret Result::Err("CSS import depth exceeds 64 files: " + chain)
+    }
+    let mut status = Vec[u8]::new()
+    status.push(0_u8)
+    let source = luma_css_read_file(path, status.as_ptr())
+    if status.get(0_usize).unwrap_or(0_u8) == 0_u8 {
+        ret Result::Err("cannot read stylesheet: " + chain + ": " + source)
+    }
+    active.push(path)
+    let result = expand_source(source, path, active, chain, 0_u32)
+    active.pop()
+    ret result
+}
+
+// mode: 0 = file loading, 1 = strict in-memory parsing, 2 = tolerant parsing.
+fn expand_source(source: str, path: str, active: mut Vec[str], chain: str, mode: u32) -> Result[str, str] {
+    let mut pieces = Vec[str]::new()
+    let mut start = 0_usize
+    let mut index = 0_usize
+    let mut depth = 0_i32
+    let mut seen_rule = false
+    while index < source.byte_len() {
+        let value = source.byte_at(index)
+        if value == 47 && index + 1 < source.byte_len() && source.byte_at(index + 1) == 42 {
+            let end = comment_end(source, index)
+            if end > source.byte_len() {
+                ret Result::Err("unclosed CSS comment: " + chain)
+            }
+            index = end
+            continue
+        }
+        if value == 34 || value == 39 {
+            let end = quoted_end(source, index)
+            if end > source.byte_len() {
+                ret Result::Err("unclosed CSS string: " + chain)
+            }
+            if depth == 0 {
+                seen_rule = true
+            }
+            index = end
+            continue
+        }
+        if value == 64 && depth == 0 && import_at(source, index) {
+            let rule = import_rule(source, index)
+            if mode == 1 {
+                ret Result::Err("@import requires StyleSheet::from_file()")
+            }
+            pieces.push(source.slice_bytes(start, index - start))
+            if mode == 2 {
+                eprintln("Luma: ignoring @import in StyleSheet::parse(); use StyleSheet::from_file()")
+            } else {
+                if seen_rule {
+                    ret Result::Err("@import must precede style rules: " + chain)
+                }
+                if rule.error != "" {
+                    ret Result::Err(rule.error + ": " + chain)
+                }
+                let base = Path::new(path).parent().unwrap_or(Path::cwd())
+                let target = base.join(rule.path).resolve().as_str()
+                match load_file(target, active, chain) {
+                    Result::Ok(imported) => {
+                        pieces.push(imported) pieces.push("\n")
+                    }
+                    Result::Err(message) => {
+                        ret Result::Err(message)
+                    }
+                }
+            }
+            index = rule.end
+            start = index
+            continue
+        }
+        if value == 123 {
+            depth += 1 seen_rule = true
+        } elif value == 125 {
+            depth -= 1
+            if depth < 0 {
+                ret Result::Err("unexpected closing CSS brace: " + chain)
+            }
+        } elif depth == 0 && !whitespace(value) {
+            seen_rule = true
+        }
+        index += 1
+    }
+    if depth != 0 {
+        ret Result::Err("unclosed CSS rule: " + chain)
+    }
+    if pieces.len() == 0 {
+        ret Result::Ok(source)
+    }
+    pieces.push(source.slice_bytes(start, source.byte_len() - start))
+    let mut result = ""
+    for piece in pieces {
+        result += piece
+    }
+    ret Result::Ok(result)
+}
+
+/// Loads a root CSS file and expands local imports before cascade construction.
+pub fn load_css_file(path: str) -> Result[str, str] {
+    let mut active = Vec[str]::new()
+    ret load_file(Path::new(path).resolve().as_str(), active, "")
+}
+
+/// Keeps in-memory parsing free of filesystem IO, even when it sees @import.
+pub fn memory_css_source(source: str, strict: bool) -> Result[str, str] {
+    let mut active = Vec[str]::new()
+    ret expand_source(source, "", active, "in-memory CSS", if strict {
+            1_u32
+        } else {
+            2_u32
+        }
+        ,
+    )
+}

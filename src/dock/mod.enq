@@ -1,0 +1,5 @@
+//! Reusable docking model and retained panel host, independent of native backends.
+pub import mod::drag::DockDrag
+pub import mod::interaction::{DockInteraction, DockDrop, DockRelease}
+pub import mod::host::DockHost
+pub import mod::model::*

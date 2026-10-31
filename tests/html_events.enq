@@ -9,7 +9,7 @@ struct Trace {
 }
 
 impl for Trace {
-    fn push(self: Self &, value: u32) ->() {
+    fn push(self: mut Self &, value: u32) ->() {
         self.values.push(value) ret()
     }
     fn len(self: Self &) -> usize {

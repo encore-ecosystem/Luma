@@ -1,7 +1,5 @@
-import luma:: {
-    Color, DisplayCommand, DisplayList, Rect, RetainedDisplayList
-}
 import core::option::Option
+import luma::{Color, DisplayCommand, DisplayList, Rect, RetainedDisplayList}
 
 fn main() -> u32 {
     let mut list = DisplayList::new()
@@ -94,6 +92,28 @@ fn main() -> u32 {
     if !retained.remove("content") || retained.len() != 1_usize ||
     retained.damage().len() != 1_usize {
         ret 8_u32
+    }
+    let mut gradient = DisplayList::new()
+    gradient.gradient_line(10, 20, 80, 40, 1.25,
+        Color::rgba(240, 243, 247, 0), Color::rgba(240, 243, 247, 242),)
+    retained.upsert("gradient", bounds, gradient.commands(), true)
+    match retained.overlay_frame().commands().get(1) {
+        Option::Some(command) => {
+            match command {
+                DisplayCommand::GradientLine(line) => {
+                    if line.x0() != 10 || line.y0() != 20 || line.x1() != 80 || line.y1() != 40 ||
+                    line.width() != 1.25 || line.start_color().alpha() != 0 || line.end_color().alpha() != 242 {
+                        ret 10
+                    }
+                }
+                _ => {
+                    ret 11
+                }
+            }
+        }
+        _ => {
+            ret 11
+        }
     }
     ret 0_u32
 }

@@ -11,7 +11,7 @@ fn main() -> u32 {
     // Reduced motion makes this a deterministic style-state test. Animated
     // hover transitions are covered separately by the retained runtime tests.
     let mut reactive = window.reactive(Widget::button("action", "Action"))
-        .with_reduced_motion(true)
+    reactive = reactive.with_reduced_motion(true)
     let sheet = StyleSheet::parse(
         "button:hover { border-width: 2px; }")
     if !window.patch_interaction_style(reactive, sheet, "action",

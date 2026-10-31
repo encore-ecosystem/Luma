@@ -1,0 +1,8 @@
+[project]
+name = "luma_cyberpunk"
+version = "0.1.0"
+description = "A cyberpunk main-menu mockup rendered by Luma"
+dependencies = ["path@../..", "index@std"]
+
+[lint]
+dependencies = "allow"

@@ -122,13 +122,13 @@ swatch:active {
   transition-duration: 70ms;
 }
 
-button:focus,
-input:focus,
-textarea:focus,
-select:focus,
-switch:focus,
-a:focus,
-swatch:focus {
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+switch:focus-visible,
+a:focus-visible,
+swatch:focus-visible {
   outline: 2px solid var(--luma-focus);
   outline-offset: 2px;
 }
@@ -244,3 +244,101 @@ terminal {
   font-family: "JetBrains Mono";
   border-color: #374151;
 }
+
+/* Dock shells contain persistent panels; only the active tab participates in layout. */
+.luma-dock-root, .luma-dock-split, .luma-dock-group, .luma-dock-body, .luma-dock-panel, .luma-dock-empty {
+  padding: 0; gap: 0; border: 0; border-radius: 0; min-width: 0; min-height: 0;
+  background: var(--luma-canvas);
+}
+.luma-dock-root, .luma-dock-group, .luma-dock-body, .luma-dock-panel { flex-direction: column; }
+.luma-dock-split.horizontal { flex-direction: row; }
+.luma-dock-split.vertical { flex-direction: column; }
+.luma-dock-panel.hidden { display: none; }
+.luma-dock-panel > * { flex: 1 1 0px; }
+.luma-dock-tabs {
+  flex: 0 0 28px; flex-direction: row; align-items: center; padding: 0; gap: 0;
+  border: 0; border-radius: 0; background: var(--luma-surface);
+}
+.luma-dock-tab {
+  flex: 0 1 156px; min-width: 48px; max-width: 220px; min-height: 0;
+  border: 0; border-radius: 0; padding: 4px 8px; font-size: 11px;
+  background: var(--luma-surface); color: var(--luma-muted);
+}
+.luma-dock-tab.selected { background: var(--luma-surface-active); color: var(--luma-text); }
+.luma-dock-splitter { flex: 0 0 8px; padding: 0; min-width: 0; min-height: 0; position: relative; z-index: 2; }
+.luma-dock-splitter, .luma-dock-splitter:hover, .luma-dock-splitter:active, .luma-dock-splitter:focus, .luma-dock-splitter:focus-visible {
+  background: transparent; border: 0; border-radius: 0; outline: none; box-shadow: none;
+}
+.luma-dock-splitter.column { margin: 0 -3px; cursor: col-resize; }
+.luma-dock-splitter.row { margin: -3px 0; cursor: row-resize; }
+
+/* Windowless color picker: ordinary retained controls on the overlay layer. */
+.luma-color-dialog {
+  position: absolute; z-index: 120; width: 468px; height: 558px;
+  padding: 16px; gap: 10px; overflow-y: auto;
+  background: var(--luma-surface); color: var(--luma-text);
+  border: 1px solid var(--luma-border); border-radius: 8px;
+  box-shadow: 0 12px 36px #00000066; font-size: 12px;
+}
+.luma-cp-title { font-size: 15px; font-weight: 600; }
+.luma-cp-row { flex: 0 0 32px; min-height: 32px; gap: 8px; align-items: center; padding: 0; }
+.luma-cp-visual { flex: 0 0 208px; height: 208px; gap: 12px; padding: 0; }
+.luma-cp-sv { flex: 0 0 208px; width: 208px; height: 208px; padding: 0; position: relative; cursor: crosshair; border-radius: 0; }
+.luma-cp-shade { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; padding: 0; }
+.luma-cp-marker { position: absolute; width: 10px; height: 10px; border: 2px solid white; border-radius: 5px; background: transparent; box-shadow: 0 0 0 1px black; pointer-events: none; }
+.luma-cp-hue { flex: 0 0 20px; width: 20px; height: 208px; position: relative; padding: 0; gap: 0; cursor: crosshair; }
+.luma-cp-hue-segment { flex: 1 1 0px; min-height: 0; padding: 0; pointer-events: none; }
+.luma-cp-hue-marker { position: absolute; left: -3px; right: -3px; height: 4px; background: transparent; border: 1px solid white; box-shadow: 0 0 0 1px black; pointer-events: none; }
+.luma-cp-samples { flex: 1 1 0px; min-width: 90px; padding: 0; gap: 6px; }
+.luma-cp-label { flex: 0 0 auto; min-height: 18px; font-size: 11px; }
+.luma-cp-row > .luma-cp-label { flex: 0 0 76px; }
+.luma-cp-muted { flex: 0 0 auto; min-height: 18px; font-size: 10px; color: var(--luma-muted); }
+.luma-cp-error { flex: 0 0 auto; min-height: 18px; font-size: 11px; color: var(--luma-danger); }
+.luma-cp-sample { flex: 0 0 56px; min-height: 56px; border: 1px solid var(--luma-border); border-radius: 3px; font-size: 10px; }
+.luma-cp-channel { flex: 0 0 28px; font-size: 11px; }
+.luma-cp-input { flex: 1 1 0px; min-width: 55px; height: 30px; padding: 5px 7px; border: 1px solid var(--luma-border); border-radius: 3px; background: var(--luma-canvas); color: var(--luma-text); font-size: 12px; cursor: text; }
+.luma-cp-button { flex: 0 0 68px; min-width: 28px; height: 30px; padding: 5px 8px; border: 1px solid var(--luma-border); border-radius: 3px; background: var(--luma-surface); color: var(--luma-text); font-size: 12px; cursor: pointer; }
+.luma-cp-button:hover { background: var(--luma-surface-hover); }
+.luma-cp-button:active { background: var(--luma-surface-active); border-color: var(--luma-accent); }
+.luma-cp-input:focus, .luma-cp-button:focus, .luma-cp-sv:focus, .luma-cp-hue:focus { outline: 2px solid var(--luma-focus); outline-offset: 2px; }
+.luma-cp-primary { background: var(--luma-accent); color: white; }
+.luma-cp-primary:hover { background: var(--luma-accent-hover); }
+.luma-cp-button:disabled { opacity: 0.4; cursor: default; }
+
+.luma-cp-headings { flex: 0 0 18px; min-height: 18px; }
+.luma-cp-sample.luma-cp-button { flex: 0 0 56px; height: 56px; }
+.luma-cp-close { flex: 0 0 28px; width: 28px; min-width: 28px; padding: 3px; }
+
+.luma-cp-sv { background: linear-gradient(to right, #ffffff, var(--cp-hue)); }
+.luma-cp-shade { background: linear-gradient(to bottom, #00000000, #000000ff); }
+.luma-cp-hue-segment { background: linear-gradient(to bottom, var(--cp-start), var(--cp-end)); }
+.luma-cp-sample { background: var(--cp-color); color: var(--cp-ink, #ffffff); }
+.luma-cp-sample:hover, .luma-cp-sample:active, .luma-cp-sample:focus { background: var(--cp-color); color: var(--cp-ink, #ffffff); border-color: var(--luma-focus); }
+.luma-cp-heading { flex: 1 1 0px; min-width: 0; font-size: 10px; color: var(--luma-muted); }
+
+.luma-property-row { flex-direction: row; flex: 0 0 26px; min-height: 26px; gap: 8px; padding: 0; align-items: center; }
+.luma-property-label { flex: 0 0 88px; min-width: 0; font-size: 12px; color: var(--luma-muted); }
+.luma-property-control { flex: 1 1 0px; min-width: 0; height: 24px; min-height: 24px; }
+.luma-property-section { flex-direction: column; flex-grow: 0; flex-shrink: 0; min-height: 24px; padding: 0; gap: 4px; }
+.luma-property-content { flex-direction: column; flex: 1 1 0px; min-width: 0; min-height: 0; padding: 0; gap: 0; }
+.luma-property-heading { height: 24px; min-height: 24px; padding: 3px 8px; text-align: left; font-size: 11px; font-weight: 600; border: 0; border-radius: 2px; background: var(--luma-surface); color: var(--luma-text); }
+.luma-property-heading:hover { background: var(--luma-surface-hover); }
+.luma-property-heading:focus { outline: 1px solid var(--luma-focus); outline-offset: -1px; }
+
+/* Opt-in density: other applications retain the regular picker geometry. */
+.luma-color-dialog.luma-cp-compact { width: 320px; height: 384px; padding: 10px; gap: 6px; border-radius: 5px; }
+.luma-cp-compact .luma-cp-title { font-size: 12px; }
+.luma-cp-compact .luma-cp-row { flex: 0 0 26px; min-height: 26px; gap: 4px; }
+.luma-cp-compact .luma-cp-row:first-child { flex: 0 0 24px; min-height: 24px; }
+.luma-cp-compact .luma-cp-visual { flex: 0 0 184px; height: 184px; gap: 8px; }
+.luma-cp-compact .luma-cp-sv { flex: 0 0 184px; width: 184px; height: 184px; }
+.luma-cp-compact .luma-cp-hue { flex: 0 0 16px; width: 16px; height: 184px; }
+.luma-cp-compact .luma-cp-samples { flex: 0 0 84px; min-width: 84px; gap: 4px; }
+.luma-cp-compact .luma-cp-sample { flex: 0 0 52px; min-height: 52px; height: 52px; }
+.luma-cp-compact .luma-cp-input { height: 24px; min-width: 0; padding: 3px 5px; }
+.luma-cp-compact .luma-cp-channel { flex: 0 0 16px; font-size: 11px; }
+.luma-cp-compact .luma-cp-button { height: 24px; padding: 3px 6px; }
+.luma-cp-compact .luma-cp-modes { flex: 0 0 24px; min-height: 24px; }
+.luma-cp-modes .luma-cp-button { flex: 1 1 0px; }
+.luma-cp-mode-selected, .luma-cp-mode-selected:hover { background: var(--luma-accent); color: white; border-color: var(--luma-accent); }
+.luma-cp-compact .luma-cp-muted, .luma-cp-compact .luma-cp-error { flex: 0 0 16px; min-height: 16px; font-size: 10px; }

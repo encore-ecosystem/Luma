@@ -1,0 +1,76 @@
+//! Public reactive window APIs preserve one declarative/CSS/interaction state.
+import luma::{RendererKind, Style, StyleSheet, Widget, Window}
+import std::vec::Vec
+
+fn view(label: str, sibling: str) -> Widget {
+    let mut root = Widget::panel("root")
+    root.push(Widget::button("target", label).with_computed_style(Style::default()))
+    root.push(Widget::label(sibling).with_id("sibling"))
+    ret root
+}
+
+fn main() -> u32 {
+    let sheet = StyleSheet::parse("button:hover { border-width: 2px; }")
+    let window = Window::create_with_renderer("Reactive API", 240_u32, 120_u32,
+        RendererKind::Software,).with_stylesheet(sheet)
+    if !window.available() {
+        ret 1_u32
+    }
+
+    let mut reactive = window.reactive(view("initial", "stable"))
+    reactive = reactive.with_reduced_motion(true)
+    if !window.patch_interaction_style(reactive, window.stylesheet(),
+        "target", true, false, false,) {
+        window.destroy()
+        ret 2_u32
+    }
+    let initial_frames = window.presented_frames()
+    let target_style = reactive.find_widget("target").unwrap_or(
+        Widget::spacer(0.0_f32)).style()
+    if target_style.border_width() != 2.0_f32 {
+        window.destroy()
+        ret 2_u32
+    }
+
+    let updated = view("updated", "stable")
+    reactive = window.update_reactive(reactive, updated)
+    if reactive.declarative_root().find("target").unwrap_or(
+        Widget::spacer(0.0_f32)).text() != "updated" ||
+    reactive.declarative_root().find("sibling").unwrap_or(
+        Widget::spacer(0.0_f32)).text() != "stable" ||
+    reactive.find_widget("target").unwrap_or(Widget::spacer(0.0_f32))
+    .style().border_width() != 2.0_f32 {
+        window.destroy()
+        ret 3_u32
+    }
+
+    let mut partial = view("partial", "sibling preserved")
+    partial.push(Widget::label("new sibling").with_id("new-sibling"))
+    let mut targets = Vec[str]::new()
+    targets.push("target")
+    reactive = window.restyle_reactive(reactive, partial, targets)
+    let authored = reactive.declarative_root()
+    if authored.find("target").unwrap_or(Widget::spacer(0.0_f32)).text() != "partial" ||
+    authored.find("sibling").unwrap_or(Widget::spacer(0.0_f32)).text() != "stable" ||
+    authored.find("new-sibling").is_some() ||
+    reactive.find_widget("target").unwrap_or(Widget::spacer(0.0_f32))
+    .style().border_width() != 2.0_f32 {
+        window.destroy()
+        ret 4_u32
+    }
+
+    let before_rebuild = window.presented_frames()
+    reactive = window.rebuild_reactive(reactive, view("rebuilt", "fresh"))
+    let rebuilt = reactive.find_widget("target").unwrap_or(Widget::spacer(0.0_f32))
+    let valid = reactive.declarative_root().find("target").unwrap_or(
+        Widget::spacer(0.0_f32)).text() == "rebuilt" &&
+    rebuilt.style().border_width() == 2.0_f32 &&
+    window.presented_frames() == before_rebuild + 1_u64 &&
+    window.presented_frames() >= initial_frames
+    window.destroy()
+    ret if valid {
+        0_u32
+    } else {
+        5_u32
+    }
+}

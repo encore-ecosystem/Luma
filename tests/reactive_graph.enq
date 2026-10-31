@@ -1,0 +1,84 @@
+//! Dependencies are automatic, local, disposable and independent of UI size.
+import luma::ReactiveGraph
+
+fn main() -> u32 {
+    let mut graph = ReactiveGraph::new()
+    let left = graph.source()
+    let right = graph.source()
+    let observer = graph.observer()
+    if !graph.begin(observer) || !graph.read(left) || !graph.read(left) || !graph.end(observer) {
+        ret 1
+    }
+    let before = graph.invalidations()
+    let _unrelated = graph.write(right)
+    if graph.take_pending().len() != 0 || graph.invalidations() != before {
+        ret 2
+    }
+    let _first = graph.write(left)
+    let _second = graph.write(left)
+    if graph.take_pending().len() != 1 || !graph.is_dirty(observer) || graph.invalidations() != before + 1 {
+        ret 3
+    }
+    // Conditional evaluation replaces subscriptions rather than accumulating them.
+    if !graph.begin(observer) || !graph.read(right) || !graph.end(observer) {
+        ret 4
+    }
+    let _old = graph.write(left)
+    if graph.take_pending().len() != 0 {
+        ret 5
+    }
+    let _new = graph.write(right)
+    if graph.take_pending().len() != 1 {
+        ret 6
+    }
+    if !graph.dispose_observer(observer) {
+        ret 7
+    }
+    let replacement = graph.observer()
+    if replacement.same(observer) || graph.has_observer(observer) {
+        ret 8
+    }
+    let _disposed = graph.write(right)
+    if graph.take_pending().len() != 0 {
+        ret 9
+    }
+    if !graph.dispose_source(left) {
+        ret 10
+    }
+    let fresh = graph.source()
+    if fresh.same(left) || graph.write(left) || graph.has_source(left) {
+        ret 11
+    }
+    // Repeated mount/unmount reuses storage and rejects recursive evaluations.
+    let capacity = graph.observer_capacity()
+    for _index in 0..1000 {
+        let current = graph.observer()
+        if !graph.begin(current) || graph.begin(current) || !graph.read(fresh) || !graph.end(current) {
+            ret 12
+        }
+        if !graph.dispose_observer(current) {
+            ret 13
+        }
+    }
+    if graph.observer_capacity() > capacity + 1 {
+        ret 14
+    }
+    let mut other = ReactiveGraph::new()
+    let foreign = other.source()
+    if graph.has_source(foreign) || graph.write(foreign) || foreign.same(fresh) {
+        ret 15
+    }
+    let _drained = graph.take_pending()
+    for _index in 0..1000 {
+        let current = graph.observer()
+        let _began = graph.begin(current)
+        let _read = graph.read(fresh)
+        let _ended = graph.end(current)
+        let _written = graph.write(fresh)
+        let _removed = graph.dispose_observer(current)
+    }
+    if graph.pending_count() > 1 || graph.take_pending().len() != 0 {
+        ret 16
+    }
+    ret 0
+}

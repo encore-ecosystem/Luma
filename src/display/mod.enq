@@ -1,26 +1,142 @@
 //! Backend-independent display commands and damage regions.
 
 import color::Color
+import core::option::Option
 import core::vec::Vec
-import geometry::Rect
+import refrain::geometry::Rect
+import refrain::style::Style
+import refrain::svg::SvgDocument
+
+pub struct DisplayPoint {
+    x: f32
+    y: f32
+}
+
+impl for DisplayPoint {
+    pub fn new(x: f32, y: f32) -> Self {
+        ret Self { x, y }
+    }
+    pub fn x(self: Self) -> f32 {
+        ret self.x
+    }
+    pub fn y(self: Self) -> f32 {
+        ret self.y
+    }
+}
+pub struct PathCommand {
+    points: Vec[DisplayPoint]
+    width: f32
+    color: Color
+    closed: bool
+}
+
+impl for PathCommand {
+    pub fn points(self: Self) -> Vec[DisplayPoint] {
+        ret self.points
+    }
+    pub fn width(self: Self) -> f32 {
+        ret self.width
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+    pub fn closed(self: Self) -> bool {
+        ret self.closed
+    }
+}
+pub struct TriangleCommand {
+    a: DisplayPoint
+    b: DisplayPoint
+    c: DisplayPoint
+    color: Color
+}
+
+impl for TriangleCommand {
+    pub fn a(self: Self) -> DisplayPoint {
+        ret self.a
+    }
+    pub fn b(self: Self) -> DisplayPoint {
+        ret self.b
+    }
+    pub fn c(self: Self) -> DisplayPoint {
+        ret self.c
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+}
+pub struct StyledTextCommand {
+    x: f32
+    y: f32
+    value: str
+    style: Style
+}
+
+impl for StyledTextCommand {
+    pub fn x(self: Self) -> f32 {
+        ret self.x
+    }
+    pub fn y(self: Self) -> f32 {
+        ret self.y
+    }
+    pub fn value(self: Self) -> str {
+        ret self.value
+    }
+    pub fn style(self: Self) -> Style {
+        ret self.style
+    }
+}
 
 pub struct FillRectCommand {
-    bounds: Rect color: Color
+    bounds: Rect
+    color: Color
 }
 pub struct StrokeRectCommand {
-    bounds: Rect color: Color
+    bounds: Rect
+    color: Color
 }
 pub struct RoundRectCommand {
-    bounds: Rect radius: f32 color: Color filled: bool
+    bounds: Rect
+    radius: f32
+    color: Color
+    filled: bool
 }
 pub struct LineCommand {
-    x0: f32 y0: f32 x1: f32 y1: f32 width: f32 color: Color
+    x0: f32
+    y0: f32
+    x1: f32
+    y1: f32
+    width: f32
+    color: Color
+}
+/// A stroke with linearly interpolated endpoint colors and opacity.
+pub struct GradientLineCommand {
+    line: LineCommand
+    end_color: Color
 }
 pub struct TextCommand {
-    x: f32 y: f32 value: str color: Color
+    x: f32
+    y: f32
+    value: str
+    color: Color
 }
 pub struct ClipCommand {
-    bounds: Rect enabled: bool
+    bounds: Rect
+    enabled: bool
+}
+
+/// Immutable vector source, rendered through the ordinary SVG geometry cache.
+pub struct SvgCommand {
+    bounds: Rect
+    document: SvgDocument
+    color: Color
+    stroke_width: f32
+}
+impl for SvgCommand {
+    pub fn bounds(self: Self) -> Rect { ret self.bounds }
+    pub fn document(self: Self) -> SvgDocument { ret self.document }
+    pub fn color(self: Self) -> Color { ret self.color }
+    pub fn stroke_width(self: Self) -> f32 { ret self.stroke_width }
 }
 
 pub enum DisplayCommand {
@@ -28,8 +144,13 @@ pub enum DisplayCommand {
     StrokeRect(StrokeRectCommand)
     RoundRect(RoundRectCommand)
     Line(LineCommand)
+    GradientLine(GradientLineCommand)
     Text(TextCommand)
     Clip(ClipCommand)
+    Path(PathCommand)
+    Triangle(TriangleCommand)
+    StyledText(StyledTextCommand)
+    Svg(SvgCommand)
 }
 
 /// A renderer-neutral frame description. Commands preserve paint order while
@@ -73,6 +194,7 @@ impl for FillRectCommand {
         ret self.color
     }
 }
+
 impl for StrokeRectCommand {
     pub fn new(bounds: Rect, color: Color) -> Self {
         ret Self {
@@ -86,6 +208,7 @@ impl for StrokeRectCommand {
         ret self.color
     }
 }
+
 impl for RoundRectCommand {
     pub fn new(bounds: Rect, radius: f32, color: Color, filled: bool) -> Self {
         ret Self {
@@ -105,6 +228,7 @@ impl for RoundRectCommand {
         ret self.filled
     }
 }
+
 impl for LineCommand {
     pub fn new(x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color) -> Self {
         ret Self {
@@ -130,6 +254,31 @@ impl for LineCommand {
         ret self.color
     }
 }
+
+impl for GradientLineCommand {
+    pub fn x0(self: Self) -> f32 {
+        ret self.line.x0()
+    }
+    pub fn y0(self: Self) -> f32 {
+        ret self.line.y0()
+    }
+    pub fn x1(self: Self) -> f32 {
+        ret self.line.x1()
+    }
+    pub fn y1(self: Self) -> f32 {
+        ret self.line.y1()
+    }
+    pub fn width(self: Self) -> f32 {
+        ret self.line.width()
+    }
+    pub fn start_color(self: Self) -> Color {
+        ret self.line.color()
+    }
+    pub fn end_color(self: Self) -> Color {
+        ret self.end_color
+    }
+}
+
 impl for TextCommand {
     pub fn new(x: f32, y: f32, value: str, color: Color) -> Self {
         ret Self {
@@ -149,6 +298,7 @@ impl for TextCommand {
         ret self.color
     }
 }
+
 impl for ClipCommand {
     pub fn new(bounds: Rect, enabled: bool) -> Self {
         ret Self {
@@ -207,9 +357,36 @@ impl for DisplayList {
         self.push(DisplayCommand::Line(LineCommand::new(x0, y0, x1, y1, width, color)))
         ret()
     }
+    /// Interpolates colors on the same antialiased geometry as an ordinary
+    /// line. No raster image, per-pixel commands or extra presentation.
+    pub fn gradient_line(self: mut Self, x0: f32, y0: f32, x1: f32, y1: f32,
+        width: f32, start_color: Color, end_color: Color,) ->() {
+        self.push(DisplayCommand::GradientLine(GradientLineCommand {
+                    LineCommand::new(x0, y0, x1, y1, width, start_color), end_color
+                }
+                ,))
+    }
     pub fn text(self: mut Self, x: f32, y: f32, value: str, color: Color) ->() {
         self.push(DisplayCommand::Text(TextCommand::new(x, y, value, color)))
         ret()
+    }
+    /// A connected antialiased stroke; joints do not accumulate transparency.
+    pub fn path(self: mut Self, points: Vec[DisplayPoint], width: f32, color: Color, closed: bool) ->() {
+        if points.len() >= 2 && width > 0 {
+            self.push(DisplayCommand::Path(PathCommand { points, width, color, closed }))
+        }
+    }
+    /// Explicit triangle primitives avoid imposing a polygon tessellator on clients.
+    pub fn triangle(self: mut Self, a: DisplayPoint, b: DisplayPoint, c: DisplayPoint, color: Color) ->() {
+        self.push(DisplayCommand::Triangle(TriangleCommand { a, b, c, color }))
+    }
+    pub fn styled_text(self: mut Self, x: f32, y: f32, value: str, style: Style) ->() {
+        self.push(DisplayCommand::StyledText(StyledTextCommand { x, y, value, style }))
+    }
+    pub fn svg(self: mut Self, bounds: Rect, document: SvgDocument, color: Color, stroke_width: f32) -> () {
+        if document.valid() && bounds.width() > 0 && bounds.height() > 0 && stroke_width > 0 {
+            self.push(DisplayCommand::Svg(SvgCommand { bounds, document, color, stroke_width }))
+        }
     }
     pub fn clip(self: mut Self, bounds: Rect) ->() {
         self.push(DisplayCommand::Clip(ClipCommand::new(bounds, true)))

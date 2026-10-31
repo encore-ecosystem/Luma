@@ -1,0 +1,184 @@
+//! Structural transactions update independent islands without rebuilding peers.
+import core::vec::Vec
+import luma::{Color, ReactiveUi, Rect, RendererKind, Style, StyleSheet, UiBindings, UiContext, UiEvent, Widget, Window, layout_widget, ui_event_click}
+
+fn overlay(step: usize) -> Widget {
+    let mut branch = Widget::panel("overlay")
+    for index in 0..step % 5 {
+        let capture = step
+        branch.push(Widget::button(f"item-{index}", f"Item {step}").with_on_click( | event | {
+                    if capture % 2 == 0 {
+                        event.prevent_default()
+                    }
+                }
+            ))
+    }
+    ret branch
+}
+
+fn owned_layout_read(seed: usize) -> Widget {
+    let child = Widget::input(f"owned-read-{seed}", f"owned text {seed}")
+    .with_attribute("data-read", f"payload-{seed}")
+    .with_style(Style::default().with_font_family(f"family-{seed}"))
+    let layout = layout_widget(Widget::panel("owned-root").with_child(child), Rect::new(0, 0, 320, 240))
+    ret layout.widget_at_path(vec![0_usize], 0_usize).unwrap_or(Widget::spacer(0))
+}
+
+fn opacity_view(opacity: f32) -> Widget {
+    ret Widget::panel("opacity-root").with_style(Style::default().with_width(320).with_height(240).with_background(Color::rgb(0, 0, 0)))
+    .with_child(Widget::panel("opacity-group").with_style(Style::default().with_width(80).with_height(80).with_opacity(opacity))
+        .with_child(Widget::panel("opacity-child").with_style(Style::default().with_width(80).with_height(80).with_background(Color::rgb(250, 0, 0)))))
+}
+
+fn main() -> u32 {
+    let held = owned_layout_read(17_usize)
+    for index in 0..128 {
+        let _reused = owned_layout_read(index)
+    }
+    if held.id() != "owned-read-17" || held.text() != "owned text 17" ||
+    held.attribute("data-read").unwrap_or("") != "payload-17" || held.style().font_family() != "family-17" {
+        ret 24
+    }
+    let mut sizing_root = Widget::panel("sizing")
+    let value = Widget::input("sizing-value", "1")
+    let label = Widget::label("Short").with_id("sizing-label")
+    sizing_root.push(value)
+    sizing_root.push(label)
+    let sizing = ReactiveUi::new(layout_widget(sizing_root, Rect::new(0, 0, 320, 240)))
+    let mut path = Vec[usize]::new()
+    path.push(0)
+    if sizing.bound_content_needs_layout(path, value.with_text("1000")) {
+        ret 10
+    }
+    path.set(0, 1)
+    if !sizing.bound_content_needs_layout(path, label.with_text("A longer label")) {
+        ret 11
+    }
+    let mut root = Widget::panel("root")
+    root.push(Widget::label("Neighbor").with_id("neighbor"))
+    root.push(overlay(0))
+    root.push(Widget::panel("second"))
+    root.push(Widget::input("live-value", "0"))
+    root.push(Widget::button("flow-button", "Undo").with_disabled(true))
+    let mut bindings = UiBindings::new(UiContext::new())
+    let node = bindings.mount(root)
+    let tree = bindings.tree()
+    let target = tree.find(node, "overlay").unwrap_or(node)
+    let live_value = tree.find(node, "live-value").unwrap_or(node)
+    let flow_button = tree.find(node, "flow-button").unwrap_or(node)
+    let _mounted = tree.take_changes()
+    let window = Window::create_with_renderer("Local branches", 320, 240, RendererKind::Software)
+    .with_stylesheet(StyleSheet::parse("#root { --ink: #112233; } #live-value { width: 100px; height: 32px; } #overlay { position: absolute; left: 0px; top: 40px; width: 300px; height: 180px; } #second { position: absolute; left: 300px; top: 0px; width: 20px; height: 40px; } #popup { position: absolute; left: 10px; top: 10px; } .red { --ink: #ff0000; } #overlay button { color: var(--ink); } button:hover { background: #ff0000; } button:disabled { color: #999999; }"))
+    .with_bindings(bindings, node)
+    if !window.available() {
+        ret 1
+    }
+    let _visible = window.draw(opacity_view(1_f32))
+    if window.read_pixel(20, 20).red() < 240_u8 {
+        window.destroy() ret 26
+    }
+    let _hidden = window.draw(opacity_view(0_f32))
+    if window.read_pixel(20, 20).red() > 10_u8 {
+        window.destroy() ret 27
+    }
+    let mut ui = window.reactive(root)
+    if !ui.contains_widget("overlay") || ui.contains_widget("no-such-widget") {
+        window.destroy() ret 25
+    }
+    ui = ui.with_reduced_motion(true)
+    let generation = ui.segment_generation("neighbor")
+    let bounds = ui.find_layout("neighbor").unwrap_or(ui.layout()).bounds()
+    for step in 1..16 {
+        ui.clear_paint()
+        let _changed = bindings.reconcile(target, overlay(step))
+        let _value = tree.set_text(live_value, f"{step}")
+        let _button = bindings.reconcile(flow_button, Widget::button("flow-button", "Undo").with_disabled(step % 2 == 1))
+        ui = window.stage_binding_frame(ui, "", "", "", step as u64)
+        if ui.needs_layout() || ui.needs_structure() || ui.needs_full_repaint() ||
+        ui.segment_generation("neighbor") != generation ||
+        ui.find_layout("neighbor").unwrap_or(ui.layout()).bounds().width() != bounds.width() {
+            window.destroy() ret 2
+        }
+        let expected = step % 5
+        let displayed_button = ui.find_widget("flow-button").unwrap_or(Widget::spacer(0))
+        if displayed_button.disabled() !=(step % 2 == 1) ||
+        (displayed_button.disabled() && displayed_button.style().foreground().red() != 153) {
+            window.destroy() ret 12
+        }
+        if ui.find_widget("live-value").unwrap_or(Widget::spacer(0)).text() != f"{step}" {
+            window.destroy() ret 9
+        }
+        if ui.declarative_root().children().get(1).unwrap_or(Widget::spacer(0)).children().len() != expected ||
+        ui.find_layout("overlay").unwrap_or(ui.layout()).children().len() != expected {
+            window.destroy() ret 3
+        }
+        if expected > 0 {
+            let allowed = ui.dispatch_event("item-0", UiEvent::new(ui_event_click(), "item-0"))
+            if allowed !=(step % 2 != 0) {
+                window.destroy() ret 4
+            }
+            ui = window.stage_binding_frame(ui, "item-0", "", "", step as u64)
+            if ui.find_widget("item-0").unwrap_or(Widget::spacer(0)).style().background().red() != 255 {
+                window.destroy() ret 5
+            }
+            ui = window.stage_binding_frame(ui, "", "", "", step as u64)
+        }
+    }
+    // A nested popup's size belongs to its enclosing out-of-flow component.
+    for height in 80..82 {
+        let mut branch = Widget::panel("overlay")
+        let mut popup = Widget::panel("popup").with_computed_style(Style::default().with_width(100.0).with_height(height as f32))
+        popup.push(Widget::label("Popup"))
+        branch.push(popup)
+        let _popup = bindings.reconcile(target, branch)
+        ui = window.stage_binding_frame(ui, "", "", "", 19)
+        if ui.find_layout("popup").unwrap_or(ui.layout()).bounds().height() != height as f32 ||
+        ui.segment_generation("neighbor") != generation {
+            window.destroy() ret 8
+        }
+    }
+    // Two disjoint islands commit as one transaction, including offset shifts.
+    let second = tree.find(node, "second").unwrap_or(node)
+    let mut desired = Widget::panel("second")
+    desired.push(Widget::label("Second branch").with_id("second-label"))
+    let _changed = bindings.reconcile(second, desired)
+    let _changed = bindings.reconcile(target, overlay(2))
+    ui = window.stage_binding_frame(ui, "", "", "", 20)
+    if ui.find_widget("second-label").is_none() || ui.find_widget("item-1").is_none() ||
+    ui.segment_generation("neighbor") != generation {
+        window.destroy() ret 6
+    }
+    // A selector-only edit inside an island uses the same local transaction.
+    let _theme = tree.set_classes(target, "red")
+    ui = window.stage_binding_frame(ui, "", "", "", 21)
+    if ui.find_widget("item-0").unwrap_or(Widget::spacer(0)).style().foreground().red() != 255 ||
+    ui.segment_generation("neighbor") != generation {
+        window.destroy() ret 7
+    }
+    // Native scroll is retained state. A virtualized component can change
+    // children without resetting its offset or relaying out unrelated peers.
+    let scroller_style = ui.find_widget("overlay").unwrap_or(Widget::panel("")).style().with_overflow_hidden(true)
+    let mut scroller = Widget::panel("overlay").with_style(scroller_style).with_attribute("data-luma-scrollable", "true")
+    for index in 0..50 {
+        scroller.push(Widget::button(f"scroll-item-{index}", "Row"))
+    }
+    let _scroller = bindings.reconcile(target, scroller)
+    ui = window.stage_binding_frame(ui, "", "", "", 22_u64)
+    if !ui.scroll_at(200_f32, 170_f32, 72_f32) {
+        window.destroy() ret 13
+    }
+    let outside_scroll = ui.segment_generation("neighbor")
+    let mut scrolled_rows = Vec[Widget]::new()
+    for row in scroller.children() {
+        scrolled_rows.push(row)
+    }
+    scrolled_rows.push(Widget::button("scroll-last", "Last"))
+    let _updated = bindings.reconcile(target, scroller.with_children(scrolled_rows))
+    ui = window.stage_binding_frame(ui, "", "", "", 23_u64)
+    if ui.find_widget("scroll-last").is_none() || ui.segment_generation("neighbor") != outside_scroll ||
+    ui.find_widget("overlay").unwrap_or(Widget::panel("")).style().layout().scroll().y() != 72_f32 {
+        window.destroy() ret 14
+    }
+    window.destroy()
+    ret 0
+}

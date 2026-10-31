@@ -1,0 +1,14 @@
+import core::vec::Vec
+import std::io::println
+import std::os::read_file
+import std::process::run_args_capture
+fn main() -> u32 {
+    let built = run_args_capture("cc", vec!["-O2", "-ffunction-sections", "-fdata-sections", "tests/color_picker_gradient.c", "-Wl,--gc-sections", "-ldl", "-lm", "-o", "target/color-picker-gradient-test"], "target/color-picker-gradient-build.log")
+    if built != 0 {
+        println(read_file("target/color-picker-gradient-build.log")) ret 1
+    }
+    if run_args_capture("target/color-picker-gradient-test", Vec[str]::new(), "target/color-picker-gradient-run.log") != 0 {
+        println(read_file("target/color-picker-gradient-run.log")) ret 2
+    }
+    ret 0
+}

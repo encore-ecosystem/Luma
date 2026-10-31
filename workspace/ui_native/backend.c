@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include "raster_bounds.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -20,8 +22,8 @@
 #include <sys/stat.h>
 #endif
 
-typedef struct { size_t ref_count; size_t len; char data[]; } encore_str_object;
-typedef struct { encore_str_object *object; } encore_str;
+#include "vulkan_api.h"
+#include "sdl_api.h"
 
 extern void *encore_str_from_cstr(const char *value);
 extern bool luma_vk_ui_begin(size_t handle, uint32_t clear_color);
@@ -44,6 +46,12 @@ extern size_t luma_vk_ui_frame_prepare(size_t handle);
 extern bool luma_vk_ui_frame_begin_composition(size_t handle, size_t frame);
 extern bool luma_vk_ui_frame_finish(size_t handle, size_t frame);
 extern bool luma_vk_ui_composition_split(size_t handle);
+extern uint32_t luma_vk_ui_mesh_begin(size_t handle, encore_str key,
+    float scale, float stroke, float density, float x, float y, uint32_t color);
+extern bool luma_vk_ui_mesh_end(size_t handle);
+extern uint32_t luma_vk_ui_acquire_status(size_t handle);
+extern const char *luma_vk_ui_error_cstr(size_t handle);
+extern void luma_vk_ui_wake(size_t handle);
 extern size_t luma_vk_ui_texture_create(size_t handle, const void *pixels,
     uint32_t width, uint32_t height, uint32_t pitch, uint32_t format);
 extern size_t luma_vk_ui_texture_create_empty(size_t handle, uint32_t width,
@@ -51,6 +59,8 @@ extern size_t luma_vk_ui_texture_create_empty(size_t handle, uint32_t width,
 extern bool luma_vk_ui_texture_update(size_t handle, const void *pixels,
     uint32_t width, uint32_t height, uint32_t pitch, uint32_t x, uint32_t y);
 extern bool luma_vk_ui_texture_destroy(size_t handle);
+extern bool luma_vk_ui_external_release_ready(size_t handle);
+extern void luma_vk_ui_collect_idle_textures(size_t handle);
 extern bool luma_vk_ui_texture_draw(size_t handle, size_t texture,
     float x, float y, float width, float height);
 extern bool luma_vk_ui_texture_draw_region(size_t handle, size_t texture,
@@ -58,44 +68,6 @@ extern bool luma_vk_ui_texture_draw_region(size_t handle, size_t texture,
     uint32_t source_y, uint32_t source_width, uint32_t source_height);
 extern size_t luma_vk_ui_external_texture_create(size_t handle, uint64_t image,
     uint32_t width, uint32_t height, uint32_t layout);
-
-typedef struct UiSdlWindow UiSdlWindow;
-typedef struct UiSdlRenderer UiSdlRenderer;
-typedef struct UiSdlTexture UiSdlTexture;
-typedef struct UiSdlCursor UiSdlCursor;
-typedef uint32_t UiSdlPropertiesID;
-typedef struct UiSdlSurface {
-    uint32_t flags;
-    uint32_t format;
-    int width;
-    int height;
-    int pitch;
-    void *pixels;
-    int refcount;
-    void *reserved;
-} UiSdlSurface;
-typedef struct UiTtfFont UiTtfFont;
-typedef struct { float x, y, w, h; } UiSdlFRect;
-typedef struct { float x, y; } UiSdlFPoint;
-typedef struct { int x, y, w, h; } UiSdlRect;
-typedef struct { uint8_t r, g, b, a; } UiSdlColor;
-typedef struct { float r, g, b, a; } UiSdlFColor;
-typedef struct { UiSdlFPoint position; UiSdlFColor color; UiSdlFPoint tex_coord; } UiSdlVertex;
-typedef struct UiTtfTextEngine UiTtfTextEngine;
-typedef struct UiTtfText {
-    char *text;
-    int num_lines;
-    int refcount;
-    void *internal;
-} UiTtfText;
-typedef struct {
-    uint32_t flags;
-    int offset;
-    int length;
-    int line_index;
-    int cluster_index;
-    UiSdlRect rect;
-} UiTtfSubString;
 
 bool luma_vector_line(size_t handle, float x0, float y0, float x1, float y1,
     float width, uint32_t color);
@@ -110,24 +82,15 @@ static uint64_t ui_hash_bytes(const unsigned char *bytes, size_t length) {
 }
 
 typedef struct {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t timestamp;
-} UiSdlCommonEvent;
-
-typedef union {
-    uint32_t type;
-    UiSdlCommonEvent common;
-    uint8_t padding[128];
-} UiSdlEvent;
-
-typedef struct {
     UiTtfFont *font;
     float size;
     uint32_t weight;
     size_t face;
     uint64_t used_at;
+    void *backing;
 } UiFontVariant;
+
+typedef struct UiFontInstanceCache UiFontInstanceCache;
 
 typedef struct {
     char *family;
@@ -157,6 +120,14 @@ typedef struct {
 } UiTextCacheEntry;
 
 typedef struct {
+    char *text;
+    size_t length, face;
+    float size, density;
+    uint32_t weight;
+    int width, height;
+} UiTextMeasureEntry;
+
+typedef struct {
     UiSdlTexture *texture;
     uint32_t format;
     int cursor_x;
@@ -174,94 +145,6 @@ typedef struct {
     uint64_t used_at;
 } UiRasterCacheEntry;
 
-typedef struct {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t timestamp;
-    uint32_t window_id;
-    uint32_t which;
-    uint32_t state;
-    float x;
-    float y;
-    float xrel;
-    float yrel;
-} UiSdlMouseMotionEvent;
-
-typedef struct {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t timestamp;
-    uint32_t window_id;
-    uint32_t which;
-    uint8_t button;
-    bool down;
-    uint8_t clicks;
-    uint8_t padding;
-    float x;
-    float y;
-} UiSdlMouseButtonEvent;
-
-typedef struct {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t timestamp;
-    uint32_t window_id;
-    uint32_t which;
-    float x;
-    float y;
-    uint32_t direction;
-    float mouse_x;
-    float mouse_y;
-} UiSdlMouseWheelEvent;
-
-typedef struct {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t timestamp;
-    uint32_t window_id;
-    uint32_t which;
-    uint32_t scancode;
-    uint32_t key;
-    uint16_t mod;
-    uint16_t raw;
-    bool down;
-    bool repeat;
-} UiSdlKeyboardEvent;
-
-typedef struct {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t timestamp;
-    uint32_t window_id;
-    const char *text;
-} UiSdlTextInputEvent;
-
-typedef struct {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t timestamp;
-    uint32_t window_id;
-    int32_t data1;
-    int32_t data2;
-} UiSdlWindowEvent;
-
-enum {
-    UI_SDL_INIT_VIDEO = 0x00000020u,
-    UI_SDL_EVENT_QUIT = 0x100,
-    UI_SDL_EVENT_WINDOW_CLOSE = 0x210,
-    UI_SDL_EVENT_WINDOW_EXPOSED = 0x204,
-    UI_SDL_EVENT_WINDOW_RESIZED = 0x206,
-    UI_SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED = 0x207,
-    UI_SDL_EVENT_WINDOW_FOCUS_LOST = 0x20F,
-    UI_SDL_EVENT_KEY_DOWN = 0x300,
-    UI_SDL_EVENT_KEY_UP = 0x301,
-    UI_SDL_EVENT_TEXT_INPUT = 0x303,
-    UI_SDL_EVENT_MOUSE_MOTION = 0x400,
-    UI_SDL_EVENT_MOUSE_BUTTON_DOWN = 0x401,
-    UI_SDL_EVENT_MOUSE_BUTTON_UP = 0x402,
-    UI_SDL_EVENT_MOUSE_WHEEL = 0x403
-};
-
 enum {
     UI_EVENT_NONE = 0,
     UI_EVENT_CLOSE = 1,
@@ -276,95 +159,11 @@ enum {
     UI_EVENT_FOCUS_LOST = 10
 };
 
-typedef struct {
-    void *library;
-    bool attempted;
-    bool ready;
-    bool (*Init)(uint32_t);
-    void (*Quit)(void);
-    UiSdlWindow *(*CreateWindow)(const char *, int, int, uint64_t);
-    bool (*CreateWindowAndRenderer)(const char *, int, int, uint64_t, UiSdlWindow **, UiSdlRenderer **);
-    UiSdlRenderer *(*CreateRenderer)(UiSdlWindow *, const char *);
-    UiSdlPropertiesID (*CreateProperties)(void);
-    void (*DestroyProperties)(UiSdlPropertiesID);
-    bool (*SetNumberProperty)(UiSdlPropertiesID, const char *, int64_t);
-    void *(*GetPointerProperty)(UiSdlPropertiesID, const char *, void *);
-    int64_t (*GetNumberProperty)(UiSdlPropertiesID, const char *, int64_t);
-    UiSdlPropertiesID (*GetRendererProperties)(UiSdlRenderer *);
-    UiSdlSurface *(*CreateSurface)(int, int, uint32_t);
-    UiSdlRenderer *(*CreateSoftwareRenderer)(UiSdlSurface *);
-    const char *(*GetRendererName)(UiSdlRenderer *);
-    bool (*ShowWindow)(UiSdlWindow *);
-    bool (*SetWindowOpacity)(UiSdlWindow *, float);
-    bool (*SyncWindow)(UiSdlWindow *);
-    bool (*GetWindowSize)(UiSdlWindow *, int *, int *);
-    bool (*SetWindowMinimumSize)(UiSdlWindow *, int, int);
-    float (*GetWindowPixelDensity)(UiSdlWindow *);
-    uint32_t (*GetDisplayForWindow)(UiSdlWindow *);
-    float (*GetDisplayContentScale)(uint32_t);
-    bool (*GetWindowSizeInPixels)(UiSdlWindow *, int *, int *);
-    void (*DestroyRenderer)(UiSdlRenderer *);
-    void (*DestroyWindow)(UiSdlWindow *);
-    bool (*PollEvent)(UiSdlEvent *);
-    bool (*WaitEventTimeout)(UiSdlEvent *, int);
-    bool (*SetWindowRelativeMouseMode)(UiSdlWindow *, bool);
-    bool (*StartTextInput)(UiSdlWindow *);
-    bool (*StopTextInput)(UiSdlWindow *);
-    UiSdlCursor *(*CreateSystemCursor)(uint32_t);
-    bool (*SetCursor)(UiSdlCursor *);
-    void (*DestroyCursor)(UiSdlCursor *);
-    bool (*SetClipboardText)(const char *);
-    char *(*GetClipboardText)(void);
-    void (*Free)(void *);
-    bool (*SetRenderDrawColor)(UiSdlRenderer *, uint8_t, uint8_t, uint8_t, uint8_t);
-    bool (*SetRenderDrawBlendMode)(UiSdlRenderer *, uint32_t);
-    bool (*SetRenderClipRect)(UiSdlRenderer *, const UiSdlRect *);
-    bool (*SetRenderScale)(UiSdlRenderer *, float, float);
-    bool (*RenderClear)(UiSdlRenderer *);
-    bool (*RenderFillRect)(UiSdlRenderer *, const UiSdlFRect *);
-    bool (*RenderRect)(UiSdlRenderer *, const UiSdlFRect *);
-    bool (*RenderLine)(UiSdlRenderer *, float, float, float, float);
-    bool (*RenderGeometry)(UiSdlRenderer *, UiSdlTexture *, const UiSdlVertex *, int, const int *, int);
-    bool (*RenderDebugText)(UiSdlRenderer *, float, float, const char *);
-    UiSdlTexture *(*CreateTextureFromSurface)(UiSdlRenderer *, UiSdlSurface *);
-    UiSdlTexture *(*CreateTexture)(UiSdlRenderer *, uint32_t, int, int, int);
-    UiSdlTexture *(*CreateTextureWithProperties)(UiSdlRenderer *, UiSdlPropertiesID);
-    bool (*UpdateTexture)(UiSdlTexture *, const UiSdlRect *, const void *, int);
-    bool (*SetTextureBlendMode)(UiSdlTexture *, uint32_t);
-    bool (*SetRenderTarget)(UiSdlRenderer *, UiSdlTexture *);
-    bool (*RenderTexture)(UiSdlRenderer *, UiSdlTexture *, const UiSdlFRect *, const UiSdlFRect *);
-    UiSdlSurface *(*RenderReadPixels)(UiSdlRenderer *, const UiSdlRect *);
-    bool (*ReadSurfacePixel)(UiSdlSurface *, int, int, uint8_t *, uint8_t *, uint8_t *, uint8_t *);
-    bool (*WriteSurfacePixel)(UiSdlSurface *, int, int, uint8_t, uint8_t, uint8_t, uint8_t);
-    void (*DestroyTexture)(UiSdlTexture *);
-    void (*DestroySurface)(UiSdlSurface *);
-    bool (*RenderPresent)(UiSdlRenderer *);
-    bool (*SetRenderVSync)(UiSdlRenderer *, int);
-    const char *(*GetError)(void);
-} UiSdlApi;
-
-typedef struct {
-    void *library;
-    bool attempted;
-    bool ready;
-    bool (*Init)(void);
-    void (*Quit)(void);
-    UiTtfFont *(*OpenFont)(const char *, float);
-    void (*CloseFont)(UiTtfFont *);
-    void (*SetFontStyle)(UiTtfFont *, uint32_t);
-    bool (*SetFontSize)(UiTtfFont *, float);
-    bool (*GetStringSize)(UiTtfFont *, const char *, size_t, int *, int *);
-    bool (*GetStringSizeWrapped)(UiTtfFont *, const char *, size_t, int, int *, int *);
-    bool (*MeasureString)(UiTtfFont *, const char *, size_t, int, int *, size_t *);
-    UiSdlSurface *(*RenderTextBlended)(UiTtfFont *, const char *, size_t, UiSdlColor);
-    UiSdlSurface *(*RenderTextBlendedWrapped)(UiTtfFont *, const char *, size_t, UiSdlColor, int);
-    UiTtfTextEngine *(*CreateSurfaceTextEngine)(void);
-    void (*DestroySurfaceTextEngine)(UiTtfTextEngine *);
-    UiTtfText *(*CreateText)(UiTtfTextEngine *, UiTtfFont *, const char *, size_t);
-    void (*DestroyText)(UiTtfText *);
-    bool (*GetTextSize)(UiTtfText *, int *, int *);
-    UiTtfSubString **(*GetTextSubStringsForRange)(UiTtfText *, int, int, int *);
-} UiTtfApi;
+typedef enum {
+    UI_WINDOW_CREATED,
+    UI_WINDOW_CONFIGURED,
+    UI_WINDOW_PRESENTED
+} UiWindowPhase;
 
 typedef struct {
     UiSdlWindow *window;
@@ -372,11 +171,15 @@ typedef struct {
     uint32_t renderer_kind;
     size_t direct_compositor;
     size_t borrowed_frame;
+    bool vector_capture;
+    bool minimized;
     bool open;
     bool reveal_pending;
     bool transparent_mapped;
-    bool first_frame_pending;
+    UiWindowPhase phase;
+    uint64_t geometry_generation;
     uint64_t present_count;
+    uint64_t capture_present_count;
     bool text_input_started;
     uint32_t event_kind;
     float event_x;
@@ -388,8 +191,10 @@ typedef struct {
     uint32_t event_key;
     uint32_t event_modifiers;
     uint32_t event_buttons;
+    uint32_t pointer_buttons;
+    uint32_t input_modifiers;
     uint64_t event_timestamp_ns;
-    char event_text[32];
+    char *event_text;
     uint32_t width;
     uint32_t height;
     float pixel_density;
@@ -402,17 +207,21 @@ typedef struct {
     size_t font_face_count;
     size_t current_face;
     UiFontVariant font_variants[32];
+    UiFontInstanceCache *font_instances;
     size_t font_variant_count;
     uint64_t font_tick;
     UiTextCacheEntry text_cache[512];
+    UiTextMeasureEntry text_measure_cache[256];
     size_t text_cache_count;
     size_t text_cache_bytes;
     uint64_t text_cache_tick;
     UiTextAtlasPage text_atlas[4];
     size_t text_atlas_count;
     uint32_t text_atlas_generation;
-    UiRasterCacheEntry raster_cache[32];
+    /* Many small thumbnails should coexist; decoded bytes also stay bounded. */
+    UiRasterCacheEntry raster_cache[256];
     size_t raster_cache_count;
+    size_t raster_cache_bytes;
     uint64_t raster_cache_tick;
     UiSdlFPoint vector_path[4096];
     size_t vector_path_count;
@@ -421,6 +230,7 @@ typedef struct {
     int *vector_indices;
     size_t vector_index_capacity;
     UiSdlSurface *readback_surface;
+    uint64_t readback_present_count;
     UiSdlTexture *layout_texture;
     UiSdlTexture *overlay_texture;
     UiSdlTexture *external_texture;
@@ -430,6 +240,8 @@ typedef struct {
     uint32_t external_heights[4];
     uint32_t external_layouts[4];
     uint32_t external_texture_next;
+    uint32_t external_source_x, external_source_y;
+    uint32_t external_source_width, external_source_height;
     uint32_t layout_width;
     uint32_t layout_height;
     uint32_t overlay_width;
@@ -439,8 +251,8 @@ typedef struct {
     bool has_pending_event;
 } UiWindow;
 
-static UiSdlApi g_sdl;
-static UiTtfApi g_ttf;
+#define g_sdl (*encore_sdl_api_v1())
+#define g_ttf (*encore_sdl_ttf_api_v1())
 static UiTtfTextEngine *g_ttf_surface_engine;
 static char g_error[256];
 static size_t g_window_count;
@@ -517,191 +329,29 @@ void luma_backend_set_error(encore_str message) {
     free(value);
 }
 
-#if defined(_WIN32)
-static void *ui_open_library(void) {
-    const char *names[] = {"SDL3.dll", NULL};
-    for (size_t i = 0; names[i] != NULL; ++i) {
-        HMODULE lib = LoadLibraryA(names[i]);
-        if (lib != NULL) return (void *)lib;
-    }
-    return NULL;
-}
-static void *ui_open_ttf_library(void) {
-    const char *names[] = {"SDL3_ttf.dll", NULL};
-    for (size_t i = 0; names[i] != NULL; ++i) {
-        HMODULE lib = LoadLibraryA(names[i]);
-        if (lib != NULL) return (void *)lib;
-    }
-    return NULL;
-}
+/* HarfBuzz remains a font implementation detail, not an SDL loader. */
 static void *ui_symbol(void *library, const char *name) {
+#if defined(_WIN32)
     return (void *)GetProcAddress((HMODULE)library, name);
-}
 #else
-static void *ui_open_library(void) {
-#if defined(__APPLE__)
-    const char *names[] = {"libSDL3.0.dylib", "libSDL3.dylib", "/opt/homebrew/lib/libSDL3.dylib", NULL};
-#else
-    const char *names[] = {"libSDL3.so.0", "libSDL3.so", NULL};
+    return dlsym(library, name);
 #endif
-    for (size_t i = 0; names[i] != NULL; ++i) {
-        void *lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
-        if (lib != NULL) return lib;
-    }
-    return NULL;
 }
-static void *ui_open_ttf_library(void) {
-#if defined(__APPLE__)
-    const char *names[] = {"libSDL3_ttf.0.dylib", "libSDL3_ttf.dylib", "/opt/homebrew/lib/libSDL3_ttf.dylib", NULL};
-#else
-    const char *names[] = {"libSDL3_ttf.so.0", "libSDL3_ttf.so", NULL};
-#endif
-    for (size_t i = 0; names[i] != NULL; ++i) {
-        void *lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
-        if (lib != NULL) return lib;
-    }
-    return NULL;
-}
-static void *ui_symbol(void *library, const char *name) { return dlsym(library, name); }
-#endif
-
-#define UI_LOAD(field, symbol) do { \
-    *(void **)(&g_sdl.field) = ui_symbol(g_sdl.library, symbol); \
-    if (g_sdl.field == NULL) { ui_set_error("SDL3 is missing required rendering symbols"); return false; } \
-} while (0)
-
+#include "font_instances.inc"
 static bool ui_load_sdl(void) {
-    if (g_sdl.attempted) return g_sdl.ready;
-    g_sdl.attempted = true;
-#if !defined(_WIN32) && !defined(__APPLE__)
-    if (getenv("SDL_VIDEODRIVER") == NULL && getenv("WAYLAND_DISPLAY") != NULL) {
-        setenv("SDL_VIDEODRIVER", "wayland", 0);
-    }
-#endif
-    g_sdl.library = ui_open_library();
-    if (g_sdl.library == NULL) {
-        ui_set_error("SDL3 runtime was not found");
-        return false;
-    }
-    UI_LOAD(Init, "SDL_Init");
-    UI_LOAD(Quit, "SDL_Quit");
-    UI_LOAD(CreateWindow, "SDL_CreateWindow");
-    UI_LOAD(CreateWindowAndRenderer, "SDL_CreateWindowAndRenderer");
-    UI_LOAD(CreateRenderer, "SDL_CreateRenderer");
-    UI_LOAD(CreateProperties, "SDL_CreateProperties");
-    UI_LOAD(DestroyProperties, "SDL_DestroyProperties");
-    UI_LOAD(SetNumberProperty, "SDL_SetNumberProperty");
-    UI_LOAD(GetPointerProperty, "SDL_GetPointerProperty");
-    UI_LOAD(GetNumberProperty, "SDL_GetNumberProperty");
-    UI_LOAD(GetRendererProperties, "SDL_GetRendererProperties");
-    UI_LOAD(CreateSurface, "SDL_CreateSurface");
-    UI_LOAD(CreateSoftwareRenderer, "SDL_CreateSoftwareRenderer");
-    UI_LOAD(GetRendererName, "SDL_GetRendererName");
-    UI_LOAD(ShowWindow, "SDL_ShowWindow");
-    UI_LOAD(SetWindowOpacity, "SDL_SetWindowOpacity");
-    UI_LOAD(SyncWindow, "SDL_SyncWindow");
-    UI_LOAD(GetWindowSize, "SDL_GetWindowSize");
-    UI_LOAD(SetWindowMinimumSize, "SDL_SetWindowMinimumSize");
-    UI_LOAD(GetWindowPixelDensity, "SDL_GetWindowPixelDensity");
-    UI_LOAD(GetDisplayForWindow, "SDL_GetDisplayForWindow");
-    UI_LOAD(GetDisplayContentScale, "SDL_GetDisplayContentScale");
-    UI_LOAD(GetWindowSizeInPixels, "SDL_GetWindowSizeInPixels");
-    UI_LOAD(DestroyRenderer, "SDL_DestroyRenderer");
-    UI_LOAD(DestroyWindow, "SDL_DestroyWindow");
-    UI_LOAD(PollEvent, "SDL_PollEvent");
-    UI_LOAD(WaitEventTimeout, "SDL_WaitEventTimeout");
-    /* Relative mouse mode was added to SDL3's window API. Keep it optional
-       so the renderer remains usable with older SDL3 runtimes. */
-    *(void **)(&g_sdl.SetWindowRelativeMouseMode) =
-        ui_symbol(g_sdl.library, "SDL_SetWindowRelativeMouseMode");
-    UI_LOAD(StartTextInput, "SDL_StartTextInput");
-    UI_LOAD(StopTextInput, "SDL_StopTextInput");
-    UI_LOAD(CreateSystemCursor, "SDL_CreateSystemCursor");
-    UI_LOAD(SetCursor, "SDL_SetCursor");
-    UI_LOAD(DestroyCursor, "SDL_DestroyCursor");
-    UI_LOAD(SetClipboardText, "SDL_SetClipboardText");
-    UI_LOAD(GetClipboardText, "SDL_GetClipboardText");
-    UI_LOAD(Free, "SDL_free");
-    UI_LOAD(SetRenderDrawColor, "SDL_SetRenderDrawColor");
-    UI_LOAD(SetRenderDrawBlendMode, "SDL_SetRenderDrawBlendMode");
-    UI_LOAD(SetRenderClipRect, "SDL_SetRenderClipRect");
-    UI_LOAD(SetRenderScale, "SDL_SetRenderScale");
-    UI_LOAD(RenderClear, "SDL_RenderClear");
-    UI_LOAD(RenderFillRect, "SDL_RenderFillRect");
-    UI_LOAD(RenderRect, "SDL_RenderRect");
-    UI_LOAD(RenderLine, "SDL_RenderLine");
-    UI_LOAD(RenderGeometry, "SDL_RenderGeometry");
-    UI_LOAD(RenderDebugText, "SDL_RenderDebugText");
-    UI_LOAD(CreateTextureFromSurface, "SDL_CreateTextureFromSurface");
-    UI_LOAD(CreateTexture, "SDL_CreateTexture");
-    UI_LOAD(CreateTextureWithProperties, "SDL_CreateTextureWithProperties");
-    UI_LOAD(UpdateTexture, "SDL_UpdateTexture");
-    UI_LOAD(SetTextureBlendMode, "SDL_SetTextureBlendMode");
-    UI_LOAD(SetRenderTarget, "SDL_SetRenderTarget");
-    UI_LOAD(RenderTexture, "SDL_RenderTexture");
-    UI_LOAD(RenderReadPixels, "SDL_RenderReadPixels");
-    UI_LOAD(ReadSurfacePixel, "SDL_ReadSurfacePixel");
-    UI_LOAD(WriteSurfacePixel, "SDL_WriteSurfacePixel");
-    UI_LOAD(DestroyTexture, "SDL_DestroyTexture");
-    UI_LOAD(DestroySurface, "SDL_DestroySurface");
-    UI_LOAD(RenderPresent, "SDL_RenderPresent");
-    UI_LOAD(SetRenderVSync, "SDL_SetRenderVSync");
-    UI_LOAD(GetError, "SDL_GetError");
-    if (!g_sdl.Init(UI_SDL_INIT_VIDEO)) {
-        ui_set_error(g_sdl.GetError());
-        return false;
-    }
-    g_sdl.ready = true;
-    return true;
+    if (encore_sdl_main_thread()) return true;
+    ui_set_error(encore_sdl_error_cstr());
+    return false;
 }
-
-#undef UI_LOAD
-
-#define UI_TTF_LOAD(field, symbol) do { \
-    *(void **)(&g_ttf.field) = ui_symbol(g_ttf.library, symbol); \
-    if (g_ttf.field == NULL) { ui_set_error("SDL3_ttf is missing required font symbols"); return false; } \
-} while (0)
-
 static bool ui_load_ttf(void) {
-    if (g_ttf.attempted) return g_ttf.ready;
-    g_ttf.attempted = true;
-    g_ttf.library = ui_open_ttf_library();
-    if (g_ttf.library == NULL) {
-        ui_set_error("SDL3_ttf runtime was not found");
-        return false;
+    if (!encore_sdl_load_ttf()) {
+        ui_set_error(encore_sdl_error_cstr()); return false;
     }
-    UI_TTF_LOAD(Init, "TTF_Init");
-    UI_TTF_LOAD(Quit, "TTF_Quit");
-    UI_TTF_LOAD(OpenFont, "TTF_OpenFont");
-    UI_TTF_LOAD(CloseFont, "TTF_CloseFont");
-    UI_TTF_LOAD(SetFontStyle, "TTF_SetFontStyle");
-    UI_TTF_LOAD(SetFontSize, "TTF_SetFontSize");
-    UI_TTF_LOAD(GetStringSize, "TTF_GetStringSize");
-    UI_TTF_LOAD(GetStringSizeWrapped, "TTF_GetStringSizeWrapped");
-    UI_TTF_LOAD(MeasureString, "TTF_MeasureString");
-    UI_TTF_LOAD(RenderTextBlended, "TTF_RenderText_Blended");
-    UI_TTF_LOAD(RenderTextBlendedWrapped, "TTF_RenderText_Blended_Wrapped");
-    UI_TTF_LOAD(CreateSurfaceTextEngine, "TTF_CreateSurfaceTextEngine");
-    UI_TTF_LOAD(DestroySurfaceTextEngine, "TTF_DestroySurfaceTextEngine");
-    UI_TTF_LOAD(CreateText, "TTF_CreateText");
-    UI_TTF_LOAD(DestroyText, "TTF_DestroyText");
-    UI_TTF_LOAD(GetTextSize, "TTF_GetTextSize");
-    UI_TTF_LOAD(GetTextSubStringsForRange, "TTF_GetTextSubStringsForRange");
-    if (!g_ttf.Init()) {
-        ui_set_error(g_sdl.GetError());
-        return false;
-    }
-    g_ttf_surface_engine = g_ttf.CreateSurfaceTextEngine();
-    if (g_ttf_surface_engine == NULL) {
-        ui_set_error(g_sdl.GetError());
-        g_ttf.Quit();
-        return false;
-    }
-    g_ttf.ready = true;
+    if (!g_ttf_surface_engine)
+        g_ttf_surface_engine = g_ttf.CreateSurfaceTextEngine();
+    if (!g_ttf_surface_engine) { ui_set_error(g_sdl.GetError()); return false; }
     return true;
 }
-
-#undef UI_TTF_LOAD
 
 static UiWindow *ui_window(size_t handle) {
     if (handle == 0) return NULL;
@@ -745,8 +395,16 @@ static void ui_destroy_text_texture(UiWindow *state, UiSdlTexture *texture) {
         g_sdl.DestroyTexture(texture);
 }
 
+static void ui_clear_text_measure_cache(UiWindow *state) {
+    for (size_t i = 0; i < 256; ++i) {
+        free(state->text_measure_cache[i].text);
+        state->text_measure_cache[i] = (UiTextMeasureEntry){0};
+    }
+}
+
 static void ui_clear_text_cache(UiWindow *state) {
     if (state == NULL) return;
+    ui_clear_text_measure_cache(state);
     for (size_t i = 0; i < state->text_cache_count; ++i) {
         if (state->text_cache[i].owns_texture)
             ui_destroy_text_texture(state, state->text_cache[i].texture);
@@ -771,6 +429,7 @@ static void ui_clear_raster_cache(UiWindow *state) {
         ui_destroy_text_texture(state, state->raster_cache[i].texture);
     memset(state->raster_cache, 0, sizeof(state->raster_cache));
     state->raster_cache_count = 0;
+    state->raster_cache_bytes = 0;
     state->raster_cache_tick = 0;
 }
 
@@ -820,6 +479,7 @@ static void ui_clear_fonts(UiWindow *state) {
     if (g_ttf.ready) {
         for (size_t i = 0; i < state->font_variant_count; ++i) {
             if (state->font_variants[i].font != NULL) g_ttf.CloseFont(state->font_variants[i].font);
+            ui_font_backing_release(state->font_variants[i].backing);
         }
     }
     for (size_t i = 0; i < state->font_face_count; ++i) {
@@ -833,6 +493,7 @@ static void ui_clear_fonts(UiWindow *state) {
     state->font_weight = 0;
     state->font_variant_count = 0;
     state->font_tick = 0;
+    ui_font_instances_clear(&state->font_instances);
 }
 
 static void ui_clear_font_variants(UiWindow *state) {
@@ -841,6 +502,7 @@ static void ui_clear_font_variants(UiWindow *state) {
     if (g_ttf.ready) {
         for (size_t i = 0; i < state->font_variant_count; ++i) {
             if (state->font_variants[i].font != NULL) g_ttf.CloseFont(state->font_variants[i].font);
+            ui_font_backing_release(state->font_variants[i].backing);
         }
     }
     state->font = NULL;
@@ -879,6 +541,8 @@ static void ui_refresh_pixel_density(UiWindow *state) {
    Query SDL's authoritative state once after coalescing the event batch. */
 static void ui_refresh_window_metrics(UiWindow *state) {
     if (state == NULL || state->window == NULL) return;
+    uint32_t previous_width = state->width, previous_height = state->height;
+    float previous_density = state->pixel_density;
     int width = 0, height = 0;
     if (g_sdl.GetWindowSize(state->window, &width, &height) &&
         width > 0 && height > 0) {
@@ -886,6 +550,67 @@ static void ui_refresh_window_metrics(UiWindow *state) {
         state->height = (uint32_t)height;
     }
     ui_refresh_pixel_density(state);
+    if (state->geometry_generation == 0 || previous_width != state->width ||
+        previous_height != state->height || previous_density != state->pixel_density)
+        ++state->geometry_generation;
+}
+
+/* Mapping a Wayland window can replace the requested size with the tiling
+   compositor's configured size. Complete that handshake before recording or
+   acquiring the first direct frame, not after its geometry has been prepared. */
+static bool ui_pump_window_events(void) {
+    static void *library;
+    static void (*pump_events)(void);
+    if (library != g_sdl.library || pump_events == NULL) {
+        library = g_sdl.library;
+        *(void **)(&pump_events) = ui_symbol(library, "SDL_PumpEvents");
+    }
+    if (pump_events == NULL) {
+        ui_set_error("SDL3 does not provide SDL_PumpEvents");
+        return false;
+    }
+    pump_events();
+    return true;
+}
+
+static bool ui_prepare_direct_frame(UiWindow *state) {
+    if (state == NULL || !state->open) return false;
+    if (state->renderer_kind != 3u || state->phase != UI_WINDOW_CREATED) return true;
+    if (!g_sdl.ShowWindow(state->window) || !g_sdl.SyncWindow(state->window)) {
+        ui_set_error(g_sdl.GetError());
+        return false;
+    }
+    /* Dispatch native configure messages without removing queued SDL events.
+       SyncWindow synchronizes requested operations, but is not an event pump.
+       The first acquire must observe the compositor's current pixel extent. */
+    if (!ui_pump_window_events()) return false;
+    ui_refresh_window_metrics(state);
+    state->phase = UI_WINDOW_CONFIGURED;
+    return true;
+}
+
+/* Geometry is prepared before CSS/layout, not as a side effect of GPU acquire.
+   SDL configure events stay queued for the application's normal input loop. */
+uint64_t luma_window_prepare_geometry(size_t handle) {
+    UiWindow *state = ui_window(handle);
+    if (!ui_prepare_direct_frame(state)) return 0;
+    if (!ui_pump_window_events()) return 0;
+    ui_refresh_window_metrics(state);
+    return state->geometry_generation;
+}
+
+/* The first buffer maps an xdg-toplevel. A tiling compositor may only assign
+   its final extent at that point; synchronize that configure before returning
+   control to potentially expensive application initialization. */
+static bool ui_complete_first_present(UiWindow *state) {
+    if (state->phase == UI_WINDOW_PRESENTED) return true;
+    if (!g_sdl.SyncWindow(state->window) || !ui_pump_window_events()) {
+        ui_set_error(g_sdl.GetError());
+        return false;
+    }
+    ui_refresh_window_metrics(state);
+    state->phase = UI_WINDOW_PRESENTED;
+    return true;
 }
 
 static void ui_window_pixel_extent(UiWindow *state, uint32_t *width,
@@ -912,11 +637,16 @@ static bool ui_color(UiWindow *window, uint32_t color) {
 
 size_t luma_window_create_with_renderer(encore_str title, uint32_t width, uint32_t height,
     uint32_t renderer_kind) {
-    if (width == 0 || height == 0 || !ui_load_sdl()) return 0;
+    if (width == 0 || height == 0 || width > INT_MAX || height > INT_MAX) {
+        ui_set_error("Invalid window dimensions"); return 0;
+    }
+    if (!encore_sdl_acquire()) {
+        ui_set_error(encore_sdl_error_cstr()); return 0;
+    }
     UiWindow *state = (UiWindow *)calloc(1, sizeof(UiWindow));
     char *name = ui_to_cstr(title);
     if (state == NULL || name == NULL) {
-        free(state); free(name); ui_set_error("Unable to allocate UI window"); return 0;
+        free(state); free(name); ui_set_error("Unable to allocate UI window"); encore_sdl_release(); return 0;
     }
     bool created = false;
     state->renderer_kind = renderer_kind;
@@ -938,6 +668,7 @@ size_t luma_window_create_with_renderer(encore_str title, uint32_t width, uint32
         if (state->renderer != NULL) g_sdl.DestroyRenderer(state->renderer);
         if (state->window != NULL) g_sdl.DestroyWindow(state->window);
         free(state);
+        encore_sdl_release();
         return 0;
     }
     if ((state->renderer != NULL && !g_sdl.SetRenderDrawBlendMode(state->renderer, 1u)) ||
@@ -946,6 +677,7 @@ size_t luma_window_create_with_renderer(encore_str title, uint32_t width, uint32
         if (state->renderer != NULL) g_sdl.DestroyRenderer(state->renderer);
         if (state->window != NULL) g_sdl.DestroyWindow(state->window);
         free(state);
+        encore_sdl_release();
         return 0;
     }
     /* Build the first complete frame while the window is still hidden. A
@@ -954,7 +686,7 @@ size_t luma_window_create_with_renderer(encore_str title, uint32_t width, uint32
        Wayland compositors. */
     state->reveal_pending = false;
     state->transparent_mapped = false;
-    state->first_frame_pending = true;
+    state->phase = UI_WINDOW_CREATED;
     int actual_width = (int)width;
     int actual_height = (int)height;
     if (g_sdl.GetWindowSize(state->window, &actual_width, &actual_height) &&
@@ -967,11 +699,13 @@ size_t luma_window_create_with_renderer(encore_str title, uint32_t width, uint32
     state->width = width;
     state->height = height;
     ui_refresh_pixel_density(state);
-    if (!ui_register_window(state)) {
+    if (!encore_sdl_track_window(state->window) || !ui_register_window(state)) {
         g_sdl.StopTextInput(state->window);
         if (state->renderer != NULL) g_sdl.DestroyRenderer(state->renderer);
+        encore_sdl_forget_events(state->window);
         g_sdl.DestroyWindow(state->window);
         free(state);
+        encore_sdl_release();
         return 0;
     }
 #if !defined(_WIN32)
@@ -1006,6 +740,7 @@ bool luma_window_destroy(size_t handle) {
     UiWindow *state = ui_window(handle);
     if (state == NULL) return false;
     ui_unregister_window(state);
+    free(state->event_text);
     if (state->window != NULL && state->text_input_started) g_sdl.StopTextInput(state->window);
     if (state->cursor != NULL && g_sdl.DestroyCursor != NULL) g_sdl.DestroyCursor(state->cursor);
     ui_clear_fonts(state);
@@ -1015,7 +750,10 @@ bool luma_window_destroy(size_t handle) {
     if (state->overlay_texture != NULL) g_sdl.DestroyTexture(state->overlay_texture);
     ui_clear_external_textures(state);
     if (state->renderer != NULL) g_sdl.DestroyRenderer(state->renderer);
-    if (state->window != NULL) g_sdl.DestroyWindow(state->window);
+    if (state->window != NULL) {
+        encore_sdl_forget_events(state->window);
+        g_sdl.DestroyWindow(state->window);
+    }
     free(state->vector_vertices);
     free(state->vector_indices);
     free(state);
@@ -1024,10 +762,9 @@ bool luma_window_destroy(size_t handle) {
             if (g_ttf_surface_engine != NULL)
                 g_ttf.DestroySurfaceTextEngine(g_ttf_surface_engine);
             g_ttf_surface_engine = NULL;
-            g_ttf.Quit(); g_ttf.ready = false; g_ttf.attempted = false;
         }
-        if (g_sdl.ready) { g_sdl.Quit(); g_sdl.ready = false; g_sdl.attempted = false; }
     }
+    encore_sdl_release();
     return true;
 }
 
@@ -1036,7 +773,7 @@ bool luma_window_open(size_t handle) {
     return state != NULL && state->open;
 }
 
-uint32_t luma_window_poll(size_t handle) {
+static uint32_t ui_window_poll(size_t handle) {
     UiWindow *state = ui_window(handle);
     if (state == NULL || !state->open) return UI_EVENT_CLOSE;
 #if !defined(_WIN32)
@@ -1048,10 +785,11 @@ uint32_t luma_window_poll(size_t handle) {
 #endif
     state->event_kind = UI_EVENT_NONE;
     state->event_key = 0;
-    state->event_modifiers = 0;
-    state->event_buttons = 0;
+    state->event_modifiers = state->input_modifiers;
+    state->event_buttons = state->pointer_buttons;
     state->event_timestamp_ns = 0;
-    state->event_text[0] = '\0';
+    free(state->event_text);
+    state->event_text = NULL;
     state->wheel_x = 0.0f;
     state->wheel_y = 0.0f;
     state->event_dx = 0.0f;
@@ -1059,7 +797,8 @@ uint32_t luma_window_poll(size_t handle) {
     UiSdlEvent event;
     bool had_motion = false;
     bool had_resize = false;
-    while (state->has_pending_event || g_sdl.PollEvent(&event)) {
+    bool had_wheel = false;
+    while (state->has_pending_event || encore_sdl_poll_raw(state->window, &event)) {
         if (state->has_pending_event) {
             event = state->pending_event;
             state->has_pending_event = false;
@@ -1068,11 +807,13 @@ uint32_t luma_window_poll(size_t handle) {
            absolute coordinate. Preserve the first following event so a fast
            drag is observed as MOVE(latest) and then BUTTON_UP, never as a
            backlog of stale motion or a release that skips the final move. */
-        if (had_motion && event.type != UI_SDL_EVENT_MOUSE_MOTION) {
+        if ((had_motion && event.type != UI_SDL_EVENT_MOUSE_MOTION) ||
+                (had_wheel && event.type != UI_SDL_EVENT_MOUSE_WHEEL)) {
             state->pending_event = event;
             state->has_pending_event = true;
             break;
         }
+        uint64_t previous_timestamp_ns = state->event_timestamp_ns;
         state->event_timestamp_ns = event.common.timestamp;
         if (event.type == UI_SDL_EVENT_QUIT || event.type == UI_SDL_EVENT_WINDOW_CLOSE) {
             /* Mark the native window closed at the source.  Returning a close
@@ -1084,8 +825,16 @@ uint32_t luma_window_poll(size_t handle) {
             state->event_kind = UI_EVENT_CLOSE;
             return state->event_kind;
         } else if (event.type == UI_SDL_EVENT_WINDOW_FOCUS_LOST) {
+            state->pointer_buttons = state->event_buttons = 0;
+            state->input_modifiers = state->event_modifiers = 0;
             state->event_kind = UI_EVENT_FOCUS_LOST;
             return state->event_kind;
+        } else if (event.type == UI_SDL_EVENT_WINDOW_MINIMIZED) {
+            state->minimized = true;
+        } else if (event.type == UI_SDL_EVENT_WINDOW_RESTORED ||
+                   event.type == UI_SDL_EVENT_WINDOW_SHOWN) {
+            state->minimized = false;
+            if (state->direct_compositor) luma_vk_ui_wake(state->direct_compositor);
         } else if (event.type == UI_SDL_EVENT_WINDOW_EXPOSED) {
             // An exposed notification does not change layout geometry. Some
             // X11 compositors can emit it repeatedly while a native surface
@@ -1093,6 +842,7 @@ uint32_t luma_window_poll(size_t handle) {
             // relayout loop. The retained frame is already valid, so drain
             // the notification without invalidating the UI.
         } else if (event.type == UI_SDL_EVENT_WINDOW_RESIZED) {
+            if (state->direct_compositor) luma_vk_ui_wake(state->direct_compositor);
             UiSdlWindowEvent *window = (UiSdlWindowEvent *)&event;
             if (window->data1 > 0 && window->data2 > 0) {
                 state->width = (uint32_t)window->data1;
@@ -1101,6 +851,7 @@ uint32_t luma_window_poll(size_t handle) {
                 had_resize = true;
             }
         } else if (event.type == UI_SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+            if (state->direct_compositor) luma_vk_ui_wake(state->direct_compositor);
             ui_refresh_pixel_density(state);
             state->event_kind = UI_EVENT_RESIZE;
             had_resize = true;
@@ -1114,6 +865,7 @@ uint32_t luma_window_poll(size_t handle) {
             state->event_kind = event.type == UI_SDL_EVENT_KEY_DOWN ? UI_EVENT_KEY_DOWN : UI_EVENT_KEY_UP;
             state->event_key = key->key;
             state->event_modifiers = key->mod;
+            state->input_modifiers = key->mod;
             return state->event_kind;
         } else if (event.type == UI_SDL_EVENT_TEXT_INPUT) {
             if (had_resize) {
@@ -1122,9 +874,18 @@ uint32_t luma_window_poll(size_t handle) {
                 break;
             }
             UiSdlTextInputEvent *input = (UiSdlTextInputEvent *)&event;
-            if (input->text == NULL) { state->event_text[0] = '\0'; }
-            else { strncpy(state->event_text, input->text, sizeof(state->event_text) - 1); }
-            state->event_text[sizeof(state->event_text) - 1] = '\0';
+            size_t text_length = input->text == NULL ? 0 : strlen(input->text);
+            if (text_length > 8u * 1024u * 1024u) {
+                ui_set_error("Text input event exceeds the 8 MiB limit");
+                return UI_EVENT_NONE;
+            }
+            state->event_text = malloc(text_length + 1);
+            if (state->event_text == NULL) {
+                ui_set_error("Unable to allocate text input event");
+                return UI_EVENT_NONE;
+            }
+            if (text_length) memcpy(state->event_text, input->text, text_length);
+            state->event_text[text_length] = '\0';
             state->event_kind = UI_EVENT_TEXT_INPUT;
             return state->event_kind;
         } else if (event.type == UI_SDL_EVENT_MOUSE_MOTION) {
@@ -1140,6 +901,7 @@ uint32_t luma_window_poll(size_t handle) {
             state->event_dx += motion->xrel;
             state->event_dy += motion->yrel;
             state->event_buttons = motion->state;
+            state->pointer_buttons = motion->state;
             had_motion = true;
         } else if (event.type == UI_SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == UI_SDL_EVENT_MOUSE_BUTTON_UP) {
             /* Preserve event order for a drag completed faster than the
@@ -1152,6 +914,16 @@ uint32_t luma_window_poll(size_t handle) {
                 break;
             }
             UiSdlMouseButtonEvent *button = (UiSdlMouseButtonEvent *)&event;
+            /* Replay the queued transition, not SDL's current physical state:
+               a fast click may already be released when DOWN is consumed. */
+            if (button->button > 0 && button->button <= 32) {
+                uint32_t mask = UINT32_C(1) << (button->button - 1);
+                if (event.type == UI_SDL_EVENT_MOUSE_BUTTON_DOWN)
+                    state->pointer_buttons |= mask;
+                else
+                    state->pointer_buttons &= ~mask;
+            }
+            state->event_buttons = state->pointer_buttons;
             state->event_kind = event.type == UI_SDL_EVENT_MOUSE_BUTTON_DOWN ? UI_EVENT_POINTER_DOWN : UI_EVENT_POINTER_UP;
             state->event_x = button->x;
             state->event_y = button->y;
@@ -1164,12 +936,23 @@ uint32_t luma_window_poll(size_t handle) {
                 break;
             }
             UiSdlMouseWheelEvent *wheel = (UiSdlMouseWheelEvent *)&event;
+            /* Drain a wheel burst in one transaction, without crossing a
+               pointer target, direction reversal or another input event. */
+            if (had_wheel && (wheel->mouse_x != state->event_x ||
+                    wheel->mouse_y != state->event_y ||
+                    wheel->x * state->wheel_x < 0.0f ||
+                    wheel->y * state->wheel_y < 0.0f)) {
+                state->pending_event = event;
+                state->has_pending_event = true;
+                state->event_timestamp_ns = previous_timestamp_ns;
+                break;
+            }
             state->event_kind = UI_EVENT_SCROLL;
             state->event_x = wheel->mouse_x;
             state->event_y = wheel->mouse_y;
-            state->wheel_x = wheel->x;
-            state->wheel_y = wheel->y;
-            return state->event_kind;
+            state->wheel_x += wheel->x;
+            state->wheel_y += wheel->y;
+            had_wheel = true;
         }
     }
     if (had_resize) {
@@ -1180,16 +963,38 @@ uint32_t luma_window_poll(size_t handle) {
     return state->event_kind;
 }
 
+uint32_t luma_window_poll(size_t handle) {
+    uint32_t kind = ui_window_poll(handle);
+    const char *trace = getenv("LUMA_TRACE_LATENCY");
+    UiWindow *state = ui_window(handle);
+    if (trace && strcmp(trace, "1") == 0 && kind != UI_EVENT_NONE && state) {
+        uint64_t now = g_sdl.GetTicksNS();
+        uint64_t age = state->event_timestamp_ns && now >= state->event_timestamp_ns
+            ? now - state->event_timestamp_ns : 0;
+        fprintf(stderr, "LUMA_LATENCY native_event=%u timestamp_ns=%llu age_us=%llu\n",
+            kind, (unsigned long long)state->event_timestamp_ns,
+            (unsigned long long)(age / 1000));
+    }
+    return kind;
+}
+
 bool luma_window_wait(size_t handle, uint32_t timeout_ms) {
     UiWindow *state = ui_window(handle);
     if (state == NULL || !state->open) return false;
     if (state->has_pending_event) return true;
     int timeout = timeout_ms == UINT32_MAX ? -1 :
         (int)(timeout_ms > 60000u ? 60000u : timeout_ms);
-    bool ready = g_sdl.WaitEventTimeout(&state->pending_event, timeout);
+    bool ready = encore_sdl_wait_raw(state->window, &state->pending_event, timeout);
     if (!ready) return false;
     state->has_pending_event = true;
     return true;
+}
+
+bool luma_windows_wait_any(int32_t timeout_ms) {
+    for (size_t i = 0; i < sizeof g_windows / sizeof g_windows[0]; ++i)
+        if (g_windows[i] && g_windows[i]->open && g_windows[i]->has_pending_event)
+            return true;
+    return encore_sdl_wait_any(timeout_ms);
 }
 
 float luma_event_x(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0.0f : s->event_x; }
@@ -1251,6 +1056,13 @@ uint32_t luma_window_read_pixel(size_t handle, uint32_t x, uint32_t y) {
     UiWindow *s = ui_window(handle);
     if (s == NULL || s->renderer == NULL || x >= s->width || y >= s->height)
         return 0;
+    /* Cached presentations do not call luma_frame_begin. A diagnostic
+       snapshot belongs to one presented frame, never to the next one. */
+    if (s->readback_surface != NULL &&
+            s->readback_present_count != s->present_count) {
+        g_sdl.DestroySurface(s->readback_surface);
+        s->readback_surface = NULL;
+    }
     /* Read the target once and sample its physical backing coordinates.
        Repeated 1x1 SDL_RenderReadPixels calls are not stable on the software
        backend with a fractional render scale: flushing successive tiny
@@ -1261,6 +1073,7 @@ uint32_t luma_window_read_pixel(size_t handle, uint32_t x, uint32_t y) {
             ui_set_error(g_sdl.GetError());
             return 0;
         }
+        s->readback_present_count = s->present_count;
     }
     UiSdlSurface *surface = s->readback_surface;
     float density = s->pixel_density > 0.0f ? s->pixel_density : 1.0f;
@@ -1306,6 +1119,9 @@ bool luma_direct_resources_release(size_t handle) {
             return false;
     }
     ui_clear_text_cache(state);
+    /* Raster textures belong to the direct compositor too. Release them
+       while that owner is alive; native window teardown runs after it. */
+    ui_clear_raster_cache(state);
     ui_clear_external_textures(state);
     return true;
 }
@@ -1331,6 +1147,7 @@ encore_str luma_clipboard_text(void) {
 
 bool luma_frame_begin(size_t handle, uint32_t color) {
     UiWindow *state = ui_window(handle); if (state == NULL || !state->open) return false;
+    if (!ui_prepare_direct_frame(state)) return false;
     if (state->readback_surface != NULL) {
         g_sdl.DestroySurface(state->readback_surface);
         state->readback_surface = NULL;
@@ -1346,6 +1163,7 @@ bool luma_frame_begin(size_t handle, uint32_t color) {
 
 bool luma_layout_cache_begin(size_t handle, uint32_t color) {
     UiWindow *state = ui_window(handle);
+    if (!ui_prepare_direct_frame(state)) return false;
     if (state != NULL && state->renderer_kind == 3u)
         return state->direct_compositor != 0 &&
             luma_vk_ui_set_logical_extent(state->direct_compositor,
@@ -1449,7 +1267,10 @@ bool luma_layout_cache_patch_begin(size_t handle, uint32_t color,
         ui_set_error(g_sdl.GetError()); return false;
     }
     g_sdl.SetRenderScale(state->renderer, state->pixel_density, state->pixel_density);
-    UiSdlRect clip = {(int)x, (int)y, (int)(width + 1.0f), (int)(height + 1.0f)};
+    int left = luma_raster_floor(x), top = luma_raster_floor(y);
+    UiSdlRect clip = {left, top,
+        luma_raster_extent(left, luma_raster_ceil(x + width)),
+        luma_raster_extent(top, luma_raster_ceil(y + height))};
     if (!g_sdl.SetRenderClipRect(state->renderer, &clip)) return false;
     UiSdlFRect bounds = {x, y, width, height};
     return ui_color(state, color) && g_sdl.RenderFillRect(state->renderer, &bounds);
@@ -1479,17 +1300,17 @@ bool luma_layout_cache_ready(size_t handle) {
 }
 bool luma_clip_rect(size_t handle, bool enabled, float x, float y, float width, float height) {
     UiWindow *state = ui_window(handle); if (state == NULL || !state->open) return false;
+    int left = luma_raster_floor(x);
+    int top = luma_raster_floor(y);
+    int right = luma_raster_ceil(x + width);
+    int bottom = luma_raster_ceil(y + height);
     if (state->renderer_kind == 3u)
         return state->direct_compositor != 0 &&
-            luma_vk_ui_clip(state->direct_compositor, enabled, (int32_t)x, (int32_t)y,
-                width > 0.0f ? (uint32_t)width : 0u,
-                height > 0.0f ? (uint32_t)height : 0u);
+            luma_vk_ui_clip(state->direct_compositor, enabled, left, top,
+                (uint32_t)luma_raster_extent(left, right),
+                (uint32_t)luma_raster_extent(top, bottom));
     if (!enabled) return g_sdl.SetRenderClipRect(state->renderer, NULL);
-    int left = (int)x;
-    int top = (int)y;
-    int right = (int)(x + width);
-    int bottom = (int)(y + height);
-    UiSdlRect rect = {left, top, right > left ? right - left : 0, bottom > top ? bottom - top : 0};
+    UiSdlRect rect = {left, top, luma_raster_extent(left, right), luma_raster_extent(top, bottom)};
     return g_sdl.SetRenderClipRect(state->renderer, &rect);
 }
 bool luma_fill_rect(size_t handle, float x, float y, float width, float height, uint32_t color) {
@@ -1608,9 +1429,13 @@ static bool ui_submit_geometry(UiWindow *state, const UiSdlVertex *vertices,
 
 bool luma_circle(size_t handle, float cx, float cy, float radius, uint32_t color, bool filled);
 
-bool luma_vector_line(size_t handle, float x0, float y0, float x1, float y1, float width, uint32_t color) {
+bool luma_vector_gradient_line(size_t handle, float x0, float y0, float x1, float y1,
+    float width, uint32_t start_color, uint32_t end_color) {
     UiWindow *state = ui_window(handle);
-    if (state == NULL || !state->open || width <= 0.0f || (color & 0xffu) == 0) return false;
+    if (state == NULL || !state->open || width <= 0.0f ||
+        !isfinite(width) || !isfinite(x0) || !isfinite(y0) ||
+        !isfinite(x1) || !isfinite(y1)) return false;
+    if (((start_color | end_color) & 0xffu) == 0) return true;
     float dx = x1 - x0;
     float dy = y1 - y0;
     if (dy > -0.0001f && dy < 0.0001f) {
@@ -1638,20 +1463,57 @@ bool luma_vector_line(size_t handle, float x0, float y0, float x1, float y1, flo
        does not change the intended coverage ramp. */
     if (inner < fringe * 0.001f) inner = fringe * 0.001f;
     float outer = radius + fringe * 0.5f;
-    UiSdlFColor solid = ui_float_color(color, 1.0f);
-    UiSdlFColor clear = ui_float_color(color, 0.0f);
+    UiSdlFColor start_solid = ui_float_color(start_color, 1.0f);
+    UiSdlFColor end_solid = ui_float_color(end_color, 1.0f);
+    UiSdlFColor start_clear = ui_float_color(start_color, 0.0f);
+    UiSdlFColor end_clear = ui_float_color(end_color, 0.0f);
     UiSdlVertex vertices[8] = {
-        {{x0 + px * outer, y0 + py * outer}, clear, {0, 0}},
-        {{x0 + px * inner, y0 + py * inner}, solid, {0, 0}},
-        {{x1 + px * outer, y1 + py * outer}, clear, {0, 0}},
-        {{x1 + px * inner, y1 + py * inner}, solid, {0, 0}},
-        {{x1 - px * inner, y1 - py * inner}, solid, {0, 0}},
-        {{x1 - px * outer, y1 - py * outer}, clear, {0, 0}},
-        {{x0 - px * inner, y0 - py * inner}, solid, {0, 0}},
-        {{x0 - px * outer, y0 - py * outer}, clear, {0, 0}}
+        {{x0 + px * outer, y0 + py * outer}, start_clear, {0, 0}},
+        {{x0 + px * inner, y0 + py * inner}, start_solid, {0, 0}},
+        {{x1 + px * outer, y1 + py * outer}, end_clear, {0, 0}},
+        {{x1 + px * inner, y1 + py * inner}, end_solid, {0, 0}},
+        {{x1 - px * inner, y1 - py * inner}, end_solid, {0, 0}},
+        {{x1 - px * outer, y1 - py * outer}, end_clear, {0, 0}},
+        {{x0 - px * inner, y0 - py * inner}, start_solid, {0, 0}},
+        {{x0 - px * outer, y0 - py * outer}, start_clear, {0, 0}}
     };
     int indices[18] = {0, 2, 1, 1, 2, 3, 1, 3, 6, 6, 3, 4, 6, 4, 7, 7, 4, 5};
     return ui_submit_geometry(state, vertices, 8, indices, 18);
+}
+
+bool luma_vector_line(size_t handle, float x0, float y0, float x1, float y1,
+    float width, uint32_t color) {
+    return luma_vector_gradient_line(handle, x0, y0, x1, y1, width, color, color);
+}
+
+uint32_t luma_vector_cache_begin(size_t handle, encore_str key, float scale,
+    float stroke, float x, float y, uint32_t color) {
+    UiWindow *state = ui_window(handle);
+    if (!state || !state->open || state->renderer_kind != 3u) return 0;
+    uint32_t result = luma_vk_ui_mesh_begin(state->direct_compositor, key,
+        scale, stroke, state->pixel_density, x, y, color);
+    state->vector_capture = result == 2;
+    return result;
+}
+
+bool luma_vector_cache_end(size_t handle) {
+    UiWindow *state = ui_window(handle);
+    if (!state || !state->vector_capture) return false;
+    state->vector_capture = false;
+    return luma_vk_ui_mesh_end(state->direct_compositor);
+}
+
+bool luma_vector_triangle(size_t handle, float ax, float ay, float bx, float by,
+        float cx, float cy, uint32_t color) {
+    UiWindow *state = ui_window(handle);
+    if (state == NULL || !state->open || !isfinite(ax) || !isfinite(ay) ||
+        !isfinite(bx) || !isfinite(by) || !isfinite(cx) || !isfinite(cy)) return false;
+    UiSdlFColor tint = ui_float_color(color, 1.0f);
+    UiSdlVertex vertices[3] = {
+        {{ax, ay}, tint, {0, 0}}, {{bx, by}, tint, {0, 0}}, {{cx, cy}, tint, {0, 0}}
+    };
+    const int indices[3] = {0, 1, 2};
+    return ui_submit_geometry(state, vertices, 3, indices, 3);
 }
 
 bool luma_vector_path_begin(size_t handle, float x, float y) {
@@ -1739,12 +1601,15 @@ bool luma_vector_path_stroke(size_t handle, float width, uint32_t color, bool cl
         int a = i, b = (i + 1) % (int)count;
         UiSdlFPoint first = state->vector_path[a], second = state->vector_path[b];
         float dx = second.x - first.x, dy = second.y - first.y;
+        UiSdlFPoint snap = {-1.0e30f, -1.0e30f};
         if (dy > -0.0001f && dy < 0.0001f) {
-            first.y = ui_pixel_center(state, first.y);
+            if (state->vector_capture) snap.y = first.y;
+            else first.y = ui_pixel_center(state, first.y);
             second.y = first.y;
             dy = 0.0f;
         } else if (dx > -0.0001f && dx < 0.0001f) {
-            first.x = ui_pixel_center(state, first.x);
+            if (state->vector_capture) snap.x = first.x;
+            else first.x = ui_pixel_center(state, first.x);
             second.x = first.x;
             dx = 0.0f;
         }
@@ -1764,6 +1629,9 @@ bool luma_vector_path_stroke(size_t handle, float width, uint32_t color, bool cl
         vertices[vertex_at++] = (UiSdlVertex){{second.x - px*outer,second.y - py*outer},clear,{0,0}};
         vertices[vertex_at++] = (UiSdlVertex){{first.x - px*inner,first.y - py*inner},solid,{0,0}};
         vertices[vertex_at++] = (UiSdlVertex){{first.x - px*outer,first.y - py*outer},clear,{0,0}};
+        if (state->vector_capture)
+            for (size_t j = (size_t)base; j < vertex_at; ++j)
+                vertices[j].tex_coord = snap;
         int strip[18] = {base,base+2,base+1, base+1,base+2,base+3,
             base+1,base+3,base+6, base+6,base+3,base+4,
             base+6,base+4,base+7, base+7,base+4,base+5};
@@ -1779,6 +1647,7 @@ bool luma_vector_path_stroke(size_t handle, float width, uint32_t color, bool cl
     };
     for (size_t i = 0; i < count; ++i) {
         UiSdlFPoint point = state->vector_path[i];
+        size_t join_start = vertex_at;
         bool aa_ring = !closed && (i == 0 || i + 1 == count);
         if (!aa_ring && count > 2) {
             size_t previous = i == 0 ? count - 1 : i - 1;
@@ -1826,6 +1695,20 @@ bool luma_vector_path_stroke(size_t handle, float width, uint32_t color, bool cl
                 indices[index_at++] = outer_base + step;
                 indices[index_at++] = outer_base + next;
             }
+        }
+        if (state->vector_capture) {
+            UiSdlFPoint snap = {-1.0e30f, -1.0e30f};
+            if (closed || i > 0) {
+                UiSdlFPoint p = state->vector_path[i ? i - 1 : count - 1];
+                if (fabsf(p.x - point.x) < 0.0001f) snap.x = point.x;
+                if (fabsf(p.y - point.y) < 0.0001f) snap.y = point.y;
+            }
+            if (closed || i + 1 < count) {
+                UiSdlFPoint p = state->vector_path[(i + 1) % count];
+                if (fabsf(p.x - point.x) < 0.0001f) snap.x = point.x;
+                if (fabsf(p.y - point.y) < 0.0001f) snap.y = point.y;
+            }
+            for (size_t j = join_start; j < vertex_at; ++j) vertices[j].tex_coord = snap;
         }
     }
     if (vertex_at > 0 && index_at > 0) {
@@ -2023,6 +1906,9 @@ static UiSdlTexture *ui_text_atlas_upload(UiWindow *state,
         }
         if (state->renderer_kind != 3u)
             g_sdl.SetTextureBlendMode(texture, 1u);
+        /* Zero denotes a standalone texture in text draw commands. */
+        if (state->text_atlas_generation == 0)
+            state->text_atlas_generation = 1;
         state->text_atlas[selected] = (UiTextAtlasPage){
             texture, surface->format, 0, 0, 0, state->text_atlas_generation
         };
@@ -2179,6 +2065,32 @@ static UiSdlSurface *ui_styled_text_surface(UiWindow *state, const char *text,
     return surface;
 }
 
+/* Measurement precedes rasterization: width, height and drawing must not
+   independently reshape the same text on the first frame of a page. */
+static bool ui_measure_text(UiWindow *state, const char *text, size_t length,
+        int *width, int *height) {
+    size_t bucket = ui_hash_bytes((const unsigned char *)text, length) % 256u;
+    UiTextMeasureEntry *entry = &state->text_measure_cache[bucket];
+    if (entry->text != NULL && entry->length == length &&
+            entry->face == state->current_face && entry->size == state->font_size &&
+            entry->density == state->pixel_density && entry->weight == state->font_weight &&
+            (length == 0 || memcmp(entry->text, text, length) == 0)) {
+        *width = entry->width;
+        *height = entry->height;
+        return true;
+    }
+    if (!g_ttf.GetStringSize(state->font, text, length, width, height)) return false;
+    if (length <= 1024u) {
+        char *copy = ui_copy_text(text, length);
+        if (copy != NULL) {
+            free(entry->text);
+            *entry = (UiTextMeasureEntry){copy, length, state->current_face,
+                state->font_size, state->pixel_density, state->font_weight, *width, *height};
+        }
+    }
+    return true;
+}
+
 static UiSdlTexture *ui_text_texture(UiWindow *state, const char *text, size_t length, uint32_t color,
         int wrap_width, const char *styles, size_t style_length,
         int *width, int *height, bool *transient,
@@ -2222,7 +2134,7 @@ static UiSdlTexture *ui_text_texture(UiWindow *state, const char *text, size_t l
             : g_ttf.RenderTextBlended(state->font, text, length, foreground));
     bool measured = style_length > 0 ? surface != NULL : (wrap_width > 0
         ? g_ttf.GetStringSizeWrapped(state->font, text, length, wrap_width, width, height)
-        : g_ttf.GetStringSize(state->font, text, length, width, height));
+        : ui_measure_text(state, text, length, width, height));
     if (surface == NULL || !measured) {
         if (surface != NULL) g_sdl.DestroySurface(surface);
         ui_set_error(g_sdl.GetError());
@@ -2303,7 +2215,7 @@ bool luma_image_rgba(size_t handle, float x, float y, float width,
         if (state->renderer_kind == 3u) {
             texture = (UiSdlTexture *)(uintptr_t)luma_vk_ui_texture_create(
                 state->direct_compositor, bytes + 8u, pixel_width, pixel_height,
-                pixel_width * 4u, 44u);
+                pixel_width * 4u, 37u); /* RGBA8, matching the payload bytes. */
         } else {
             /* SDL_PIXELFORMAT_RGBA32 on little-endian targets. */
             UiSdlSurface *surface = g_sdl.CreateSurface((int)pixel_width,
@@ -2320,16 +2232,24 @@ bool luma_image_rgba(size_t handle, float x, float y, float width,
             }
         }
         if (texture == NULL) return false;
-        if (state->raster_cache_count < 32u) {
-            selected = state->raster_cache_count++;
-        } else {
-            selected = 0;
-            for (size_t i = 1; i < state->raster_cache_count; ++i) {
-                if (state->raster_cache[i].used_at < state->raster_cache[selected].used_at)
-                    selected = i;
-            }
-            ui_destroy_text_texture(state, state->raster_cache[selected].texture);
+        /* Preserve the old ability to show one image larger than the budget,
+         * while preventing a gallery of large images from growing without bound. */
+        size_t budget = 32u * 1024u * 1024u;
+        if (pixel_bytes > budget) budget = pixel_bytes;
+        while (state->raster_cache_count > 0 &&
+            (state->raster_cache_count >= 256u ||
+             state->raster_cache_bytes > budget - pixel_bytes)) {
+            size_t oldest = 0;
+            for (size_t i = 1; i < state->raster_cache_count; ++i)
+                if (state->raster_cache[i].used_at < state->raster_cache[oldest].used_at)
+                    oldest = i;
+            UiRasterCacheEntry previous = state->raster_cache[oldest];
+            ui_destroy_text_texture(state, previous.texture);
+            state->raster_cache_bytes -= (size_t)previous.width * previous.height * 4u;
+            state->raster_cache[oldest] = state->raster_cache[--state->raster_cache_count];
         }
+        selected = state->raster_cache_count++;
+        state->raster_cache_bytes += pixel_bytes;
         state->raster_cache[selected] = (UiRasterCacheEntry){texture, hash,
             payload.object->len, pixel_width, pixel_height, 0};
     }
@@ -2492,16 +2412,23 @@ bool luma_text_wrapped(size_t handle, float x, float y, encore_str value, uint32
 
 bool luma_font_load(size_t handle, encore_str path, float size, uint32_t weight) {
     UiWindow *state = ui_window(handle);
-    if (state == NULL || !state->open || size <= 0.0f || !ui_load_ttf()) return false;
+    if (state == NULL || !state->open || !isfinite(size) || size <= 0.0f || !ui_load_ttf()) return false;
+    if (weight < 1) weight = 1;
+    if (weight > 1000) weight = 1000;
     char *file = ui_to_cstr(path);
     if (file == NULL) { ui_set_error("Unable to allocate font path"); return false; }
     float density = state->pixel_density > 0.0f ? state->pixel_density : 1.0f;
-    UiTtfFont *font = g_ttf.OpenFont(file, size * density);
-    if (font == NULL) { free(file); ui_set_error(g_sdl.GetError()); return false; }
+    void *backing = NULL;
+    UiFontInstanceCache *instances = NULL;
+    UiTtfFont *font = ui_open_weighted_font(&instances, file, size * density, weight, &backing);
+    if (font == NULL) { free(file); ui_font_instances_clear(&instances); return false; }
     char *default_family = ui_copy_cstr("");
-    if (default_family == NULL) { g_ttf.CloseFont(font); free(file); return false; }
-    g_ttf.SetFontStyle(font, weight >= 600 ? 0x01u : 0x00u);
+    if (default_family == NULL) {
+        g_ttf.CloseFont(font); ui_font_backing_release(backing);
+        ui_font_instances_clear(&instances); free(file); return false;
+    }
     ui_clear_fonts(state);
+    state->font_instances = instances;
     state->font = font;
     state->font_size = size;
     state->font_weight = weight;
@@ -2509,7 +2436,7 @@ bool luma_font_load(size_t handle, encore_str path, float size, uint32_t weight)
     state->font_face_count = 1;
     state->current_face = 0;
     state->font_tick = 1;
-    state->font_variants[0] = (UiFontVariant){font, size, weight, 0, state->font_tick};
+    state->font_variants[0] = (UiFontVariant){font, size, weight, 0, state->font_tick, backing};
     state->font_variant_count = 1;
     return true;
 }
@@ -2529,7 +2456,9 @@ bool luma_font_register(size_t handle, encore_str family, encore_str path) {
 }
 
 static bool ui_select_font(UiWindow *state, size_t face, float size, uint32_t weight) {
-    if (face >= state->font_face_count || size <= 0.0f) return false;
+    if (face >= state->font_face_count || !isfinite(size) || size <= 0.0f) return false;
+    if (weight < 1) weight = 1;
+    if (weight > 1000) weight = 1000;
     ++state->font_tick;
     if (state->font != NULL && state->current_face == face && state->font_size == size && state->font_weight == weight) {
         for (size_t i = 0; i < state->font_variant_count; ++i) {
@@ -2549,9 +2478,10 @@ static bool ui_select_font(UiWindow *state, size_t face, float size, uint32_t we
         }
     }
     float density = state->pixel_density > 0.0f ? state->pixel_density : 1.0f;
-    UiTtfFont *font = g_ttf.OpenFont(state->font_faces[face].path, size * density);
-    if (font == NULL) { ui_set_error(g_sdl.GetError()); return false; }
-    g_ttf.SetFontStyle(font, weight >= 600 ? 0x01u : 0x00u);
+    void *backing = NULL;
+    UiTtfFont *font = ui_open_weighted_font(&state->font_instances,
+        state->font_faces[face].path, size * density, weight, &backing);
+    if (font == NULL) return false;
     size_t slot = state->font_variant_count;
     if (slot < 32) {
         ++state->font_variant_count;
@@ -2561,8 +2491,9 @@ static bool ui_select_font(UiWindow *state, size_t face, float size, uint32_t we
             if (state->font_variants[i].used_at < state->font_variants[slot].used_at) slot = i;
         }
         if (state->font_variants[slot].font != NULL) g_ttf.CloseFont(state->font_variants[slot].font);
+        ui_font_backing_release(state->font_variants[slot].backing);
     }
-    state->font_variants[slot] = (UiFontVariant){font, size, weight, face, state->font_tick};
+    state->font_variants[slot] = (UiFontVariant){font, size, weight, face, state->font_tick, backing};
     state->font = font;
     state->current_face = face;
     state->font_size = size;
@@ -2619,7 +2550,7 @@ static float ui_text_extent(size_t handle, encore_str value, bool width) {
                 (state->pixel_density > 0.0f ? state->pixel_density : 1.0f);
         }
     }
-    if (!g_ttf.GetStringSize(state->font, text, length, &measured_width, &measured_height)) return 0.0f;
+    if (!ui_measure_text(state, text, length, &measured_width, &measured_height)) return 0.0f;
     float density = state->pixel_density > 0.0f ? state->pixel_density : 1.0f;
     return (float)(width ? measured_width : measured_height) / density;
 }
@@ -2898,30 +2829,31 @@ size_t luma_text_index(size_t handle, encore_str value, float max_width) {
     }
     return characters;
 }
-bool luma_frame_end(size_t handle) {
+static bool ui_frame_end(size_t handle) {
     UiWindow *state = ui_window(handle);
     if (state == NULL || !state->open) return false;
     if (state->renderer_kind == 3u) {
-        if (state->first_frame_pending && !state->transparent_mapped &&
-            (!g_sdl.ShowWindow(state->window) || !g_sdl.SyncWindow(state->window))) {
-            ui_set_error(g_sdl.GetError());
-            return false;
-        }
+        if (!ui_prepare_direct_frame(state)) return false;
         bool presented = state->direct_compositor != 0 &&
             luma_vk_ui_end(state->direct_compositor);
-        if (presented && state->first_frame_pending) {
+        if (!presented && state->direct_compositor &&
+            luma_vk_ui_acquire_status(state->direct_compositor) != ENCORE_VK_FRAME_PENDING) {
+            const char *error = luma_vk_ui_error_cstr(state->direct_compositor);
+            if (error && error[0]) ui_set_error(error);
+        }
+        if (presented && state->phase != UI_WINDOW_PRESENTED) {
             if (state->reveal_pending)
                 presented = g_sdl.SetWindowOpacity(state->window, 1.0f);
             if (presented) {
                 state->reveal_pending = false;
-                state->first_frame_pending = false;
+                presented = ui_complete_first_present(state);
             }
         }
         if (presented) ++state->present_count;
         return presented;
     }
     bool presented = g_sdl.RenderPresent(state->renderer);
-    if (presented && state->first_frame_pending) {
+    if (presented && state->phase != UI_WINDOW_PRESENTED) {
         if (state->reveal_pending) {
             presented = g_sdl.SetWindowOpacity(state->window, 1.0f);
         } else {
@@ -2930,26 +2862,50 @@ bool luma_frame_end(size_t handle) {
         }
         if (presented) {
             state->reveal_pending = false;
-            state->first_frame_pending = false;
+            presented = ui_complete_first_present(state);
         }
     }
     if (presented) ++state->present_count;
     return presented;
 }
 
+bool luma_frame_end(size_t handle) {
+    const char *trace = getenv("LUMA_TRACE_LATENCY");
+    bool enabled = trace && strcmp(trace, "1") == 0 && g_sdl.GetTicksNS;
+    uint64_t started = enabled ? g_sdl.GetTicksNS() : 0;
+    bool result = ui_frame_end(handle);
+    UiWindow *state = ui_window(handle);
+    if (enabled && state) {
+        fprintf(stderr, "LUMA_LATENCY present timestamp_ns=%llu present_us=%llu frame=%llu\n",
+            (unsigned long long)state->event_timestamp_ns,
+            (unsigned long long)((g_sdl.GetTicksNS() - started) / 1000),
+            (unsigned long long)state->present_count);
+    }
+    return result;
+}
+
 size_t luma_direct_frame_acquire(size_t handle) {
     UiWindow *state = ui_window(handle);
     if (state == NULL || !state->open || state->renderer_kind != 3u ||
         state->direct_compositor == 0 || state->borrowed_frame != 0) return 0;
+    if (!ui_prepare_direct_frame(state)) return 0;
     size_t frame = luma_vk_ui_frame_acquire(state->direct_compositor);
     if (frame != 0) state->borrowed_frame = frame;
     return frame;
+}
+
+uint32_t luma_frame_status(size_t handle) {
+    UiWindow *state = ui_window(handle);
+    if (!state || !state->open) return 0;
+    if (state->minimized) return 3;
+    return state->direct_compositor ? luma_vk_ui_acquire_status(state->direct_compositor) : 1;
 }
 
 size_t luma_direct_frame_prepare(size_t handle) {
     UiWindow *state = ui_window(handle);
     if (state == NULL || !state->open || state->renderer_kind != 3u ||
         state->direct_compositor == 0 || state->borrowed_frame != 0) return 0;
+    if (!ui_prepare_direct_frame(state)) return 0;
     size_t frame = luma_vk_ui_frame_prepare(state->direct_compositor);
     if (frame != 0) state->borrowed_frame = frame;
     return frame;
@@ -2974,19 +2930,15 @@ bool luma_direct_frame_finish(size_t handle, size_t frame) {
     if (state == NULL || !state->open || state->renderer_kind != 3u ||
         state->direct_compositor == 0 || frame == 0 ||
         state->borrowed_frame != frame) return false;
-    if (state->first_frame_pending && !state->transparent_mapped &&
-        (!g_sdl.ShowWindow(state->window) || !g_sdl.SyncWindow(state->window))) {
-        ui_set_error(g_sdl.GetError());
-        return false;
-    }
+    if (!ui_prepare_direct_frame(state)) return false;
     state->borrowed_frame = 0;
     bool presented = luma_vk_ui_frame_finish(state->direct_compositor, frame);
-    if (presented && state->first_frame_pending) {
+    if (presented && state->phase != UI_WINDOW_PRESENTED) {
         if (state->reveal_pending)
             presented = g_sdl.SetWindowOpacity(state->window, 1.0f);
         if (presented) {
             state->reveal_pending = false;
-            state->first_frame_pending = false;
+            presented = ui_complete_first_present(state);
         }
     }
     if (presented) ++state->present_count;
@@ -3040,6 +2992,9 @@ bool luma_external_vulkan_image_bind(size_t handle, uint64_t image,
         ui_set_error("External Vulkan images require a Vulkan Luma renderer");
         return false;
     }
+    state->external_source_x = state->external_source_y = 0;
+    state->external_source_width = width;
+    state->external_source_height = height;
     for (size_t i = 0; i < 4; ++i) {
         if (state->external_textures[i] != NULL &&
             state->external_images[i] == image &&
@@ -3106,7 +3061,51 @@ bool luma_external_vulkan_image_bind(size_t handle, uint64_t image,
 bool luma_external_vulkan_images_clear(size_t handle) {
     UiWindow *state = ui_window(handle);
     if (state == NULL) return false;
+    if (state->renderer_kind == 3u &&
+        !luma_vk_ui_external_release_ready(state->direct_compositor)) return false;
     ui_clear_external_textures(state);
+    if (state->renderer_kind == 3u)
+        luma_vk_ui_collect_idle_textures(state->direct_compositor);
+    return true;
+}
+
+bool luma_external_vulkan_image_release(size_t handle, uint64_t image) {
+    UiWindow *state = ui_window(handle);
+    if (!state || !image) return false;
+    if (state->renderer_kind == 3u &&
+        !luma_vk_ui_external_release_ready(state->direct_compositor)) return false;
+    for (size_t i = 0; i < 4; ++i) {
+        if (state->external_images[i] != image) continue;
+        UiSdlTexture *texture = state->external_textures[i];
+        if (state->external_texture == texture) state->external_texture = NULL;
+        if (texture != NULL) {
+            if (state->renderer_kind == 3u)
+                luma_vk_ui_texture_destroy((size_t)(uintptr_t)texture);
+            else g_sdl.DestroyTexture(texture);
+        }
+        state->external_textures[i] = NULL;
+        state->external_images[i] = 0;
+    }
+    if (state->renderer_kind == 3u)
+        luma_vk_ui_collect_idle_textures(state->direct_compositor);
+    return true;
+}
+
+bool luma_external_image_region(size_t handle, uint32_t x, uint32_t y,
+    uint32_t width, uint32_t height) {
+    UiWindow *state = ui_window(handle);
+    if (!state || !state->external_texture || !width || !height) return false;
+    bool fits = false;
+    for (size_t i = 0; i < 4; ++i) {
+        if (state->external_textures[i] == state->external_texture) {
+            fits = x <= state->external_widths[i] && y <= state->external_heights[i] &&
+                width <= state->external_widths[i] - x && height <= state->external_heights[i] - y;
+            break;
+        }
+    }
+    if (!fits) return false;
+    state->external_source_x = x; state->external_source_y = y;
+    state->external_source_width = width; state->external_source_height = height;
     return true;
 }
 
@@ -3118,12 +3117,16 @@ bool luma_external_image_draw(size_t handle, float x, float y,
         return false;
     }
     if (state->renderer_kind == 3u)
-        return luma_vk_ui_texture_draw(state->direct_compositor,
-            (size_t)(uintptr_t)state->external_texture, x, y, width, height);
+        return luma_vk_ui_texture_draw_region(state->direct_compositor,
+            (size_t)(uintptr_t)state->external_texture, x, y, width, height,
+            state->external_source_x, state->external_source_y,
+            state->external_source_width, state->external_source_height);
     if (state->renderer == NULL) return false;
     UiSdlFRect destination = {x, y, width, height};
+    UiSdlFRect source = {(float)state->external_source_x, (float)state->external_source_y,
+        (float)state->external_source_width, (float)state->external_source_height};
     bool rendered = g_sdl.RenderTexture(state->renderer,
-        state->external_texture, NULL, &destination);
+        state->external_texture, &source, &destination);
     if (!rendered) ui_set_error(g_sdl.GetError());
     return rendered;
 }
@@ -3199,3 +3202,22 @@ encore_str luma_renderer_device_name(size_t handle) {
     return ui_string(name[0] == '\0' ? "vulkan" : name);
 }
 encore_str luma_backend_error(void) { return ui_string(g_error); }
+
+/* One nonoverlapping quad prevents alpha-gradient seams between painted strips. */
+bool luma_gradient_rect(size_t handle, float x, float y, float width, float height,
+    uint32_t start, uint32_t end, bool vertical) {
+    UiWindow *state = ui_window(handle);
+    if (!state || !state->open || !isfinite(x) || !isfinite(y) ||
+        !isfinite(width) || !isfinite(height) || width <= 0 || height <= 0) return false;
+    UiSdlFColor a = ui_float_color(start, 1), b = ui_float_color(end, 1);
+    UiSdlVertex vertices[4] = {
+        {{x,y},a,{0,0}}, {{x+width,y},vertical?a:b,{0,0}},
+        {{x+width,y+height},b,{0,0}}, {{x,y+height},vertical?b:a,{0,0}}
+    };
+    int indices[6] = {0,1,2,0,2,3};
+    return ui_submit_geometry(state, vertices, 4, indices, 6);
+}
+
+/* Direct compositor exposes cumulative UiTimings and optional GPU markers. */
+
+/* UI geometry capture interoperates with the Vulkan packet executor. */
