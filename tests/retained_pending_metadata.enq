@@ -1,0 +1,51 @@
+//! Pending work stays scoped across roots, reparenting and reused node slots.
+import core::vec::Vec
+import luma::{RetainedTree, Widget, dirty_paint}
+
+fn main() -> u32 {
+    let mut tree = RetainedTree::new()
+    let a = tree.mount(Widget::panel("a").with_child(Widget::label("payload").with_id("child")))
+    let b = tree.mount(Widget::panel("b"))
+    let child = tree.find(a, "child").unwrap_or(a)
+    tree.take_changes()
+    tree.mark(child, dirty_paint())
+    if !tree.has_pending_for(a) || tree.has_pending_for(b) {
+        ret 1
+    }
+    if tree.take_changes_for(b).len() != 0 || !tree.has_pending_for(a) {
+        ret 2
+    }
+    // Move a live child into another mounted root before consuming its work.
+    if !tree.reparent(child, b, 0) {
+        ret 10
+    }
+    if tree.parent(child).unwrap_or(a).same(a) || tree.ordinal(child) != 0 {
+        ret 3
+    }
+    tree.take_changes_for(a)
+    if !tree.has_pending_for(b) || tree.path(b, child).is_none() {
+        ret 4
+    }
+    tree.take_changes_for(b)
+    if tree.has_pending_for(a) || tree.has_pending_for(b) {
+        ret 5
+    }
+    tree.mark(child, dirty_paint())
+    tree.unmount(b)
+    if tree.contains(child) || tree.has_pending_for(b) {
+        ret 6
+    }
+    let fresh = tree.mount(Widget::panel("new-root").with_child(Widget::label("new").with_id("new-child")))
+    if tree.contains(b) || tree.contains(child) || !tree.has_pending_for(fresh) {
+        ret 7
+    }
+    let changes = tree.take_changes_for(fresh)
+    if changes.len() != 2 || tree.has_pending_for(fresh) {
+        ret 8
+    }
+    let invalid = tree.find(a, "missing")
+    if invalid.is_some() {
+        ret 9
+    }
+    ret 0
+}

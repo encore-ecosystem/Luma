@@ -1,0 +1,175 @@
+//! Allocation-free, opt-in diagnostics for retained UI work.
+import std::time::perf_counter_ns
+
+/// Cumulative CPU work for one stage. Timings are inclusive of called native
+/// operations; stages below are recorded at separate transaction boundaries.
+pub struct UiStageTimings {
+    elapsed_ns: u64
+    maximum_ns: u64
+    calls: u64
+    units: u64
+}
+
+impl for UiStageTimings {
+    pub fn new() -> Self {
+        ret Self { 0, 0, 0, 0 }
+    }
+    pub fn add(self: mut Self, elapsed: u64, units: usize) ->() {
+        self.elapsed_ns += elapsed
+        if elapsed > self.maximum_ns {
+            self.maximum_ns = elapsed
+        }
+        self.calls += 1
+        self.units += units as u64
+    }
+    pub fn elapsed_ns(self: Self) -> u64 {
+        ret self.elapsed_ns
+    }
+    pub fn maximum_ns(self: Self) -> u64 {
+        ret self.maximum_ns
+    }
+    pub fn calls(self: Self) -> u64 {
+        ret self.calls
+    }
+    /// Dirty bindings, evaluated CSS nodes, reconciliations, layout passes,
+    /// or painted damage regions, according to the containing stage.
+    pub fn units(self: Self) -> u64 {
+        ret self.units
+    }
+}
+
+/// Independent scalar snapshot. Copying it never aliases mutable counters.
+/// Counters reset when profiling changes from disabled to enabled. Subtract
+/// successive elapsed/call/unit totals to measure an interval; maxima describe
+/// the entire current profiling session.
+pub struct UiUpdateTimings {
+    transaction: UiStageTimings
+    other: UiStageTimings
+    bindings: UiStageTimings
+    styles: UiStageTimings
+    reconcile: UiStageTimings
+    layout: UiStageTimings
+    paint: UiStageTimings
+    full_cascades: u64
+    subtree_cascades: u64
+}
+
+impl for UiUpdateTimings {
+    pub fn new() -> Self {
+        ret Self {
+            UiStageTimings::new(), UiStageTimings::new(), UiStageTimings::new(), UiStageTimings::new(), UiStageTimings::new(), UiStageTimings::new(), UiStageTimings::new(), 0, 0
+        }
+    }
+    /// Inclusive frame-boundary transaction; do not sum it with its stages.
+    pub fn transaction(self: Self) -> UiStageTimings {
+        ret self.transaction
+    }
+    /// Transaction work outside the named bindings/style/reconcile/layout stages.
+    pub fn other(self: Self) -> UiStageTimings {
+        ret self.other
+    }
+    pub fn bindings(self: Self) -> UiStageTimings {
+        ret self.bindings
+    }
+    pub fn styles(self: Self) -> UiStageTimings {
+        ret self.styles
+    }
+    pub fn reconcile(self: Self) -> UiStageTimings {
+        ret self.reconcile
+    }
+    pub fn layout(self: Self) -> UiStageTimings {
+        ret self.layout
+    }
+    pub fn paint(self: Self) -> UiStageTimings {
+        ret self.paint
+    }
+    pub fn full_cascades(self: Self) -> u64 {
+        ret self.full_cascades
+    }
+    pub fn subtree_cascades(self: Self) -> u64 {
+        ret self.subtree_cascades
+    }
+}
+
+pub enum UiUpdateStage {
+    Bindings,
+    Styles,
+    SubtreeStyles,
+    Reconcile,
+    Layout,
+    Paint
+}
+
+pub struct UiUpdateTracker {
+    enabled: bool
+    values: UiUpdateTimings
+}
+
+impl for UiUpdateTracker {
+    pub fn new() -> Self<H> {
+        ret UiUpdateTracker<H>{ false, UiUpdateTimings::new() }
+    }
+    pub fn set_enabled(self: mut Self&, enabled: bool) ->() {
+        if enabled && !self.enabled {
+            self.values = UiUpdateTimings::new()
+        }
+        self.enabled = enabled
+    }
+    pub fn begin(self: Self&) -> u64 {
+        ret if self.enabled {
+            perf_counter_ns()
+        } else {
+            0_u64
+        }
+    }
+    pub fn finish(self: mut Self&, stage: UiUpdateStage, started: u64, units: usize) ->() {
+        if started == 0 || !self.enabled {
+            ret()
+        }
+        let now = perf_counter_ns()
+        let elapsed = if now >= started {
+            now - started
+        } else {
+            0_u64
+        }
+        match stage {
+            UiUpdateStage::Bindings => self.values.bindings.add(elapsed, units)
+            UiUpdateStage::Styles => {
+                self.values.styles.add(elapsed, units)
+                self.values.full_cascades += 1
+            }
+            UiUpdateStage::SubtreeStyles => {
+                self.values.styles.add(elapsed, units)
+                self.values.subtree_cascades += 1
+            }
+            UiUpdateStage::Reconcile => self.values.reconcile.add(elapsed, units)
+            UiUpdateStage::Layout => self.values.layout.add(elapsed, units)
+            UiUpdateStage::Paint => self.values.paint.add(elapsed, units)
+        }
+    }
+    pub fn snapshot(self: Self&) -> UiUpdateTimings {
+        ret self.values
+    }
+    pub fn finish_transaction(self: mut Self&, started: u64, before: UiUpdateTimings) ->() {
+        if started == 0 || !self.enabled {
+            ret()
+        }
+        let now = perf_counter_ns()
+        let elapsed = if now >= started {
+            now - started
+        } else {
+            0_u64
+        }
+        let measured = self.values.bindings.elapsed_ns() - before.bindings.elapsed_ns() +
+        self.values.styles.elapsed_ns() - before.styles.elapsed_ns() +
+        self.values.reconcile.elapsed_ns() - before.reconcile.elapsed_ns() +
+        self.values.layout.elapsed_ns() - before.layout.elapsed_ns()
+        self.values.transaction.add(elapsed, 1)
+        self.values.other.add(if elapsed > measured {
+                elapsed - measured
+            } else {
+                0_u64
+            }
+            , 1,)
+    }
+}

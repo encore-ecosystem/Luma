@@ -1,4 +1,7 @@
 import vulkan::native_swapchain_frame_ready
+
+pub import mod::updates::{UiStageTimings, UiUpdateTimings}
+import mod::updates::{UiUpdateStage, UiUpdateTracker}
 //! Native windows, events, rendering, and reactive frame presentation.
 
 import core::fmt::Debug
@@ -246,6 +249,15 @@ impl for Event {
     pub fn timestamp_ns(self: Self) -> u64 {
         ret self.timestamp_ns
     }
+    /// Age in the window's input clock domain. Unstamped synthetic events and
+    /// future/incompatible timestamps are unknown, rather than zero latency.
+    pub fn age_ns(self: Self, input_clock_ns: u64) -> Option[u64] {
+        ret if self.timestamp_ns > 0 && input_clock_ns >= self.timestamp_ns {
+            Option[u64]::Some(input_clock_ns - self.timestamp_ns)
+        } else {
+            Option[u64]::None
+        }
+    }
     pub fn key(self: Self) -> u32 {
         ret self.key
     }
@@ -311,6 +323,7 @@ pub struct Window {
     cascade: RetainedCascade<H>
     bindings: Option[WindowBindings]
     text_cache: WindowTextCache<H>
+    updates: UiUpdateTracker<H>
 }
 
 /// One authoritative configure/DPI snapshot, captured before layout.
@@ -1033,7 +1046,7 @@ impl for Window {
         ret Window {
             native_create_with_renderer(title, width, height, renderer.native_value()),
             width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
-            StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
+            StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new(), UiUpdateTracker::new()
         }
     }
     /// A satellite has its own surface/compositor but shares this window's GPU.
@@ -1062,7 +1075,7 @@ impl for Window {
         }
         ret Result[Window, str]::Ok(Window {
                 handle, width, height, self.background, context, surface, device, swapchain, compositor,
-                self.stylesheet, RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
+                self.stylesheet, RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new(), UiUpdateTracker::new()
             }
             ,)
     }
@@ -1071,6 +1084,15 @@ impl for Window {
     }
     /// Cumulative host time inside direct Vulkan acquire/present calls. This
     /// is presentation overhead/wait, not a GPU timestamp measurement.
+    /// Enables allocation-free CPU diagnostics for this window's retained updates.
+    pub fn set_ui_update_profiling(self: Self, enabled: bool) ->() {
+        self.updates.set_enabled(enabled)
+    }
+    /// Cumulative bindings, CSS, reconciliation, layout and paint work. Copies
+    /// of one Window share its tracker; different windows remain independent.
+    pub fn ui_update_timings(self: Self) -> UiUpdateTimings {
+        ret self.updates.snapshot()
+    }
     pub fn ui_timings(self: Self) -> UiTimings {
         ret UiTimings {
             luma_vk_ui_timing_value(self.direct_compositor, 0_u32),
@@ -1282,7 +1304,7 @@ impl for Window {
         ret Window {
             self.handle, self.width, self.height, color, self.direct_context,
             self.direct_window, self.direct_device, self.direct_swapchain,
-            self.direct_compositor, self.stylesheet, self.cascade, self.bindings, self.text_cache
+            self.direct_compositor, self.stylesheet, self.cascade, self.bindings, self.text_cache, self.updates
         }
     }
     /// Replaces the application layer while retaining Luma's default.css as
@@ -1291,7 +1313,7 @@ impl for Window {
         ret Window {
             self.handle, self.width, self.height, self.background, self.direct_context,
             self.direct_window, self.direct_device, self.direct_swapchain,
-            self.direct_compositor, StyleSheet::default().merge(sheet), RetainedCascade::new(), self.bindings, self.text_cache
+            self.direct_compositor, StyleSheet::default().merge(sheet), RetainedCascade::new(), self.bindings, self.text_cache, self.updates
         }
     }
     pub fn stylesheet(self: Self) -> StyleSheet {
@@ -1301,7 +1323,10 @@ impl for Window {
     /// declaration cache shared by copies of a stylesheet.
     pub fn resolve_styles(self: Self, sheet: StyleSheet, root: Widget,
         hovered: str, active: str, focused: str, keyboard_focus: bool,) -> Widget {
-        ret sheet.apply_retained(root, hovered, active, focused, keyboard_focus, self.cascade)
+        let started = self.updates.begin()
+        let result = sheet.apply_retained(root, hovered, active, focused, keyboard_focus, self.cascade)
+        self.updates.finish(UiUpdateStage::Styles, started, self.cascade.interaction_evaluations())
+        ret result
     }
     /// Resolves the window stylesheet for a declarative tree and explicit
     /// interaction state. Custom retained event loops use this before
@@ -1315,7 +1340,7 @@ impl for Window {
         ret Window {
             self.handle, self.width, self.height, self.background, self.direct_context,
             self.direct_window, self.direct_device, self.direct_swapchain,
-            self.direct_compositor, self.stylesheet.reload(), RetainedCascade::new(), self.bindings, self.text_cache
+            self.direct_compositor, self.stylesheet.reload(), RetainedCascade::new(), self.bindings, self.text_cache, self.updates
         }
     }
     pub fn poll(self: Self) -> Event {
@@ -1332,6 +1357,10 @@ impl for Window {
             native_event_wheel_y(self.handle), native_event_text(self.handle),
             native_event_timestamp_ns(self.handle)
         }
+    }
+    /// SDL monotonic time in the same domain as Event.timestamp_ns().
+    pub fn input_clock_ns(self: Self) -> u64 {
+        ret ui_native::native_input_clock_ns(self.handle)
     }
     pub fn set_cursor(self: Self, cursor: u32) -> bool {
         if self.handle == 0_usize {
@@ -1659,7 +1688,7 @@ impl for Window {
             self.handle, self.width, self.height, self.background,
             self.direct_context, self.direct_window, self.direct_device, self.direct_swapchain,
             self.direct_compositor, self.stylesheet, RetainedCascade::new(),
-            Option[WindowBindings]::Some(WindowBindings { bindings, root }), self.text_cache
+            Option[WindowBindings]::Some(WindowBindings { bindings, root }), self.text_cache, self.updates
         }
     }
     pub fn has_bindings(self: Self) -> bool {
@@ -1748,6 +1777,14 @@ impl for Window {
     /// One custom-loop frame boundary, shared by properties and interaction.
     pub fn stage_binding_frame(self: Self, reactive: mut ReactiveUi,
         hovered: str, active: str, focused: str, now_ms: u64,) -> ReactiveUi {
+        let started = self.updates.begin()
+        let before = self.updates.snapshot()
+        let result = self.stage_binding_transaction(reactive, hovered, active, focused, now_ms)
+        self.updates.finish_transaction(started, before)
+        ret result
+    }
+    fn stage_binding_transaction(self: Self, reactive: mut ReactiveUi,
+        hovered: str, active: str, focused: str, now_ms: u64,) -> ReactiveUi {
         reactive.set_interaction_ids(hovered, active, focused)
         reactive = self.stage_bindings(reactive)
         let cascade_valid = self.cascade.matches_root(reactive.declarative_root())
@@ -1755,16 +1792,20 @@ impl for Window {
             focused, reactive.keyboard_focus(),) {
             ret reactive
         }
-        if self.has_bindings() && cascade_valid && self.stylesheet.stage_interaction(hovered, active, focused,
-            reactive.keyboard_focus(), self.cascade,) {
-            if self.patch_cascade_styles(reactive, now_ms) {
-                ret reactive
+        if self.has_bindings() && cascade_valid {
+            let css_started = self.updates.begin()
+            let local = self.stylesheet.stage_interaction(hovered, active, focused,
+                reactive.keyboard_focus(), self.cascade,)
+            self.updates.finish(UiUpdateStage::SubtreeStyles, css_started, self.cascade.interaction_evaluations())
+            if local {
+                if self.patch_cascade_styles(reactive, now_ms) {
+                    ret reactive
+                }
+                // Geometric transitions still use the ordinary animation path.
+                let styled = self.resolve_styles(self.stylesheet(), reactive.declarative_root(),
+                    hovered, active, focused, reactive.keyboard_focus(),)
+                ret self.stage_animated_reactive(reactive, styled, now_ms)
             }
-            // A displayed geometric transition can require the ordinary
-            // animation transaction even if the computed destinations are local.
-            let styled = self.resolve_styles(self.stylesheet(), reactive.declarative_root(),
-                hovered, active, focused, reactive.keyboard_focus(),)
-            ret self.stage_animated_reactive(reactive, styled, now_ms)
         }
         let styled = self.resolve_styles(self.stylesheet(), reactive.declarative_root(),
             hovered, active, focused, reactive.keyboard_focus(),)
@@ -1778,9 +1819,11 @@ impl for Window {
     // interaction change must not reconcile content, closures, geometry or the
     // complete hit-test index again. Complex selectors still use the same cascade.
     fn patch_cascade_styles(self: Self, reactive: mut ReactiveUi, now_ms: u64) -> bool {
+        let started = self.updates.begin()
         let patches = match self.cascade.style_patches() {
             Some(values) => values
             None => {
+                self.updates.finish(UiUpdateStage::Reconcile, started, 0)
                 ret false
             }
         }
@@ -1789,10 +1832,12 @@ impl for Window {
             match reactive.find_widget(patch.id()) {
                 Some(current) => {
                     if !current.style().layout_equivalent(patch.style()) {
+                        self.updates.finish(UiUpdateStage::Reconcile, started, 0)
                         ret false
                     }
                 }
                 None => {
+                    self.updates.finish(UiUpdateStage::Reconcile, started, 0)
                     ret false
                 }
             }
@@ -1807,6 +1852,7 @@ impl for Window {
                 }
             }
         }
+        self.updates.finish(UiUpdateStage::Reconcile, started, patches.len())
         ret true
     }
 
@@ -1823,9 +1869,11 @@ impl for Window {
         let bindings = owner.bindings
         reactive.set_widget_event_dispatch(bindings.widget_event_dispatch())
         let root = owner.root
+        let started = self.updates.begin()
         let _evaluated = bindings.flush()
         let tree = bindings.tree()
         let changes = tree.take_changes_for(root)
+        self.updates.finish(UiUpdateStage::Bindings, started, changes.len())
         if changes.len() == 0 {
             ret reactive
         }
@@ -2009,7 +2057,16 @@ impl for Window {
                     ret false
                 }
             }
-            let styled = match self.stylesheet.apply_retained_subtree(branch.path, authored, self.cascade) {
+            let css_started = self.updates.begin()
+            let resolved = self.stylesheet.apply_retained_subtree(branch.path, authored, self.cascade)
+            self.updates.finish(UiUpdateStage::SubtreeStyles, css_started, if resolved.is_some() {
+                    self.cascade.interaction_evaluations()
+                } else {
+                    0_usize
+                }
+                ,
+            )
+            let styled = match resolved {
                 Some(value) => value
                 None => {
                     ret false
@@ -2026,11 +2083,13 @@ impl for Window {
         } else {
             0_u64
         }
+        let reconcile_started = self.updates.begin()
         for patch in patches {
             if !reactive.commit_styled_subtree(patch.path, patch.authored, patch.styled) {
                 ret false
             }
         }
+        self.updates.finish(UiUpdateStage::Reconcile, reconcile_started, patches.len())
         // Island snapshots already include their changed descendants. Apply
         // independent property writes outside them in the same transaction;
         // never lose these writes when the local structural batch succeeds.
@@ -2257,9 +2316,14 @@ impl for Window {
     /// animation and model updates share this transaction before one commit.
     pub fn stage_styled_reactive(self: Self, reactive: mut ReactiveUi,
         root: Widget,) -> ReactiveUi {
-        if reactive.reconcile_styled(root) >= 2_u32 {
+        let reconcile_started = self.updates.begin()
+        let changed = reactive.reconcile_styled(root)
+        self.updates.finish(UiUpdateStage::Reconcile, reconcile_started, 1)
+        if changed >= 2_u32 {
+            let layout_started = self.updates.begin()
             reactive.replace_layout(layout_widget(root,
                     Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),))
+            self.updates.finish(UiUpdateStage::Layout, layout_started, 1)
         }
         ret reactive
     }
@@ -2355,8 +2419,11 @@ impl for Window {
     /// Reflows the current retained tree for new window bounds without asking
     /// application code to construct the widget tree again.
     pub fn relayout(self: Self, layout: WidgetLayout) -> WidgetLayout {
-        ret layout_widget(layout.retained_widget(),
+        let started = self.updates.begin()
+        let result = layout_widget(layout.retained_widget(),
             Rect::new(0.0_f32, 0.0_f32, self.width() as f32, self.height() as f32),)
+        self.updates.finish(UiUpdateStage::Layout, started, 1)
+        ret result
     }
     pub fn restyle_layout(self: Self, layout: WidgetLayout, root: Widget) -> WidgetLayout {
         ret layout.restyle(self.style_view(root, "", "", ""))
@@ -2854,6 +2921,7 @@ impl for Window {
         if self.handle == 0_usize {
             ret false
         }
+        let started = self.updates.begin()
         let mut committed = true
         let mut committed_bounds = Vec[Rect]::new()
         for bounds in regions {
@@ -2875,6 +2943,7 @@ impl for Window {
                 }
             }
         }
+        self.updates.finish(UiUpdateStage::Paint, started, committed_bounds.len())
         ret committed
     }
     pub fn destroy(self: Self) -> bool {
@@ -3041,7 +3110,7 @@ fn failed_direct_window(handle: usize, context: usize, compositor: usize, messag
     }
     ret Window {
         0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
-        StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
+        StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new(), UiUpdateTracker::new()
     }
 }
 
@@ -3051,7 +3120,7 @@ fn create_direct_vulkan_window(title: str, width: u32, height: u32,
     if handle == 0_usize {
         ret Window {
             0_usize, width, height, white(), 0_usize, 0_usize, 0_usize, 0_usize, 0_usize,
-            StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
+            StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new(), UiUpdateTracker::new()
         }
     }
     let context = direct_context_create(native_platform_handle(handle),
@@ -3071,7 +3140,7 @@ fn create_direct_vulkan_window(title: str, width: u32, height: u32,
     }
     ret Window {
         handle, width, height, white(), context, window, device, swapchain, compositor,
-        StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new()
+        StyleSheet::default(), RetainedCascade::new(), Option[WindowBindings]::None, WindowTextCache::new(), UiUpdateTracker::new()
     }
 }
 

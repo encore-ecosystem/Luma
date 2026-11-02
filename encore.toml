@@ -1,6 +1,6 @@
 [project]
 name = "luma"
-version = "0.0.1"
+version = "0.0.3"
 description = "Cross-platform native UI toolkit"
 repository = "https://github.com/encore-ecosystem/Luma"
 encore = ">=0.1.6"

@@ -1,0 +1,59 @@
+//! Profiling is opt-in, per-window, and independent from captured snapshots.
+import luma::{Color, RendererKind, StyleSheet, UiBindings, UiContext, Widget, Window}
+
+fn main() -> u32 {
+    let root = Widget::panel("root").with_child(Widget::button("button", "Button"))
+    let mut bindings = UiBindings::new(UiContext::new())
+    let node = bindings.mount(root)
+    let _mounted = bindings.tree().take_changes()
+    let window = Window::create_with_renderer("UI timings", 200, 120, RendererKind::Software)
+    .with_stylesheet(StyleSheet::parse("button:hover { background: #ff0000; }"))
+    .with_bindings(bindings, node)
+    if !window.available() {
+        ret 1
+    }
+    let mut ui = window.reactive(root)
+    if window.ui_update_timings().styles().calls() != 0 {
+        window.destroy() ret 2
+    }
+    window.set_ui_update_profiling(true)
+    let before = window.ui_update_timings()
+    let copy = window.with_background(Color::rgb(0, 0, 0))
+    ui = copy.stage_binding_frame(ui, "button", "", "", 100)
+    let _changed = copy.stage_component(ui, "button", Widget::button("button", "Longer text").with_classes("changed"))
+    ui = copy.stage_binding_frame(ui, "", "", "", 101)
+    let after = window.ui_update_timings()
+    if after.bindings().calls() < 2 || after.styles().calls() == 0 ||
+    after.styles().units() == 0 || after.styles().elapsed_ns() == 0 ||
+    before.bindings().calls() != 0 || before.styles().calls() != 0 {
+        window.destroy() ret 3
+    }
+    let peer = Window::create_with_renderer("Independent timings", 120, 80, RendererKind::Software)
+    if !peer.available() {
+        window.destroy() ret 7
+    }
+    peer.set_ui_update_profiling(true)
+    let isolated = peer.ui_update_timings().transaction().calls() == 0
+    peer.destroy()
+    if !isolated || after.transaction().calls() != 2 ||
+    after.transaction().maximum_ns() > after.transaction().elapsed_ns() {
+        window.destroy() ret 8
+    }
+    // A warm interaction is not another full cascade.
+    ui = window.stage_binding_frame(ui, "button", "", "", 102)
+    if window.ui_update_timings().full_cascades() != after.full_cascades() {
+        window.destroy() ret 4
+    }
+    window.set_ui_update_profiling(false)
+    let disabled = window.ui_update_timings()
+    ui = window.stage_binding_frame(ui, "", "", "", 103)
+    if window.ui_update_timings().bindings().calls() != disabled.bindings().calls() {
+        window.destroy() ret 5
+    }
+    window.set_ui_update_profiling(true)
+    if window.ui_update_timings().styles().calls() != 0 {
+        window.destroy() ret 6
+    }
+    window.destroy()
+    ret 0
+}

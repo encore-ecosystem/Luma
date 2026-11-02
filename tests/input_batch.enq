@@ -1,0 +1,32 @@
+//! Input batching keeps barriers and uses the platform timestamp clock domain.
+import luma::{Event, UiInputQueue, event_key_down, event_key_up}
+
+fn main() -> u32 {
+    let mut queue = UiInputQueue::new()
+    if !queue.append(vec![Event::key_down(119, 0), Event::key_up(119, 0)]) || queue.pending_count() != 2 {
+        ret 1
+    }
+    if queue.peek().unwrap_or(Event::none()).kind() != event_key_down() || queue.pending_count() != 2 {
+        ret 2
+    }
+    queue.next()
+    if !queue.append(vec![Event::text_input("barrier")]) || queue.pending_count() != 2 {
+        ret 3
+    }
+    if queue.next().unwrap_or(Event::none()).kind() != event_key_up() || queue.next().unwrap_or(Event::none()).text() != "barrier" || queue.pending() {
+        ret 4
+    }
+    for _ in 0_usize..256_usize {
+        if !queue.append(vec![Event::key_up(119, 0)]) {
+            ret 5
+        }
+    }
+    if queue.append(vec![Event::text_input("overflow")]) || queue.pending_count() != 256 {
+        ret 6
+    }
+    let mut stamped = Event::key_up(119, 0) stamped.timestamp_ns = 100
+    if stamped.age_ns(350).unwrap_or(0) != 250 || stamped.age_ns(99).is_some() || Event::none().age_ns(100).is_some() {
+        ret 7
+    }
+    ret 0
+}

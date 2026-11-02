@@ -896,7 +896,11 @@ impl for ComputedStyleCache {
             sibling_interaction_dependent = sibling_interaction_dependent ||
             string_contains(rule.selector, "+") || string_contains(rule.selector, "~")
             let combinator = rightmost_combinator(rule.selector)
-            if string_contains(rule.selector, "(") ||
+            // Functional selectors such as :not(.selected) depend on the
+            // subject's selector inputs, not on its descendants. Treating
+            // every '(' as a structural dependency invalidated the entire
+            // workspace whenever an unrelated popup changed its children.
+            if string_contains(rule.selector, ":has(") ||
             (combinator.kind != 0_usize && string_contains(rule.selector.slice(0_usize, combinator.index), ":empty")) {
                 ancestor_structure_dependent = true
             }
@@ -1169,6 +1173,7 @@ pub struct StyleSheet {
     rule_index: RuleIndex
     ancestor_interactions: Vec[RuleCandidate]
     local_interactions: Vec[InteractionCandidate]
+    ancestor_structures: Vec[RuleCandidate]
 }
 
 impl for StyleSheet {
@@ -1216,7 +1221,7 @@ impl for StyleSheet {
             ComputedStyleCache::new(string_contains(source, ":has("),
                 string_contains(source, "+") || string_contains(source, "~") ||
                 string_contains(source, "-of-type") || string_contains(source, ":has("), ancestor_dependent, ordered,),
-            RuleIndex::new(rule_candidates(ordered)), ancestor_interaction_candidates(ordered), local_interaction_candidates(ordered)
+            RuleIndex::new(rule_candidates(ordered)), ancestor_interaction_candidates(ordered), local_interaction_candidates(ordered), ancestor_dependency_candidates(ordered, true)
         }
     }
 
@@ -1243,7 +1248,7 @@ impl for StyleSheet {
             Result::Ok(sheet) => {
                 ret Result[StyleSheet, str]::Ok(StyleSheet {
                         sheet.rules, sheet.candidates, sheet.variable_rules, sheet.variable_candidates, sheet.maximum_specificity,
-                        sheet.revision, path, sheet.cache, sheet.rule_index, sheet.ancestor_interactions, sheet.local_interactions
+                        sheet.revision, path, sheet.cache, sheet.rule_index, sheet.ancestor_interactions, sheet.local_interactions, sheet.ancestor_structures
                     }
                     ,)
             }
@@ -1273,7 +1278,7 @@ impl for StyleSheet {
             ComputedStyleCache::new(self.cache.relational || other.cache.relational,
                 self.cache.sibling_dependent || other.cache.sibling_dependent,
                 self.cache.ancestor_dependent || other.cache.ancestor_dependent, ordered,),
-            RuleIndex::new(rule_candidates(ordered)), ancestor_interaction_candidates(ordered), local_interaction_candidates(ordered)
+            RuleIndex::new(rule_candidates(ordered)), ancestor_interaction_candidates(ordered), local_interaction_candidates(ordered), ancestor_dependency_candidates(ordered, true)
         }
     }
 
@@ -1696,6 +1701,7 @@ impl for StyleSheet {
         state: mut RetainedCascade&, retain: bool,) -> Widget {
         state.patches = Vec[CascadePatch]::new()
         state.patchable = false
+        state.interaction_evaluations = 0
         if retain && state.revision == self.revision && state.hovered == hovered_id &&
         state.active == active_id && state.focused == focused_id && state.keyboard_focus == keyboard_focus {
             match replay_cascade(state.entries, root, 0, focused_id) {
@@ -1846,6 +1852,10 @@ fn rule_candidate_matches(candidate: RuleCandidate, widget: Widget) -> bool {
 // descendant styles. A hovered menu item must not invalidate the viewport or
 // the complete workspace merely because another rule uses `.row:hover label`.
 fn ancestor_interaction_candidates(rules: Vec[StyleRule]) -> Vec[RuleCandidate] {
+    ret ancestor_dependency_candidates(rules, false)
+}
+
+fn ancestor_dependency_candidates(rules: Vec[StyleRule], structure: bool) -> Vec[RuleCandidate] {
     let mut result = Vec[RuleCandidate]::new()
     for rule in rules {
         let mut selector = rule.selector
@@ -1858,8 +1868,13 @@ fn ancestor_interaction_candidates(rules: Vec[StyleRule]) -> Vec[RuleCandidate] 
             } else {
                 trim(selector.slice(previous.index + 1, selector.char_len() - previous.index - 1))
             }
-            if string_contains(subject, ":hover") || string_contains(subject, ":active") ||
-            string_contains(subject, ":focus") || string_contains(subject, ":has(") {
+            let dependent = if structure {
+                string_contains(subject, ":empty") || string_contains(subject, ":has(")
+            } else {
+                string_contains(subject, ":hover") || string_contains(subject, ":active") ||
+                string_contains(subject, ":focus") || string_contains(subject, ":has(")
+            }
+            if dependent {
                 let mut subjects = Vec[StyleRule]::new()
                 subjects.push(StyleRule { subject, "", 0 })
                 result.push(rule_candidates(subjects).get(0).unwrap_or(RuleCandidate { 0, "" }))
@@ -1872,6 +1887,18 @@ fn ancestor_interaction_candidates(rules: Vec[StyleRule]) -> Vec[RuleCandidate] 
 
 fn ancestor_interaction_affects_children(sheet: StyleSheet, widget: Widget) -> bool {
     for candidate in sheet.ancestor_interactions {
+        if rule_candidate_matches(candidate, widget) {
+            ret true
+        }
+    }
+    ret false
+}
+
+fn ancestor_structure_affects_children(sheet: StyleSheet, widget: Widget) -> bool {
+    if !sheet.cache.ancestor_structure_dependent {
+        ret false
+    }
+    for candidate in sheet.ancestor_structures {
         if rule_candidate_matches(candidate, widget) {
             ret true
         }
@@ -2449,7 +2476,7 @@ fn apply_stylesheet_node(sheet: StyleSheet, widget: Widget,
     // Ancestor selectors only invalidate descendants of the changed ancestor.
     // Unrelated branches retain their styles when hover, focus or classes change.
     let context_unchanged = match cached {
-        Some(entry) => cascade_selector_inputs_equal(entry.selector, widget.selector_inputs(), sheet, sheet.cache.ancestor_structure_dependent) &&
+        Some(entry) => cascade_selector_inputs_equal(entry.selector, widget.selector_inputs(), sheet, ancestor_structure_affects_children(sheet, widget)) &&
         entry.depth == ancestors.len() &&(!ancestor_interaction_affects_children(sheet, widget) || entry.interaction == cascade_interaction_bits(interaction)) &&
         (!sheet.cache.position_dependent ||(entry.child_index == child_index && entry.sibling_count == sibling_count))
         None => false

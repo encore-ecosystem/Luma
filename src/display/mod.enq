@@ -1,8 +1,10 @@
 //! Backend-independent display commands and damage regions.
 
-import color::Color
 import core::option::Option
 import core::vec::Vec
+
+import color::Color
+
 import refrain::geometry::Rect
 import refrain::style::Style
 import refrain::svg::SvgDocument
@@ -132,11 +134,20 @@ pub struct SvgCommand {
     color: Color
     stroke_width: f32
 }
+
 impl for SvgCommand {
-    pub fn bounds(self: Self) -> Rect { ret self.bounds }
-    pub fn document(self: Self) -> SvgDocument { ret self.document }
-    pub fn color(self: Self) -> Color { ret self.color }
-    pub fn stroke_width(self: Self) -> f32 { ret self.stroke_width }
+    pub fn bounds(self: Self) -> Rect {
+        ret self.bounds
+    }
+    pub fn document(self: Self) -> SvgDocument {
+        ret self.document
+    }
+    pub fn color(self: Self) -> Color {
+        ret self.color
+    }
+    pub fn stroke_width(self: Self) -> f32 {
+        ret self.stroke_width
+    }
 }
 
 pub enum DisplayCommand {
@@ -319,6 +330,13 @@ impl for DisplayList {
             Vec[DisplayCommand]::new(), Vec[Rect]::new()
         }
     }
+    /// Preallocates a bounded command batch without mutating a previously
+    /// published list. Existing frames retain their own command storage.
+    pub fn with_capacity(commands: usize, damage: usize) -> Self {
+        ret Self {
+            Vec[DisplayCommand]::with_capacity(commands), Vec[Rect]::with_capacity(damage)
+        }
+    }
     pub fn commands(self: Self) -> Vec[DisplayCommand] {
         ret self.commands
     }
@@ -383,7 +401,7 @@ impl for DisplayList {
     pub fn styled_text(self: mut Self, x: f32, y: f32, value: str, style: Style) ->() {
         self.push(DisplayCommand::StyledText(StyledTextCommand { x, y, value, style }))
     }
-    pub fn svg(self: mut Self, bounds: Rect, document: SvgDocument, color: Color, stroke_width: f32) -> () {
+    pub fn svg(self: mut Self, bounds: Rect, document: SvgDocument, color: Color, stroke_width: f32) ->() {
         if document.valid() && bounds.width() > 0 && bounds.height() > 0 && stroke_width > 0 {
             self.push(DisplayCommand::Svg(SvgCommand { bounds, document, color, stroke_width }))
         }

@@ -446,6 +446,7 @@ static LumaVkUiTexture *luma_vk_ui_texture_empty(
 static bool luma_vk_ui_texture_flush(LumaVkUiTexture *texture) {
     if (texture == NULL || !texture->atlas_dirty ||
         texture->atlas_pixels == NULL) return true;
+    luma_vk_ui_texture_collect_upload(texture);
     uint32_t width = texture->dirty_right - texture->dirty_x;
     uint32_t height = texture->dirty_bottom - texture->dirty_y;
     uint64_t bytes = (uint64_t)width * height * 4u;
@@ -488,17 +489,19 @@ static bool luma_vk_ui_texture_flush(LumaVkUiTexture *texture) {
     EncoreVkSubmission *submission = (EncoreVkSubmission *)
         encore_vk_encoder_submit((size_t)encoder);
     encore_vk_encoder_destroy((size_t)encoder);
-    /* Atlas pixels are consumed by the frame recorded immediately after this
-     * flush. Complete that one aggregated dirty-region upload here instead of
-     * retaining a second asynchronous lifetime graph for every glyph update.
-     * Static image textures keep using the asynchronous upload path above. */
+    /* Upload and draw use the same device queue. The recorded image barriers
+     * order the copy with prior sampling and the following UI frame. Retain
+     * staging/commands through the existing upload owner instead of stalling
+     * the CPU whenever a dynamic text run changes. */
     bool uploaded = submission != NULL &&
         encore_vk_submission_available((size_t)submission) &&
-        encore_vk_submission_wait((size_t)submission, UINT64_MAX);
-    if (submission != NULL)
-        encore_vk_submission_destroy((size_t)submission);
-    encore_vk_buffer_destroy((size_t)staging);
-    if (!uploaded) return false;
+        luma_vk_ui_track_upload(texture, staging, submission);
+    if (!uploaded) {
+        if (submission != NULL)
+            encore_vk_submission_destroy((size_t)submission);
+        encore_vk_buffer_destroy((size_t)staging);
+        return false;
+    }
     if (texture->group == NULL) {
         EncoreVkBindGroup *group = (EncoreVkBindGroup *)
             encore_vk_texture_bind_group_create((size_t)texture->owner->device,

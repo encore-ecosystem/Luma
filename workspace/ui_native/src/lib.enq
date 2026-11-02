@@ -24,6 +24,7 @@ extern fn luma_event_dx(handle: usize) -> f32
 extern fn luma_event_dy(handle: usize) -> f32
 extern fn luma_event_buttons(handle: usize) -> u32
 extern fn luma_event_timestamp_ns(handle: usize) -> u64
+extern fn luma_input_clock_ns(handle: usize) -> u64
 extern fn luma_event_key(handle: usize) -> u32
 extern fn luma_event_modifiers(handle: usize) -> u32
 extern fn luma_event_text(handle: usize) -> str
@@ -290,6 +291,9 @@ pub fn native_event_timestamp_ns(handle: usize) -> u64 {
     unsafe {
         ret luma_event_timestamp_ns(handle)
     }
+}
+pub fn native_input_clock_ns(handle: usize) -> u64 {
+    unsafe { ret luma_input_clock_ns(handle) }
 }
 pub fn native_set_cursor(handle: usize, cursor: u32) -> bool {
     unsafe {

@@ -1033,6 +1033,9 @@ uint64_t luma_event_timestamp_ns(size_t handle) {
     UiWindow *s = ui_window(handle);
     return s == NULL ? 0 : s->event_timestamp_ns;
 }
+uint64_t luma_input_clock_ns(size_t handle) {
+    return ui_window(handle) == NULL ? 0 : g_sdl.GetTicksNS();
+}
 encore_str luma_event_text(size_t handle) { UiWindow *s = ui_window(handle); return ui_string(s == NULL ? "" : s->event_text); }
 uint32_t luma_window_width(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0 : s->width; }
 uint32_t luma_window_height(size_t handle) { UiWindow *s = ui_window(handle); return s == NULL ? 0 : s->height; }

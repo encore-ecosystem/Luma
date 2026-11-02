@@ -1,0 +1,72 @@
+//! Functional pseudo selectors keep unrelated retained branches warm.
+import core::vec::Vec
+import luma::{RetainedCascade, StyleSheet, Widget}
+
+fn source(popup: bool) -> Widget {
+    let mut stable = Widget::panel("workspace").with_classes("workspace")
+    for i in 0..96 {
+        stable.push(Widget::label(f"Stable {i}").with_id(f"stable-{i}"))
+    }
+    let mut overlay = Widget::panel("overlay")
+    if popup {
+        overlay.push(Widget::button("close", "Close"))
+    }
+    ret Widget::panel("root").with_children(vec![stable, overlay])
+}
+
+fn same(a: Widget, b: Widget) -> bool {
+    if a.id() != b.id() || a.text() != b.text() ||
+    !a.style().equivalent(b.style()) || a.children().len() != b.children().len() {
+        ret false
+    }
+    for i in 0..a.children().len() {
+        if !same(a.children().get(i).unwrap_or(Widget::spacer(0)), b.children().get(i).unwrap_or(Widget::spacer(0))) {
+            ret false
+        }
+    }
+    ret true
+}
+
+fn main() -> u32 {
+    let mut state = RetainedCascade::new()
+    let sheet = StyleSheet::parse(
+        "label { color: #112233; } .workspace label { font-size: 14px; } " +
+        "button:not(:disabled):hover { background: #ff0000; } " +
+        ".unused:not(:empty) label { color: #abcdef; } " +
+        "#overlay:empty { background: #123456; }")
+    let _warm = sheet.apply_retained(source(true), "close", "close", "close", true, state)
+    let closed = sheet.apply_retained(source(false), "", "", "", true, state)
+    if state.interaction_evaluations() > 8 {
+        ret 1
+    }
+    if !same(closed, sheet.apply(source(false), "", "", "")) {
+        ret 2
+    }
+    for step in 0..8 {
+        let opened = step % 2 == 0
+        let hover = if opened {
+            "close"
+        } else {
+            ""
+        }
+        let view = source(opened)
+        let actual = sheet.apply_retained(view, hover, "", "", true, state)
+        if state.interaction_evaluations() > 8 {
+            ret 3
+        }
+        if !same(actual, sheet.apply(view, hover, "", "")) {
+            ret 4
+        }
+    }
+    // A real relational dependency must still update outside the changed
+    // branch. The warm-cache optimization never approximates :has semantics.
+    let relational = sheet.merge(StyleSheet::parse("#root:has(#close) label { color: #ff0000; }"))
+    for step in 0..4 {
+        let view = source(step % 2 == 0)
+        let actual = relational.apply_retained(view, "", "", "", true, state)
+        if !same(actual, relational.apply(view, "", "", "")) {
+            ret 5
+        }
+    }
+    ret 0
+}

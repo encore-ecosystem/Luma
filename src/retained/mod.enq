@@ -62,6 +62,15 @@ struct NodeSlot {
     queued: bool
 }
 
+// Hot identity and ancestry reads must not copy Widget/Style ownership graphs.
+struct NodeMetadata {
+    generation: u64
+    live: bool
+    parent: Option[NodeId]
+    ordinal: usize
+    dirty: u32
+}
+
 /// A renderer consumes these flags only after applying the complete transaction.
 pub struct NodeChange {
     node: NodeId
@@ -80,6 +89,7 @@ impl for NodeChange {
 pub struct RetainedTree {
     identity: u64
     nodes: Vec[NodeSlot]
+    metadata: Vec[NodeMetadata]
     free: Vec[usize]
     pending: Vec[usize]
     live_nodes: usize
@@ -124,9 +134,45 @@ impl for RetainedTree {
             identifiers.push(Vec[NodeId]::new())
         }
         ret RetainedTree<H> {
-            reactive_identity(), Vec[NodeSlot]::new(), Vec[usize]::new(),
+            reactive_identity(), Vec[NodeSlot]::new(), Vec[NodeMetadata]::new(), Vec[usize]::new(),
             Vec[usize]::new(), 0, 0, identifiers
         }
+    }
+
+    // Every payload write updates its scalar mirror in the same transaction.
+    fn write_slot(self: mut Self&, index: usize, slot: NodeSlot) ->() {
+        let metadata = NodeMetadata {
+            slot.generation, slot.live, slot.parent, slot.ordinal, slot.dirty
+        }
+        if index == self.nodes.len() {
+            self.nodes.push(slot) self.metadata.push(metadata)
+        } else {
+            self.nodes.set(index, slot) self.metadata.set(index, metadata)
+        }
+    }
+
+    fn within(self: Self&, root: NodeId, node: NodeId) -> bool {
+        if !self.contains(root) {
+            ret false
+        }
+        let mut cursor = node
+        for _ in 0_usize..self.metadata.len() {
+            if !self.contains(cursor) {
+                ret false
+            }
+            if cursor.same(root) {
+                ret true
+            }
+            match self.metadata.get_unchecked_borrowed(cursor.slot).parent {
+                Some(parent) => {
+                    cursor = parent
+                }
+                None => {
+                    ret false
+                }
+            }
+        }
+        ret false
     }
 
     fn index_identifier(self: mut Self&, node: NodeId, id: str, add: bool) ->() {
@@ -151,9 +197,7 @@ impl for RetainedTree {
         if node.owner != self.identity || node.slot >= self.nodes.len() {
             ret false
         }
-        // This read cannot resize or mutate nodes. Avoid retaining a complete
-        // Widget and computed Style merely to validate two scalar fields.
-        let slot = self.nodes.get_unchecked_borrowed(node.slot)
+        let slot = self.metadata.get_unchecked_borrowed(node.slot)
         ret slot.live && slot.generation == node.generation
     }
 
@@ -183,14 +227,14 @@ impl for RetainedTree {
         if !self.contains(node) {
             ret Option[NodeId]::None
         }
-        ret self.nodes.get_unchecked_borrowed(node.slot).parent
+        ret self.metadata.get_unchecked_borrowed(node.slot).parent
     }
 
     pub fn ordinal(self: Self&, node: NodeId) -> usize {
         if !self.contains(node) {
             ret self.nodes.len()
         }
-        ret self.nodes.get_unchecked_borrowed(node.slot).ordinal
+        ret self.metadata.get_unchecked_borrowed(node.slot).ordinal
     }
 
     /// Keyed matching uses the ID index, not a scan of every old sibling.
@@ -271,7 +315,7 @@ impl for RetainedTree {
                     ret Option[Vec[usize]]::None
                 }
             }
-            let index = self.nodes.get_unchecked_borrowed(cursor.slot).ordinal
+            let index = self.metadata.get_unchecked_borrowed(cursor.slot).ordinal
             reversed.push(index)
             cursor = parent
         }
@@ -295,7 +339,7 @@ impl for RetainedTree {
             Some(current) => {
                 let mut updated = current
                 updated.children.push(child)
-                self.nodes.set(parent.slot, updated)
+                self.write_slot(parent.slot, updated)
             }
             None => {
                 ret Option[NodeId]::None
@@ -344,11 +388,7 @@ impl for RetainedTree {
             widget.with_children(Vec[Widget]::new()), widget.style(), Rect::new(0.0, 0.0, 0.0, 0.0),
             0, queued
         }
-        if index == self.nodes.len() {
-            self.nodes.push(slot)
-        } else {
-            self.nodes.set(index, slot)
-        }
+        self.write_slot(index, slot)
         self.live_nodes += 1
         self.index_identifier(node, widget.id(), true)
         let mut children = Vec[NodeId]::new()
@@ -359,7 +399,7 @@ impl for RetainedTree {
             Some(current) => {
                 let mut updated = current
                 updated.children = children
-                self.nodes.set(index, updated)
+                self.write_slot(index, updated)
             }
             None => {
             }
@@ -381,7 +421,7 @@ impl for RetainedTree {
                     slot.queued = true
                     self.pending.push(node.slot)
                 }
-                self.nodes.set(node.slot, slot)
+                self.write_slot(node.slot, slot)
             }
             None => {
                 ret false
@@ -436,7 +476,7 @@ impl for RetainedTree {
                     let mut updated = current
                     updated.parent = Option[NodeId]::Some(node)
                     updated.ordinal = index
-                    self.nodes.set(child.slot, updated)
+                    self.write_slot(child.slot, updated)
                 }
                 None => {
                     ret false
@@ -448,7 +488,7 @@ impl for RetainedTree {
             Some(current) => {
                 let mut updated = current
                 updated.children = children
-                self.nodes.set(node.slot, updated)
+                self.write_slot(node.slot, updated)
             }
             None => {
                 ret false
@@ -629,7 +669,7 @@ impl for RetainedTree {
                     dirty_layout() | dirty_hit_test()
                 }
                 slot.computed = style
-                self.nodes.set(node.slot, slot)
+                self.write_slot(node.slot, slot)
                 self.property_updates += 1
                 ret self.mark(node, flags)
             }
@@ -657,7 +697,7 @@ impl for RetainedTree {
             Some(current) => {
                 let mut slot = current
                 slot.widget = widget
-                self.nodes.set(node.slot, slot)
+                self.write_slot(node.slot, slot)
             }
             None => {
                 ret false
@@ -687,7 +727,7 @@ impl for RetainedTree {
                     }
                     slot.dirty = 0
                     slot.queued = false
-                    self.nodes.set(index, slot)
+                    self.write_slot(index, slot)
                 }
                 None => {
                 }
@@ -705,7 +745,7 @@ impl for RetainedTree {
             match self.nodes.get(index) {
                 Some(current) => {
                     let node = NodeId { index, current.generation, self.identity }
-                    if current.live && self.path(root, node).is_none() {
+                    if current.live && !self.within(root, node) {
                         remaining.push(index)
                         continue
                     }
@@ -715,7 +755,7 @@ impl for RetainedTree {
                     }
                     slot.dirty = 0
                     slot.queued = false
-                    self.nodes.set(index, slot)
+                    self.write_slot(index, slot)
                 }
                 None => {
                 }
@@ -726,16 +766,17 @@ impl for RetainedTree {
     }
 
     pub fn has_pending_for(self: Self&, root: NodeId) -> bool {
+        if !self.contains(root) {
+            ret false
+        }
         for index in self.pending {
-            match self.nodes.get(index) {
-                Some(slot) => {
-                    if slot.live && slot.dirty != 0 &&
-                    self.path(root, NodeId { index, slot.generation, self.identity }).is_some() {
-                        ret true
-                    }
+            let slot = self.metadata.get_unchecked_borrowed(index)
+            if slot.live && slot.dirty != 0 && self.within(root, NodeId {
+                    index, slot.generation, self.identity
                 }
-                None => {
-                }
+                ,
+            ) {
+                ret true
             }
         }
         ret false
@@ -783,7 +824,7 @@ impl for RetainedTree {
                     current.generation, false, Option[NodeId]::None, 0,
                     Vec[NodeId]::new(), Widget::spacer(0.0), Style::default(), Rect::new(0.0, 0.0, 0.0, 0.0), 0, current.queued
                 }
-                self.nodes.set(node.slot, dead)
+                self.write_slot(node.slot, dead)
                 self.live_nodes -= 1
                 self.free.push(node.slot)
             }

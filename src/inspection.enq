@@ -2,7 +2,7 @@
 import core::option::Option
 import core::vec::Vec
 
-import refrain::application::Event
+import refrain::application::{Event, Window, event_close, event_none}
 import refrain::geometry::Rect
 import refrain::widget::{WidgetLayout, widget_image}
 
@@ -103,6 +103,33 @@ impl for UiInputQueue {
     }
     pub fn pending(self: Self) -> bool {
         ret self.cursor < self.events.len()
+    }
+    /// Number of ordered transitions still waiting for application routing.
+    pub fn pending_count(self: Self) -> usize {
+        ret self.events.len() - self.cursor
+    }
+    /// Observe the next transition without removing an input barrier.
+    pub fn peek(self: Self) -> Option[Event] {
+        ret self.events.get(self.cursor)
+    }
+    /// Drain a bounded platform batch before application update/render work.
+    /// Capacity is shared with synthetic input; a full queue leaves OS events
+    /// queued instead of dropping text, button releases or focus changes.
+    pub fn poll_window(self: mut Self, window: Window) -> usize {
+        let _compacted = self.append(Vec[Event]::new())
+        let mut count = 0_usize
+        while self.events.len() < 256_usize {
+            let event = window.poll()
+            if event.kind() == event_none() {
+                break
+            }
+            self.events.push(event)
+            count += 1
+            if event.kind() == event_close() {
+                break
+            }
+        }
+        ret count
     }
     pub fn append(self: mut Self, events: Vec[Event]) -> bool {
         if self.events.len() - self.cursor + events.len() > 256 {
